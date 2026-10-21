@@ -1,0 +1,1 @@
+"""Core template integration points."""

@@ -206,6 +206,8 @@ def authorize(execution_request, *, decision=None):
 def request_execution(job, credential):
     require_connection(credential, job.request["connection_id"])
     bound_environment(job.project, job.request)
+    from compute_broker.extensions import job_hook
+    job_hook(job, "validate_execution_request", job, credential)
     if not job.manifest:
         raise BrokerError("NOT_PREPARED", "Prepare the job before requesting execution.", 409)
     grant = Grant.objects.select_for_update().get(project=job.project)

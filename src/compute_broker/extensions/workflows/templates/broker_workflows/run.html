@@ -1,0 +1,8 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / <a href="/projects/{{ project.id }}/workflows/">Workflows</a></p>
+<h1>{{ run.revision.name }}</h1><p>Run state: <strong>{{ summary.state }}</strong></p>
+<p>Downstream inputs bind exact retained producer artifacts. Review each prepared node before approving execution when the project or key requires confirmation.</p>
+<section><div class="table-scroll"><table><thead><tr><th>Node</th><th>State</th><th>Job / review</th><th>Details</th></tr></thead><tbody>
+{% for node in summary.nodes %}<tr><td>{{ node.key }}</td><td>{{ node.state }}</td><td>{% if node.job_id %}<a href="/review/{{ node.job_id }}/">Review package</a>{% else %}Waiting for inputs{% endif %}</td><td>{{ node.error_code }}{% for input in node.inputs %}<br><small>{{ input.path }} · {{ input.sha256 }}</small>{% endfor %}</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

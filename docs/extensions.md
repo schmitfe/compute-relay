@@ -23,12 +23,14 @@ capabilities, bounded lease/report metadata, and these optional service hooks:
 
 | Hook | Contract |
 | --- | --- |
+| `validate_execution_request(job, credential)` | Check extension-specific request identity before creating a pending review |
 | `validate_admission(job, credential)` | Recheck extension-specific policy/scope inside the core admission transaction |
 | `after_admission(attempt)` | Bind extension state to the durable ordinary attempt in the same transaction |
 | `validate_dispatch(job, credential, attempt=...)` | Recheck current extension policy before a new scheduler submission |
 | `worker_lease_context(attempt)` | Return at most 64 KiB of JSON metadata; cannot replace core lease fields |
 | `after_report(attempt, extension_data)` | Idempotent post-commit processing; failures cannot undo compute settlement |
 | `before_lease(worker)` | Perform bounded durable extension dispatch without preventing core observation |
+| `lease_work(worker)` | Return no work or `{id, generation, configuration, context}` for bounded maintenance; core binds extension and operation names |
 
 Workers independently opt in using their private `extensions` list or the
 `BROKER_EXTENSIONS` process setting. They advertise supported modules to control.
@@ -38,6 +40,17 @@ an enabled module's `worker.after_observation` can run its fixed metadata adapte
 it must not execute payloads or install packages in the credentialed process.
 Report metadata is durably retained in `WorkerReport.extension_data` for module
 recovery. Hook failures are recorded without emitting raw exception contents.
+
+For maintenance leases, `worker.execute(worker_instance, lease)` runs only when
+the extension is explicitly configured on that worker. Each extension owns its
+worker-authenticated report route and lease replay/expiry checks. Maintenance
+payloads are limited to 64 KiB, cannot replace ordinary attempt fields, and must
+be scheduled with bounded frequency so normal accounting remains responsive.
+
+Bundled additions are [storage planning](storage-planning.md),
+[environment builds](environment-builds.md), and [artifact workflows](workflows.md).
+They are independent apps. Neither storage planning nor workflows implicitly
+enables environment creation, remote migration, or software downloads.
 
 Disabling a module prevents new admissions and undispatched extension jobs. Already
 submitted jobs continue through the core observation, cancellation and accounting

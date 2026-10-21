@@ -117,6 +117,8 @@ class KeyForm(forms.Form):
 
     def __init__(self, *args, project, **kwargs):
         super().__init__(*args, **kwargs)
+        from compute_broker.extensions import metadata_items
+        self.fields["scopes"].choices = [*SCOPES, *metadata_items("KEY_SCOPES")]
         self.fields["allowed_connections"].queryset = project.connections.all()
         self.fields["expires_at"].initial = timezone.localtime(timezone.now() + timedelta(days=30))
 

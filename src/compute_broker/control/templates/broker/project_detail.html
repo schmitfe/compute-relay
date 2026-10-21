@@ -1,4 +1,5 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% load broker_extensions %}{% block content %}
+{% project_extension_links project as extension_links %}{% if extension_links %}<nav aria-label="Project extensions">{% for link in extension_links %}<a href="{{ link.url }}">{{ link.label }}</a>{% endfor %}</nav>{% endif %}
 <p><a href="/">Projects and jobs</a> / Project</p><h1>{{ project.name }}</h1><p>Owner: {{ project.owner.username }}</p><small>{{ project.id }}</small>
 <section id="project-jobs"><h2>Project jobs</h2><p>The latest 100 jobs associated with this project, named by the submitting agent.</p>{% include "broker/job_list.html" %}</section>
 <section><h2>Submission limits</h2><p><strong>{{ allowance.jobs.admitted }} of {{ allowance.jobs.limit }}</strong> lifetime execution authorizations used · <strong>{{ allowance.jobs.remaining }}</strong> remaining.<br>{{ allowance.jobs.active }} of {{ allowance.jobs.active_limit }} simultaneous jobs in use.</p><p>All project keys share these limits. Each admitted execution consumes one submission slot; retries that recover the same attempt use the existing slot. Cancellation, failure and key rotation do not reset the count.</p></section>
