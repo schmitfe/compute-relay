@@ -42,6 +42,16 @@ def services_for(name):
     return import_module(EXTENSIONS[name][0] + ".services")
 
 
+def metadata_items(attribute):
+    from importlib.util import find_spec
+    result = []
+    for name in control_names():
+        module_name = EXTENSIONS[name][0] + ".metadata"
+        if find_spec(module_name):
+            result.extend(getattr(import_module(module_name), attribute, ()))
+    return result
+
+
 def job_hook(job, event, *args, **kwargs):
     name = job.extension_name
     if not name:
