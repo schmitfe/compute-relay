@@ -47,7 +47,7 @@ worker-authenticated report route and lease replay/expiry checks. Maintenance
 payloads are limited to 64 KiB, cannot replace ordinary attempt fields, and must
 be scheduled with bounded frequency so normal accounting remains responsive.
 
-Bundled additions are [storage planning](storage-planning.md),
+Bundled additions are [storage planning](extensions-storage.md),
 [environment builds](environment-builds.md), and [artifact workflows](workflows.md).
 They are independent apps. Neither storage planning nor workflows implicitly
 enables environment creation, remote migration, or software downloads.

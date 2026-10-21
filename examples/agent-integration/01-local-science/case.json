@@ -21,11 +21,11 @@
       ],
       "gate": "Human enables extension and grants its advertised environment-build scopes; all build compute/storage count."
     },
-    "bounded_array": {
+    "bounded_fanout": {
       "required_extensions": [
         "workflows"
       ],
-      "gate": "Use only if finite task cardinality, concurrency and total cost can be reserved."
+      "gate": "Finite collections of ordinary workflow nodes only; count every node's full reservation. Native Slurm arrays are not implemented."
     }
   },
   "rubric": [

@@ -78,6 +78,47 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### Optional extension acceptance, 21 October 2026
+
+The integrated extension branch was checked with Docker Engine 29.9.2 and
+Compose 5.6.1 using a separately named disposable Slurm stack. The default
+configuration and each optional app were exercised independently. No
+institutional credentials or lab jobs were used for these checks.
+
+| Check | Observed result |
+| --- | --- |
+| Core-only management and execution | Public project/key/cluster forms, rejection, linked revision and native execution passed. The completed job spent 2 CPU core-seconds and left zero reservations. |
+| Environment build and reuse | An empty stdlib venv was built as a reviewed compute job, published only after final accounting and metadata validation, explicitly permitted by a human, and used by a second reviewed job. Both jobs settled: 2 CPU core-seconds total, 2 lifetime slots, zero reservations. Exact prefix and output hash checks passed; the immutable recipe cache reused the original build. |
+| Three-stage workflow | `produce → double → sum` ran as three individually reviewed native jobs. Exact bytes, hashes, producer attempt/artifact IDs and consumer package descriptors matched. Repeated advances created no duplicates. Accounting settled at 3 CPU core-seconds, 3 lifetime slots and zero reservations. |
+| Read-only storage probe | Explicit owner enablement produced fresh `statvfs` byte/inode counts over fixture SSH. Native quota and unpinned filesystem identity remained unknown; planning correctly returned `unknown`. No job or compute charge was admitted, no directory scan/write was requested, and the client paused probes afterward. |
+| Core-only fresh processes | Clean migrations created no optional tables, apps or routes; ordinary MCP upload/preparation/admission/fake settlement passed. Worker and MCP startup also passed with controller and optional-app imports denied. |
+
+One acceptance-client bug was found: an expected HTTP 403 from a human-only
+promotion endpoint returned HTML, while the client tried to parse JSON. The
+client was fixed and the complete environment check rerun successfully. Its
+first build had already completed and settled; no ambiguous submission was
+retried. Final native scheduler inspection showed all seven fixture allocations
+completed, including this initial build and the separate core test. Jobs with
+zero whole-second elapsed time were conservatively charged one CPU core-second
+per allocated CPU, as documented by the broker's meter.
+
+The integrated suite passed **582 tests and 64 subtests**, with one optional
+NumPy calibration skipped in the main environment. The isolated science-kit
+checks also ran with NumPy 2.3.4; only tiny matrices were allocated. Migration
+drift checks and all planning schemas/examples passed. Actual fresh model chats
+remain a separate manual acceptance step; an official MCP SDK connection check
+does not substitute for that step.
+
+The optional Compose overlays are `compose.environments-test.yml`,
+`compose.workflows-test.yml`, and `compose.storage-test.yml` in `deploy/`.
+Each enables only its selected app for control and worker, mounts only its
+fixture acceptance client read-only, and requires explicit synthetic metadata.
+CI now defines a separate matrix for these three checks. See
+[environment acceptance](environment-builds.md),
+[workflow acceptance](workflow-acceptance.md), and
+[storage acceptance](extensions-storage.md). These local results do not imply
+that remote CI has run or that a production installation is accepted.
+
 Live verification completed on **21 October 2026**, with Docker Engine 29.9.2 and Compose 5.6.1. After refreshing group access, both stacks were rebuilt from the final application source, including key confirmation modes, lifetime admission limits, protected worker profiles, and discovery refresh guards. Both passed the expanded `--management` HTTP workflow. The fixture used Debian Slurm 22.05.8, MariaDB 10.11.19, and OpenSSH 9.2p1 (Debian `2+deb12u10`) packages. Both Compose documents also validated against the [official Compose specification schema](https://github.com/compose-spec/compose-spec/blob/main/schema/compose-spec.json) and the installed Compose plugin.
 
 | Final clean run | Observed result |

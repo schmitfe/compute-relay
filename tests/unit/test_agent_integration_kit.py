@@ -83,7 +83,7 @@ def test_every_numbered_case_is_reproducible_and_explicit_about_extension_gates(
     assert config["id"] == case
     assert config["required_extensions"] == (["workflows"] if case == "03" else [])
     assert config["optional_profiles"]["managed_environment"]["required_extensions"] == ["environments"]
-    assert config["optional_profiles"]["bounded_array"]["required_extensions"] == ["workflows"]
+    assert config["optional_profiles"]["bounded_fanout"]["required_extensions"] == ["workflows"]
     template = json.loads((project / "record.template.json").read_text())
     schema = json.loads((project / "record.schema.json").read_text())
     Draft202012Validator.check_schema(schema)

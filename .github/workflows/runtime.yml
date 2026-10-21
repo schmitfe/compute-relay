@@ -30,6 +30,8 @@ jobs:
       - run: python tools/local_smoke.py --management
       - run: python tools/local_smoke.py --mode budgeted
       - run: python -m django makemigrations --check --dry-run --settings=compute_broker.control.settings
+      - name: Check optional extension migrations
+        run: BROKER_EXTENSIONS=storage,environments,workflows python -m django makemigrations --check --dry-run --settings=compute_broker.control.settings
   containers:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -50,3 +52,23 @@ jobs:
       - name: Remove disposable services
         if: always()
         run: docker compose -f deploy/compose.${{ matrix.stack }}.yml down --volumes --remove-orphans
+  extensions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        extension: [environments, workflows, storage]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build extension acceptance images
+        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml --profile test build
+      - name: Start disposable Slurm and enabled extension
+        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml up -d --wait control worker
+      - name: Verify the optional capability through public interfaces
+        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml run --rm --no-deps smoke
+      - name: Remove only disposable acceptance resources
+        if: always()
+        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml down --volumes --remove-orphans

@@ -23,6 +23,13 @@ Worker variables are `BROKER_CONTROL_URL`, `BROKER_WORKER_CONFIG`, `BROKER_WORKE
 
 Control variables include `BROKER_DATA_DIR`, `BROKER_DB_PATH`, `BROKER_ARTIFACT_ROOT`, `BROKER_SECRET_KEY_FILE`, `BROKER_HOST`, `BROKER_PORT`, and `BROKER_ALLOWED_HOSTS`. Its random Django secret is generated once in its data directory with mode 0600. The service currently accepts only `BROKER_PROFILE=development`. Selecting a protected profile fails closed because its installation acceptance is incomplete. Django's development server is for these local tests; it is not the hosted service deployment.
 
+Optional apps are selected explicitly with `BROKER_EXTENSIONS=storage,environments,workflows`.
+The default is empty. Each app owns its tables, migrations, APIs, portal and
+worker adapter; worker and MCP enablement are independent. Project settings
+cannot install or enable an app. See [the extension contract](extensions.md)
+and [core-only acceptance](module-boundaries.md). Migration checks and CI cover
+both the core and enabled extensions.
+
 ## Submission and permissions
 
 Upload logical input files, create a job revision, prepare its immutable package, then request execution. A prepared package binds its request, exact source/generated files, environment revision, connection revision, helper implementation, effective resource bounds, and reservation into a canonical SHA-256 digest. Preparation does not contact Slurm or execute source. Changing source requires a new revision. Human approval binds that digest to one execution request; repeats require new requests and approval or automatic budget admission.
@@ -65,6 +72,21 @@ The remote side needs only a fixed Python 3 interpreter and existing Slurm CLI t
 Each cluster's Environments section creates immutable recipes for existing system interpreters, Environment Modules/Lmod, Conda prefixes, Python virtual environments and Poetry-managed virtual environments. Recipe permissions in projects are grouped by cluster, and execution validates the exact recipe ID, revision and cluster. Module initialization, exact loads and optional search paths appear in the reviewed wrapper. Conda runs only inside the compute job; virtual environments use their interpreter directly without activation/project hooks. Discovery is bounded login-node metadata: it never executes candidate Python interpreters or Poetry projects, never scans an entire home directory, and queries Conda only at an explicitly configured location. Root-owned module trees are checked before availability discovery. An explicit metadata-only module mode lists provisional file names from operator-configured resolved roots without evaluating module code. Candidates remain unverified on compute nodes. Recipe hashes do not attest every remote executable/library.
 
 The optional, default-disabled `environments` extension adds [reusable environment builds](environment-builds.md). Its implemented builder creates a Python venv from an empty standard-library closure or uploaded pinned, hashed wheels, entirely as an ordinary approved/budgeted compute job. A human first enables a narrow project policy and later explicitly permits a verified published environment revision for jobs. Compute, active-job and lifetime submission limits apply. Worker-side finalization reads bounded metadata without executing the new interpreter. Fake builds never publish; real builds require successful final accounting and matching receipts. Current per-object upload limits block large wheels. Conda/micromamba/Poetry provisioning, packed/node-local environments, automatic cleanup and content attestation remain future work.
+
+The optional [workflow app](workflows.md) orchestrates at most 32 ordinary jobs
+through success-only dependencies and retained artifact hashes. Each node has
+its own review/admission and consumes normal compute and submission limits.
+Artifact edges currently stay on one cluster; cross-cluster data movement,
+native scheduler dependencies and [native arrays](arrays-design.md) remain
+unsupported. Disabling the app does not stop core settlement of submitted jobs.
+
+The optional [storage app](extensions-storage.md) provides shared project byte
+and file budgets, per-cluster placement preferences and dry-run peak estimates.
+These are advisory. Explicit operator-enabled probes use fixed read-only
+directory metadata and filesystem capacity calls, with no recursive scans,
+content reads or writes. Cached observations carry timestamps and unknowns;
+native quota remains unknown unless a supported protected probe reports it.
+This app does not redirect job writes, enforce OS quotas or migrate data.
 
 Discovery saves partitions, node CPU/memory/GRES advertisements, own accounting associations when allowed, Slurm version, and relevant scheduler configuration. It does not equate visible resources with authorization or sum overlapping partitions as separate physical capacity. Finite termination/overtime candidates require operator verification, and cleanup bounds cannot be inferred reliably from ordinary discovery. Budgeted admission must wait for an explicit verified site profile. CPU/GPU resources are separate accounting dimensions.
 

@@ -4,6 +4,14 @@ Compute Broker lets AI clients prepare, submit, and inspect compute jobs on conf
 
 **Status: development alpha.** The Django control service, project/key/cluster management portal, review pages, transactional ledger, durable worker, Slurm/SSH adapter, simulated backend, and stdio MCP tools are implemented. Projects share compute and submission limits across keys; each key can require human review. Keys are shown once and stored only as hashes. Disposable native and Docker workflows exercise management, approval, rejection, revision, execution, collection, and accounting. See [runtime scope and limitations](docs/runtime.md) and [container acceptance results](docs/container-testing.md) for what has actually been tested. Protected personal/server deployment, institutional MFA acceptance, and hostile-workload isolation are not release-ready. The working name is provisional.
 
+Optional [extensions](docs/extensions.md) add advisory storage planning, scheduled
+reusable Python environment builds, and artifact-dependent workflows. They have
+separate apps, tables, routes and tests, and are disabled by default. Ordinary
+submission and accounting work without them. Remote filesystem migration,
+packed environments and [native arrays](docs/arrays-design.md) remain planned.
+The [fresh-agent science kit](examples/agent-integration/README.md) provides five
+copyable tasks and private project configuration generation for client acceptance.
+
 ## Try it
 
 Use Python 3.12 or 3.13. This runs an isolated fake workflow, creates only synthetic credentials, starts the service and worker, and removes its temporary state afterward:
