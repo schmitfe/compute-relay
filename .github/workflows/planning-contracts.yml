@@ -1,0 +1,32 @@
+name: Planning contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install planning check dependencies
+        run: python -m pip install -r requirements-plan.txt
+      - name: Validate planning schemas and examples
+        run: python tools/check_contracts.py
+      - name: Run planning contract tests
+        run: python -m unittest discover -s tests/contracts -v

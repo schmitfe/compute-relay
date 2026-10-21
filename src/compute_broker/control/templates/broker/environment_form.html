@@ -1,0 +1,27 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/clusters/">Clusters</a> / <a href="/clusters/{{ cluster.id }}/">{{ cluster.name }}</a> / <a href="/clusters/{{ cluster.id }}/environments/">Environments</a> / Add recipe</p>
+<h1>Add an environment recipe</h1>
+<nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></nav>
+<p>Creating a recipe for <strong>{{ cluster.name }}</strong>, using its saved software catalog. This page never logs in, loads modules or installs software.</p>
+{% if selected_cluster.discovery_snapshot.software.modules.provisional %}<p class="notice">This cluster's module names were discovered from file metadata. Aliases, dependencies and compatibility have not been checked. Review the selected modules and initialization in the job package before execution.</p>{% endif %}
+<section><form method="post">{% csrf_token %}{{ form.non_field_errors }}
+{% for field in form %}
+{% if field.is_hidden %}{{ field }}{{ field.errors }}
+{% elif field.name == "discovered_modules" %}
+<div class="module-picker"><label>{{ field.label }}</label>{{ field.errors }}<p class="helptext">{{ field.help_text }}</p>
+{% if form.available_modules %}<label for="module-filter">Find a module</label><input id="module-filter" type="search" placeholder="Name or version" autocomplete="off"><div class="catalog-scroll">{{ field }}</div>
+{% else %}<p>No modules found in this cluster's configured discovery paths. An exact module/version can be entered below if known.</p>{% endif %}</div>
+{% else %}<p>{{ field.label_tag }}{{ field.errors }}{{ field }}{% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}</p>{% endif %}
+{% endfor %}
+<button>Create immutable recipe</button></form></section>
+<script>
+const moduleFilter = document.getElementById('module-filter');
+if (moduleFilter) moduleFilter.addEventListener('input', () => {
+  const query = moduleFilter.value.trim().toLowerCase();
+  for (const input of document.querySelectorAll('#id_discovered_modules input[type="checkbox"]')) {
+    const label = input.closest('label');
+    if (label) label.hidden = !label.textContent.toLowerCase().includes(query);
+  }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,4 @@
+**
+!deploy/
+!deploy/slurm/
+!deploy/slurm/**

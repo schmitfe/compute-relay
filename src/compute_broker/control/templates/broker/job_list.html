@@ -1,0 +1,4 @@
+<div class="table-scroll"><table class="job-table"><thead><tr><th>Job name</th><th>Project</th><th>Owner</th><th>Submitted using</th><th>Execution status</th><th>Created</th></tr></thead><tbody>
+{% for job in jobs %}<tr><td><a href="/review/{{ job.id }}/">{{ job.name }}</a><br><small>{{ job.id }}</small></td><td><a href="/projects/{{ job.project_id }}/">{{ job.project.name }}</a></td><td>{{ job.project.owner.username }}</td><td>{% if job.credential %}{{ job.credential.name }}<br><small>API key · {{ job.credential_id }}</small>{% else %}<small>Not recorded</small>{% endif %}</td><td>{{ job.display_state_label }}</td><td>{{ job.created_at }}</td></tr>
+{% empty %}<tr><td colspan="6">No jobs yet. Your agent chooses a name when preparing each job.</td></tr>{% endfor %}
+</tbody></table></div>

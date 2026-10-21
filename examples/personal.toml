@@ -1,0 +1,26 @@
+# Proposed configuration shape only; the runtime loader is not implemented.
+# Protected paths belong to the service identity, never the agent account.
+profile = "personal_protected"
+canonical_url = "https://broker.localhost"
+
+[database]
+engine = "sqlite"
+path = "/var/lib/compute-broker/control.sqlite3"
+
+[storage]
+engine = "filesystem"
+root = "/var/lib/compute-broker/objects"
+
+[identity]
+provider = "local_owner"
+require_independent_approval_channel = true
+
+[worker]
+control_socket = "/run/compute-broker/worker-api.sock"
+connections_directory = "/etc/compute-broker/connections.d"
+runtime_directory = "/run/compute-broker/connections"
+
+[limits]
+maximum_upload_bytes = 104857600
+maximum_package_bytes = 268435456
+maximum_files = 100

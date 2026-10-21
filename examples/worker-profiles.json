@@ -1,0 +1,51 @@
+{
+  "connections": {},
+  "credential_profiles": {
+    "example-slurm-v1": {
+      "backend": "slurm",
+      "profile_revision": 1,
+      "allowed_hosts": ["login.cluster.example.invalid"],
+      "allowed_users": ["brokeruser"],
+      "allowed_ports": [22],
+      "remote_root_prefixes": ["/home/brokeruser/broker-jobs"],
+      "ssh": {
+        "mode": "key",
+        "identity_file": "/run/compute-broker/cluster-identity",
+        "known_hosts": "/etc/compute-broker/known_hosts"
+      },
+      "python_path": "/usr/bin/python3",
+      "slurm_paths": {
+        "sbatch": "/usr/bin/sbatch",
+        "squeue": "/usr/bin/squeue",
+        "sacct": "/usr/bin/sacct",
+        "scancel": "/usr/bin/scancel"
+      },
+      "command_timeout_seconds": 30,
+      "site_profile": {
+        "automatic_execution_allowed": false,
+        "partitions": ["debug"],
+        "accounts": ["example-account"],
+        "qos": [],
+        "maximum_cpus": 2,
+        "maximum_gpus": 0,
+        "maximum_memory_mib": 1024,
+        "maximum_time_limit_seconds": 600,
+        "termination_margin_seconds": 30,
+        "overtime_margin_seconds": 0,
+        "cleanup_margin_seconds": 60
+      },
+      "environment_discovery": {
+        "module_inventory_mode": "availability",
+        "module_init": "/usr/share/lmod/lmod/init/bash",
+        "module_paths": ["/usr/share/lmod/lmod/modulefiles"],
+        "python_executables": ["/usr/bin/python3"],
+        "conda_executable": "/opt/conda/bin/conda",
+        "search_roots": [
+          {"path": "/opt/venvs", "kind": "venv", "max_depth": 2},
+          {"path": "/opt/conda/envs", "kind": "conda", "max_depth": 1},
+          {"path": "/opt/poetry/virtualenvs", "kind": "poetry", "max_depth": 1}
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compute-broker"
+version = "0.1.0.dev0"
+description = "A project-scoped compute broker with reviewed Slurm jobs and shared compute allowances"
+requires-python = ">=3.12"
+dependencies = [
+  "Django>=5.2,<5.3",
+  "jsonschema==4.26.0",
+  "rfc3339-validator>=0.1.4,<1",
+  "rfc8785>=0.1.4,<1",
+]
+
+[project.optional-dependencies]
+control = []
+worker = []
+mcp = ["mcp>=1.12,<2"]
+test = ["pytest>=8,<10", "pytest-django>=4.10,<5", "hypothesis>=6,<7", "httpx>=0.28,<1"]
+
+[project.scripts]
+compute-broker = "compute_broker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+compute_broker = ["schemas/*.json", "control/templates/broker/*.html"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "compute_broker.control.settings"
+pythonpath = ["src", "tools"]
+testpaths = ["tests"]
+markers = [
+  "real_cluster: opt-in operator acceptance, never selected by default",
+  "container: requires an isolated Docker test stack",
+]
+addopts = "-m 'not real_cluster and not container'"

@@ -1,0 +1,13 @@
+{% extends "broker/base.html" %}{% block content %}
+<h1>{{ job.name }}</h1><p>Project <a href="/projects/{{ job.project.id }}/">{{ job.project.name }}</a> · Owner: {{ job.project.owner.username }} · {{ job.display_state_label }}</p><p>Submitted using: {% if job.credential %}{{ job.credential.name }} (API key){% else %}Not recorded{% endif %}</p><small>Package: {{ job.state }} · Execution status reflects the latest execution request.</small>
+<p class="notice">This preview requires a separate protected service account or server before using real secrets with an agent that controls your desktop. A human session on an agent-controlled desktop does not prove human presence.</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<section><h2>Allowance</h2><p>{{ allowance.available.cpu_core_seconds }} CPU core-seconds and {{ allowance.available.gpu_device_seconds }} GPU device-seconds remain available. {{ allowance.reserved.cpu_core_seconds }} CPU core-seconds are reserved.</p></section>
+{% if detail.manifest %}<section><h2>Exact prepared package</h2><p>SHA-256 <code>{{ detail.manifest_sha256 }}</code></p><p>Maximum reservation: {{ detail.manifest.reservation.cpu_core_seconds }} CPU core-seconds, {{ detail.manifest.reservation.gpu_device_seconds }} GPU device-seconds.</p>
+{% for file in detail.files %}<h3>{{ file.path }}</h3><small>SHA-256 {{ file.sha256 }} · {{ file.size_bytes }} bytes</small><pre>{{ file.text }}</pre>{% endfor %}
+<details><summary>Full manifest and resource binding</summary><pre>{{ manifest_text }}</pre></details></section>{% endif %}
+{% for execution in detail.execution_requests %}<section><h2>Execution request</h2><small>{{ execution.id }} · {{ execution.state }}</small>
+{% if execution.comment %}<p>{{ execution.comment }}</p>{% endif %}
+{% if execution.state == "awaiting_approval" %}<form method="post">{% csrf_token %}<input type="hidden" name="execution_request_id" value="{{ execution.id }}"><input type="hidden" name="manifest_sha256" value="{{ detail.manifest_sha256 }}"><input type="hidden" name="idempotency_key" value="{{ idempotency_key }}"><label>Comment to the agent<textarea name="comment" maxlength="4000"></textarea></label><button name="decision" value="approve">Approve one execution</button><button class="reject" name="decision" value="reject">Reject with comment</button></form>{% endif %}</section>{% endfor %}
+{% for attempt in detail.attempts %}<p>Attempt {{ attempt.id }}: {{ attempt.state }} · accounting {{ attempt.accounting_state }}{% if attempt.error_code %} · {{ attempt.error_code }}{% endif %}</p>{% endfor %}
+{% endblock %}

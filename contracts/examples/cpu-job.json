@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "project_id": "11111111-1111-4111-8111-111111111111",
+  "connection_id": "22222222-2222-4222-8222-222222222222",
+  "name": "cpu-probe",
+  "command": {
+    "interpreter": "python3",
+    "script": "main.py",
+    "arguments": [
+      "--seed",
+      "42"
+    ]
+  },
+  "environment": {
+    "id": "33333333-3333-4333-8333-333333333333",
+    "revision_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "resources": {
+    "nodes": 1,
+    "cpus": 2,
+    "gpus": 0,
+    "memory_mib": 2048,
+    "time_limit_seconds": 120
+  },
+  "slurm": {
+    "partition": "cpu",
+    "account": "research",
+    "qos": "normal"
+  },
+  "files": [
+    {
+      "path": "main.py",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 128,
+      "executable": false
+    }
+  ],
+  "outputs": [
+    "results/metrics.json"
+  ]
+}

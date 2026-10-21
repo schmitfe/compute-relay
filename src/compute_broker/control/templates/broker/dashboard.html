@@ -1,0 +1,6 @@
+{% extends "broker/base.html" %}{% block content %}
+<h1>Compute requests</h1><p>Review the exact job package before allowing one execution. An approved request consumes its approval once.</p>
+<section id="projects"><div class="row"><h2>Projects</h2><a class="button" href="/projects/new/">Create project</a></div>{% for project in projects %}<p><a href="/projects/{{ project.id }}/"><strong>{{ project.name }}</strong></a>{% if project.paused %} · Admissions paused{% endif %}<br><small>Manage allowance, API keys and allowed clusters</small></p>{% empty %}<p>Create a project, grant clusters and issue a key for your agent.</p>{% endfor %}</section>
+<section id="jobs"><h2>Jobs</h2><p>The latest 100 jobs across your projects. Owner identifies the project owner; Submitted using identifies the agent's API key.</p>{% include "broker/job_list.html" %}</section>
+<form method="post" action="/logout/">{% csrf_token %}<button>Sign out</button></form>
+{% endblock %}

@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Compute Broker</title>
+<style>body{font:16px/1.55 system-ui,sans-serif;max-width:1080px;margin:3rem auto;padding:0 1.4rem;color:#172c3d;background:#f7f9fb}a{color:#155e75}header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #ccd8df;margin-bottom:2rem}h1{font-size:1.8rem}h2{font-size:1.3rem}article,section{background:white;border:1px solid #d5dfe5;border-radius:10px;padding:1.3rem;margin:1.2rem 0}pre{background:#122330;color:#e6f2f5;white-space:pre-wrap;overflow-wrap:anywhere;padding:1rem;border-radius:6px;font-size:.85rem}code{overflow-wrap:anywhere}label{display:block;margin:.7rem 0}input,textarea,button{font:inherit;padding:.55rem;border:1px solid #a0b1bd;border-radius:5px}textarea{display:block;width:90%;min-height:5rem}button{cursor:pointer;background:#155e75;color:white;border:0;margin:.5rem .5rem .5rem 0}button.reject{background:#943d33}.notice{background:#fff1d5;padding:.8rem}.error{color:#943d33}small{color:#526673}table{width:100%;text-align:left;border-collapse:collapse}td,th{padding:.5rem;border-bottom:1px solid #d5dfe5}</style></head><body>
+<header><a href="/">Compute Broker</a><small>Development preview · {% if user.is_authenticated %}{{ user.username }}{% else %}Human review{% endif %}</small></header>
+{% if user.is_authenticated %}<nav><a href="/">Projects &amp; jobs</a> <a href="/clusters/">Clusters</a> <a href="/projects/new/">New project</a></nav>{% endif %}
+<style>nav{display:flex;gap:1.2rem;flex-wrap:wrap;margin:-.6rem 0 2rem}.row{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}.button{display:inline-block;background:#155e75;color:white;border-radius:5px;padding:.55rem .8rem;text-decoration:none}.helptext{display:block;color:#526673;font-size:.9rem}.errorlist{color:#943d33}select{font:inherit;padding:.55rem;border:1px solid #a0b1bd;border-radius:5px;max-width:100%}.badge{background:#e1eaf0;border-radius:4px;padding:.15rem .4rem}td form{display:inline-block}input[type=checkbox]{width:1rem;height:1rem}section form>p{margin:1.3rem 0}section form label{font-weight:500}input:not([type=hidden]):not([type=checkbox]),select{max-width:100%;box-sizing:border-box}h3{font-size:1.05rem}</style>
+<style>
+.table-scroll{max-width:100%;overflow-x:auto}
+.catalog-scroll{max-height:26rem;overflow:auto;margin:1rem 0}
+.catalog-scroll [hidden]{display:none!important}
+.catalog-scroll td{overflow-wrap:anywhere;vertical-align:top}
+.module-picker{border:1px solid #d5dfe5;border-radius:6px;padding:1rem;margin:1rem 0}
+.module-picker label{font-weight:400}
+.job-table{min-width:48rem}
+.job-table td,.job-table th{vertical-align:top;overflow-wrap:anywhere}
+.key-table{table-layout:fixed;min-width:40rem}
+.key-table td,.key-table th{vertical-align:top;overflow-wrap:anywhere}
+.key-table th:first-child{width:27%}
+.key-table th:nth-child(2){width:28%}
+.key-table th:nth-child(3){width:20%}
+.key-table th:last-child{width:25%}
+.key-actions{display:flex;flex-direction:column;align-items:stretch;gap:.55rem;max-width:13rem;min-width:0}
+.key-actions form{display:block;margin:0;min-width:0}
+.key-actions button,.key-actions .button{display:block;box-sizing:border-box;width:100%;margin:0;text-align:center;white-space:normal;overflow-wrap:normal;line-height:1.4}
+.button.secondary{background:#edf4f6;color:#155e75;border:1px solid #adc3cc}
+</style>
+{% block content %}{% endblock %}</body></html>
