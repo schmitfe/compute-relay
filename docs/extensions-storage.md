@@ -190,3 +190,28 @@ builds, retention policies, pinned-object garbage collection, and storage secret
 profiles remain future features. Changing an object's mode does not make it
 immutable against its owning remote UID. A read-only execution mount also does
 not prevent that UID from modifying an image through another writable path.
+
+## Disposable acceptance test
+
+`tools/storage_probe_smoke.py` uses the existing bounded public HTTP client and
+requires `--confirm-disposable-fixture`. Run it against an already-started Docker
+Slurm fixture with storage enabled on control and worker. Supply the fixture's
+synthetic `demo.json` using `--demo-file`, its local control origin using
+`--base-url`, and a timeout of at most 120 seconds.
+`deploy/compose.storage-test.yml` is an overlay for `deploy/compose.test.yml` that
+enables storage on control and worker, mounts just this client read-only and
+selects the explicit fixture-confirmation arguments. The base smoke service's
+demo-metadata volume supplies the synthetic credentials; no new stack or secret
+mount is needed when using an already-running fixture project.
+
+The client refuses nonfixture demo metadata and checks the actual selected
+cluster page for `brokerjob@slurm-fixture`. It requires the exact protected
+`/home/brokerjob/jobs` choice, enrolls a target through the owner form, selects it
+for a new project, issues a `jobs:read` key, and explicitly enables capacity
+checks through the session/CSRF route. It waits for a new real byte/inode reading,
+checks that native quota and unpinned filesystem identity remain unknown, runs
+advisory planning, and verifies zero admitted jobs and zero compute accounting.
+It pauses the pool afterward. The client never reads SSH credentials or requests
+a remote file write, job, directory listing or retained-usage scan. Small fixture
+filesystems may correctly produce a blocked planning assessment under the
+default operational free-space floors.

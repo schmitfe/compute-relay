@@ -1,0 +1,11 @@
+{
+  "services": {
+    "control": {"environment": {"BROKER_EXTENSIONS": "storage"}},
+    "worker": {"environment": {"BROKER_EXTENSIONS": "storage"}},
+    "smoke": {
+      "entrypoint": ["python", "/opt/storage_probe_smoke.py"],
+      "command": ["--base-url", "http://control:8765", "--demo-file", "/run/demo/demo.json", "--confirm-disposable-fixture", "--timeout", "120"],
+      "volumes": [{"type": "bind", "source": "../tools/storage_probe_smoke.py", "target": "/opt/storage_probe_smoke.py", "read_only": true}]
+    }
+  }
+}
