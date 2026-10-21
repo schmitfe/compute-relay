@@ -1,0 +1,16 @@
+{
+  "case_id": "04",
+  "status": "not_run",
+  "required_check_ids": [
+    "target_gate",
+    "budget",
+    "evidence",
+    "theory",
+    "pilot_limits",
+    "ram_preflight",
+    "cost_preflight",
+    "quenched",
+    "verification"
+  ],
+  "note": "A rubric is not execution evidence. Populate the generated record template only after observing real results."
+}

@@ -1,0 +1,8 @@
+{
+  "memory_mib": null,
+  "storage_available_bytes": null,
+  "cpu_core_seconds_available": null,
+  "wall_seconds": null,
+  "maximum_charge_duration_seconds": null,
+  "maximum_flops": 10000000000000
+}

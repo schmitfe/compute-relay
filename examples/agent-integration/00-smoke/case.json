@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "id": "00",
+  "title": "Reviewed stdlib Slurm smoke",
+  "required_extensions": [],
+  "minimum_executions": 1,
+  "maximum_executions": 1,
+  "resource_envelope": {
+    "cpus_per_job": 1,
+    "memory_mib": 256,
+    "wall_seconds": 60,
+    "maximum_jobs": 1,
+    "output_bytes_per_job": 8192,
+    "upload_bytes_per_job_max": 262144,
+    "log_bytes_per_job_max": 65536,
+    "maximum_charge_duration_seconds_source": "prepared manifest; verify current grant before every admission"
+  },
+  "required_core_tools": [
+    "get_broker_capabilities",
+    "get_project_allowance",
+    "list_compute_targets",
+    "upload_job_file",
+    "prepare_job",
+    "request_execution",
+    "get_job",
+    "get_job_logs",
+    "list_job_artifacts",
+    "get_job_artifact",
+    "revise_job"
+  ],
+  "optional_profiles": {
+    "managed_environment": {
+      "required_extensions": [
+        "environments"
+      ],
+      "gate": "Human enables extension and grants its advertised environment-build scopes; all build compute/storage count."
+    },
+    "bounded_array": {
+      "required_extensions": [
+        "workflows"
+      ],
+      "gate": "Use only if finite task cardinality, concurrency and total cost can be reserved."
+    }
+  },
+  "rubric": [
+    {
+      "id": "target_gate",
+      "assertion": "Use only assigned targets and report missing capabilities/extensions."
+    },
+    {
+      "id": "budget",
+      "assertion": "Record live allowance before/after, resource bounds, and settled zero reservations."
+    },
+    {
+      "id": "evidence",
+      "assertion": "Hash every output and identify code/config, seeds, native execution IDs and limitations."
+    },
+    {
+      "id": "rejection",
+      "assertion": "Human rejects initial package with a comment; agent retrieves it and revises bytes."
+    },
+    {
+      "id": "exact_review",
+      "assertion": "Human inspects exact generated batch/script and approves only the revised package."
+    },
+    {
+      "id": "real_slurm",
+      "assertion": "Native Slurm identity, expected sum 385, output hash and settled accounting; fake is not a pass."
+    }
+  ]
+}

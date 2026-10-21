@@ -1,0 +1,14 @@
+{
+  "n": null,
+  "steps": 8,
+  "replicas": 2,
+  "disorders": 4,
+  "seed": 19,
+  "beta": 0.8,
+  "j0": 0.6,
+  "g": 0.5,
+  "h": 0.15,
+  "m0": 0.0,
+  "dtype": "float32",
+  "threads": 1
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "id": "01",
+  "title": "Local periodic diffusion",
+  "required_extensions": [],
+  "minimum_executions": 0,
+  "maximum_executions": 0,
+  "resource_envelope": {
+    "local_memory_mib": 64,
+    "maximum_remote_jobs": 0,
+    "output_bytes": 65536
+  },
+  "required_core_tools": [
+    "get_broker_capabilities",
+    "get_project_allowance"
+  ],
+  "optional_profiles": {
+    "managed_environment": {
+      "required_extensions": [
+        "environments"
+      ],
+      "gate": "Human enables extension and grants its advertised environment-build scopes; all build compute/storage count."
+    },
+    "bounded_array": {
+      "required_extensions": [
+        "workflows"
+      ],
+      "gate": "Use only if finite task cardinality, concurrency and total cost can be reserved."
+    }
+  },
+  "rubric": [
+    {
+      "id": "target_gate",
+      "assertion": "Use only assigned targets and report missing capabilities/extensions."
+    },
+    {
+      "id": "budget",
+      "assertion": "Record live allowance before/after, resource bounds, and settled zero reservations."
+    },
+    {
+      "id": "evidence",
+      "assertion": "Hash every output and identify code/config, seeds, native execution IDs and limitations."
+    },
+    {
+      "id": "local_only",
+      "assertion": "Use local compute and explain why this small problem does not justify a cluster job."
+    },
+    {
+      "id": "analytic",
+      "assertion": "Derive the discrete Fourier amplification and continuum solution; distinguish errors."
+    },
+    {
+      "id": "stable",
+      "assertion": "Respect the forward-Euler stability condition and reproduce the tiny result."
+    }
+  ]
+}

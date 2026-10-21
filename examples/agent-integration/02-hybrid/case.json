@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "id": "02",
+  "title": "Hybrid Ornstein-Uhlenbeck replication",
+  "required_extensions": [],
+  "minimum_executions": 4,
+  "maximum_executions": 4,
+  "resource_envelope": {
+    "cpus_per_job": 1,
+    "memory_mib": 256,
+    "wall_seconds": 60,
+    "maximum_jobs": 4,
+    "output_bytes_per_job": 8192,
+    "upload_bytes_per_job_max": 262144,
+    "log_bytes_per_job_max": 65536,
+    "maximum_charge_duration_seconds_source": "prepared manifest; verify current grant before every admission"
+  },
+  "required_core_tools": [
+    "get_broker_capabilities",
+    "get_project_allowance",
+    "list_compute_targets",
+    "upload_job_file",
+    "prepare_job",
+    "request_execution",
+    "get_job",
+    "get_job_logs",
+    "list_job_artifacts",
+    "get_job_artifact"
+  ],
+  "optional_profiles": {
+    "managed_environment": {
+      "required_extensions": [
+        "environments"
+      ],
+      "gate": "Human enables extension and grants its advertised environment-build scopes; all build compute/storage count."
+    },
+    "bounded_array": {
+      "required_extensions": [
+        "workflows"
+      ],
+      "gate": "Use only if finite task cardinality, concurrency and total cost can be reserved."
+    }
+  },
+  "rubric": [
+    {
+      "id": "target_gate",
+      "assertion": "Use only assigned targets and report missing capabilities/extensions."
+    },
+    {
+      "id": "budget",
+      "assertion": "Record live allowance before/after, resource bounds, and settled zero reservations."
+    },
+    {
+      "id": "evidence",
+      "assertion": "Hash every output and identify code/config, seeds, native execution IDs and limitations."
+    },
+    {
+      "id": "derive_pilot",
+      "assertion": "Derive finite-time OU second moment and validate a deterministic local pilot."
+    },
+    {
+      "id": "replicates",
+      "assertion": "Run four explicitly seeded cluster replicas; no duplicate seed or blind resubmission."
+    },
+    {
+      "id": "local_analysis",
+      "assertion": "Retrieve/hash small summaries and combine moments locally with an approximate uncertainty interval."
+    }
+  ]
+}

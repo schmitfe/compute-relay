@@ -1,0 +1,16 @@
+{
+  "package": "numpy",
+  "version": "2.3.4",
+  "wheels": [
+    {
+      "filename": "numpy-2.3.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "4121c5beb58a7f9e6dfdee612cb24f4df5cd4db6e8261d7f4d7450a997a65d6a"
+    },
+    {
+      "filename": "numpy-2.3.4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "fc8a63918b04b8571789688b2780ab2b4a33ab44bfe8ccea36d3eba51228c953"
+    }
+  ],
+  "source": "https://pypi.org/project/numpy/2.3.4/",
+  "lock_scope": "Only these actually downloaded wheels; not a universal/source-build lock. cp313 tiny execution tested; cp312 wheel downloaded and hashed, not executed here."
+}

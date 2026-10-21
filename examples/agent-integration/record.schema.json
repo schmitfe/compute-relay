@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fresh-agent acceptance observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "case_id", "status", "client", "checks", "executions", "artifacts", "usage", "notes"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "case_id": {"enum": ["00", "01", "02", "03", "04"]},
+    "status": {"enum": ["not_run", "passed", "failed", "blocked"]},
+    "client": {"type": "object", "additionalProperties": false, "required": ["name", "version", "model"], "properties": {"name": {"type": "string"}, "version": {"type": "string"}, "model": {"type": "string"}}},
+    "checks": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["id", "status", "detail"], "properties": {"id": {"type": "string"}, "status": {"enum": ["pending", "pass", "fail", "blocked"]}, "detail": {"type": "string"}}}},
+    "executions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["job_id", "attempt_id", "native_job_id", "state", "accounting_state", "backend"], "properties": {"job_id": {"type": "string", "format": "uuid"}, "attempt_id": {"type": ["string", "null"], "format": "uuid"}, "native_job_id": {"type": ["string", "null"]}, "state": {"type": "string"}, "accounting_state": {"type": "string"}, "backend": {"enum": ["slurm", "fake"]}}}},
+    "artifacts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "sha256", "size_bytes"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size_bytes": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}}}},
+    "usage": {"type": "object", "additionalProperties": false, "required": ["cpu_core_seconds", "gpu_device_seconds", "reserved_cpu_core_seconds", "reserved_gpu_device_seconds", "storage_bytes", "wall_seconds"], "properties": {"cpu_core_seconds": {"$ref": "#/$defs/usage"}, "gpu_device_seconds": {"$ref": "#/$defs/usage"}, "reserved_cpu_core_seconds": {"$ref": "#/$defs/usage"}, "reserved_gpu_device_seconds": {"$ref": "#/$defs/usage"}, "storage_bytes": {"$ref": "#/$defs/usage"}, "wall_seconds": {"$ref": "#/$defs/usage"}}},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {"usage": {"type": ["number", "null"], "minimum": 0, "maximum": 9007199254740991}}
+}
