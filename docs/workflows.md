@@ -31,7 +31,9 @@ change a script or rejected request. There are no automatic retries.
 Producer jobs must have trustworthy terminal accounting before consumers can
 advance. Edges bind retained artifact IDs, SHA-256 hashes and the exact producer
 attempt. The consumer package includes those immutable bytes through the
-existing broker relay. A missing output blocks the consumer even if Slurm
+existing broker relay on the same cluster. Cross-cluster artifact edges are
+rejected until a separate transfer capability and policy exist. A missing
+output blocks the consumer even if Slurm
 reports success. This does not move files between arbitrary remote paths or
 submit native scheduler dependencies. Large remote datasets and direct
 transfers need a separately enabled transfer extension; it is not implemented.

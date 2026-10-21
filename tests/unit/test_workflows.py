@@ -71,7 +71,7 @@ def test_dag_is_prepared_without_creating_attempts(workflow_broker):
     assert all(node.job_id is None for node in run.nodes.all())
 
 
-@pytest.mark.parametrize("change", ["cycle", "unknown", "code_collision", "undeclared_output", "duplicate"])
+@pytest.mark.parametrize("change", ["cycle", "unknown", "code_collision", "undeclared_output", "duplicate", "cross_cluster"])
 def test_invalid_graph_never_creates_a_revision(workflow_broker, change):
     document = graph(workflow_broker)
     if change == "cycle":
@@ -82,8 +82,11 @@ def test_invalid_graph_never_creates_a_revision(workflow_broker, change):
         document["nodes"][1]["inputs"][0]["path"] = "main.py"
     elif change == "undeclared_output":
         document["nodes"][1]["inputs"][0]["output"] = "secret.txt"
-    else:
+    elif change == "duplicate":
         document["nodes"][1]["key"] = "simulate"
+    else:
+        from uuid import uuid4
+        document["nodes"][1]["request"]["connection_id"] = str(uuid4())
     with pytest.raises(ValueError):
         services.create_revision(workflow_broker.credential, document)
     assert not WorkflowRevision.objects.exists() and not Attempt.objects.exists()

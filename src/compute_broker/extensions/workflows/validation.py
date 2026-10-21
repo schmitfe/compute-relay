@@ -41,6 +41,8 @@ def validate_workflow(document):
             producer = by_key.get(item["node"])
             if producer is None or item["output"] not in producer["request"]["outputs"]:
                 raise ValueError("Producer must declare the requested output")
+            if producer["request"]["connection_id"] != node["request"]["connection_id"]:
+                raise ValueError("Cross-cluster artifact movement requires a separate transfer capability, which is not implemented")
             path = relative_path(item["path"])
             if path.startswith("_broker/") or path == node["request"]["command"]["script"] or any(
                     path == old or path.startswith(old + "/") or old.startswith(path + "/") for old in paths):
