@@ -55,6 +55,13 @@ class ProjectFacade:
     def request_execution(self, job_id: str, idempotency_key: str | None = None):
         return self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/execution-requests", {}, idempotency_key)
 
+    def revise_job(self, job_id: str, request: dict, idempotency_key: str | None = None):
+        if request.get("project_id") != self.project_id:
+            raise ValueError("job must belong to the configured project")
+        key = idempotency_key or str(uuid4())
+        created = self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/revisions", request, key)
+        return self._mutate(f"/api/v1/jobs/{_uuid(created['id'])}/prepare", {}, key + ":prepare")
+
     def get_job(self, job_id: str):
         return self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}")
 
@@ -114,6 +121,11 @@ def create_server(facade: ProjectFacade):
     def prepare_job(request: dict, idempotency_key: str | None = None) -> dict:
         """Prepare a job for review. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). Preparation never executes code."""
         return facade.prepare_job(request, idempotency_key)
+
+    @server.tool(annotations=write)
+    def revise_job(job_id: str, request: dict, idempotency_key: str | None = None) -> dict:
+        """Prepare a linked revision after review feedback; changes need a new execution request."""
+        return facade.revise_job(job_id, request, idempotency_key)
 
     @server.tool(annotations=write)
     def request_execution(job_id: str, idempotency_key: str | None = None) -> dict:
