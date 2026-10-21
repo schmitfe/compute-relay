@@ -3,6 +3,8 @@
 <h1>{{ cluster.name }}</h1>
 <nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></nav>
 <p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }} · Discovery: <strong>{{ cluster.discovery_state }}</strong></p>
+<p>Worker: <a href="/workers/{{ cluster.worker_id }}/">{{ cluster.worker.name }}</a> · Credential profile: {{ cluster.configuration.credential_profile|default:"Legacy configuration" }}<br>Job directory: <code>{{ cluster.configuration.remote_root|default:"Legacy configuration" }}</code></p>
+{% if not cluster.setup_complete %}<p class="notice">Worker connected · Identification required. This cluster remains unavailable to project execution until its first discovery succeeds.</p>{% endif %}
 {% if cluster.discovery_error %}<p class="error">{{ cluster.discovery_error }}. Check the worker's profile and authentication; MFA reconnection requires its trusted operator channel.</p>{% endif %}
 <section>
 <div class="row">

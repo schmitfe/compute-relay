@@ -1,0 +1,18 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/clusters/">Clusters</a> / {{ setup.name }}</p><h1>Set up {{ setup.name }}</h1>
+<p class="notice">Details saved · Worker connection still required. This cluster cannot receive jobs yet.</p>
+<section><div class="row"><h2>1. Cluster details</h2><a href="/clusters/setup/{{ setup.id }}/edit/">Edit details</a></div>
+<p>{{ setup.backend }} · {{ setup.remote_user|default:"Username not set" }}@{{ setup.host }}:{{ setup.port }}</p>
+<p>Proposed job directory: <code>{{ setup.requested_root|default:"Choose later" }}</code></p>
+<p>A new directory may be proposed here. It becomes usable only after its exact mapping is approved in a protected worker profile.</p></section>
+<section><h2>2. Prepare a worker and its connection profile</h2>
+<p>A worker holds the SSH identity and pinned host keys. Its configuration is stored on the device or server that runs that worker.</p>
+<div class="row"><a class="button" href="/workers/new/?setup={{ setup.id }}">Register a new worker</a>
+{% if setup.remote_user and setup.requested_root %}<a class="button secondary" href="/clusters/setup/{{ setup.id }}/worker-config/">Download worker configuration template</a>{% else %}<span>Set a username and proposed directory to generate the template.</span>{% endif %}</div>
+<p>For an existing worker, merge the template's credential profile into its private configuration. Replace the SSH key and pinned known-hosts placeholders on that worker, then restart it to publish the profile.</p>
+<p>The template starts with automatic execution disabled. Verify the site's allocation and timing bounds before granting compute access. Saving a template does not install or start a worker.</p></section>
+<section><h2>3. Connect the worker and identify the cluster</h2>
+<p>{{ worker_count }} worker{{ worker_count|pluralize }} available to your account. A worker without a suitable profile can be configured before this step.</p>
+<a class="button" href="/clusters/setup/{{ setup.id }}/bind/">Choose worker and directory mapping</a>
+<p>Only the current profile's approved login target and job-directory scope can be bound. Identification then runs through that worker; grant the identified cluster to projects afterward.</p></section>
+{% endblock %}

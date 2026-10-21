@@ -103,7 +103,7 @@ def prepare_job(job):
     from compute_broker.backends import prepare, verify_package
     if job.manifest:
         return serialize_job(job), 200
-    connection = job.project.connections.get(id=job.request["connection_id"], enabled=True)
+    connection = job.project.connections.get(id=job.request["connection_id"], enabled=True, setup_complete=True)
     environment = bound_environment(job.project, job.request)
     config = dict(connection.configuration, backend=connection.backend, revision_sha256=connection.revision_sha256)
     env = dict(environment.configuration, id=str(environment.id), revision_sha256=environment.revision_sha256)
@@ -163,7 +163,7 @@ def authorize(execution_request, *, decision=None):
         if credential.execution_mode == "approval_required" and decision is None:
             raise BrokerError("APPROVAL_REQUIRED", "This API key requires human confirmation for each execution.", 409)
     bound_environment(project, job.request)
-    connection = project.connections.filter(id=job.request["connection_id"], enabled=True).first()
+    connection = project.connections.filter(id=job.request["connection_id"], enabled=True, setup_complete=True).first()
     if connection is None or connection.worker.revoked or connection.revision_sha256 != job.manifest["connection_revision_sha256"]:
         raise BrokerError("REVISION_CHANGED", "Connection configuration changed; prepare a new revision.", 409)
     if connection.configuration.get("site_profile", {}).get("automatic_execution_allowed") is False and decision is None:

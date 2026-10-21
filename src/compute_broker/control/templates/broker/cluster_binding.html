@@ -1,0 +1,13 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/clusters/">Clusters</a> / <a href="/clusters/setup/{{ setup.id }}/">{{ setup.name }}</a> / Connect worker</p>
+<h1>Connect {{ setup.name }}</h1><p>Saved target: {{ setup.remote_user|default:"Username not set" }}@{{ setup.host }}:{{ setup.port }} · {{ setup.backend }}</p>
+<section><h2>Choose a worker</h2><form method="get"><label for="worker-choice">Protected worker</label><select id="worker-choice" name="worker">
+<option value="">Choose a worker</option>{% for worker in workers %}<option value="{{ worker.id }}"{% if selected_worker.id == worker.id %} selected{% endif %}>{{ worker.name }}</option>{% endfor %}</select><button>Show this worker's profiles</button></form>
+<a href="/workers/new/?setup={{ setup.id }}">Register a worker</a></section>
+{% if selected_worker %}<section><h2>{{ selected_worker.name }}: advertised profiles</h2>
+{% for profile in profiles %}<article><strong>{{ profile.alias }}</strong><p>Hosts: {{ profile.allowed_hosts|join:", " }}<br>Users: {{ profile.allowed_users|join:", " }}<br>Ports: {{ profile.allowed_ports|join:", " }}<br>Approved directory prefixes: {{ profile.remote_root_prefixes|join:", " }}</p></article>
+{% empty %}<p>This worker has not advertised a {{ setup.backend }} profile. Configure it using the setup template, restart it, and reload this page.</p>{% endfor %}
+{% if profiles %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>Connect worker and identify cluster</button></form>{% endif %}
+<p>If the proposed directory is outside the listed prefixes, approve its mapping in the worker configuration first. A profile change requires reloading this page.</p></section>
+{% else %}<p class="notice">You can keep the cluster saved while a worker is being registered or configured.</p>{% endif %}
+{% endblock %}

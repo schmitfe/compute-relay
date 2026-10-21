@@ -59,7 +59,7 @@ class ProjectForm(forms.Form):
 
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["connections"].queryset = owned_connections(user)
+        self.fields["connections"].queryset = owned_connections(user).filter(setup_complete=True)
         if self.is_bound:
             values = self.data.getlist("connections") if hasattr(self.data, "getlist") else self.data.get("connections", [])
         else:

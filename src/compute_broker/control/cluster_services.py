@@ -65,6 +65,11 @@ def lease_discovery(worker):
 def report_discovery(worker, connection_id, document):
     import rfc8785
     with transaction.atomic():
+        # Authenticated identity objects may predate a revocation/profile update.
+        # Pin current worker authority while accepting a discovery binding.
+        worker = WorkerIdentity.objects.select_for_update().filter(id=worker.id, revoked=False).first()
+        if worker is None:
+            raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
         connection = Connection.objects.select_for_update().filter(id=connection_id, worker=worker).first()
         if connection is None:
             raise BrokerError("NOT_FOUND", "Connection not found.", 404)
@@ -92,6 +97,7 @@ def report_discovery(worker, connection_id, document):
                 raise BrokerError("DISCOVERY_LIMIT", "Discovery exceeds the snapshot limit.", 413)
             connection.configuration = config
             connection.revision_sha256 = revision
+            connection.setup_complete = True
             connection.discovery_snapshot = snapshot
             connection.discovery_state, connection.discovery_error, connection.auth_state = "ready", "", "ready"
         elif document.get("outcome") == "discovery_failed":

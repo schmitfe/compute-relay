@@ -152,10 +152,48 @@ def revealed_key(human, html):
     return values[0], str(UUID(match.group(1).decode()))
 
 
+class ClusterBindingFields(HTMLParser):
+    """Read only the public binding choices rendered by the human setup page."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.profiles, self.revision = [], None
+        self.selected = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "select":
+            self.selected = attrs.get("name")
+        elif tag == "option" and self.selected == "credential_profile":
+            self.profiles.append(attrs.get("value", ""))
+        elif tag == "input" and attrs.get("name") == "setup_revision":
+            self.revision = attrs.get("value")
+
+    def handle_endtag(self, tag):
+        if tag == "select":
+            self.selected = None
+
+
+def cluster_binding_fields(page, alias):
+    parsed = ClusterBindingFields()
+    parsed.feed(page.decode("utf-8"))
+    profiles = [value for value in parsed.profiles if re.fullmatch(re.escape(alias) + r":[0-9a-f]{64}", value)]
+    require(len(profiles) == 1 and parsed.revision is not None and re.fullmatch(r"[1-9][0-9]*", parsed.revision),
+            "Saved cluster setup did not offer one current worker profile and revision")
+    return {"credential_profile": profiles[0], "setup_revision": parsed.revision}
+
+
 def discover_through_portal(human, demo, timeout, suffix):
     target = demo.get("cluster_form")
     if target:
-        human.request("POST", "/clusters/new/", {**target, "name": "Container discovery " + suffix}, form=True, binary=True)
+        human.request("POST", "/clusters/new/", {"name": "Container discovery " + suffix, "backend": demo["backend"],
+            **{field: target[field] for field in ("host", "user", "port", "remote_root")}}, form=True, binary=True)
+        draft = re.fullmatch(r"/clusters/setup/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
+        require(draft is not None, "Cluster details did not save independently of worker enrollment")
+        setup_id = str(UUID(draft.group(1)))
+        binding = f"/clusters/setup/{setup_id}/bind/"
+        page = human.request("GET", binding + "?worker=" + target["worker"], binary=True)
+        fields = cluster_binding_fields(page, target["credential_profile"])
+        human.request("POST", binding, {**fields, "worker": target["worker"], "remote_root": target["remote_root"]}, form=True, binary=True)
         match = re.fullmatch(r"/clusters/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
         require(match is not None, "Cluster enrollment did not open the new cluster")
         connection_id = str(UUID(match.group(1)))

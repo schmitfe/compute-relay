@@ -11,6 +11,8 @@ The shipped migrations upgrade existing development databases. Stop the control 
 | `/projects/{id}/keys/{key}/edit/` | Edit metadata, scopes, confirmation and cluster restrictions |
 | `/projects/{id}/keys/{key}/rotate/` and `/revoke/` | POST-only rotation or revocation |
 | `/clusters/`, `/clusters/new/`, `/clusters/{id}/` | Owned cluster inventory and enrollment |
+| `/clusters/setup/{id}/`, `/edit/`, `/bind/`, `/worker-config/` | Saved cluster setup, later worker/profile binding, and an inert configuration template |
+| `/workers/new/`, `/workers/{id}/` | Human worker registration with one-time token issuance and safe metadata |
 | `/clusters/{id}/discover/` and `/toggle/` | POST-only discovery refresh or admission enable/disable |
 | `/clusters/{id}/environments/` and `/clusters/{id}/environments/new/` | List/create immutable recipes for that cluster |
 
@@ -44,10 +46,24 @@ The synthetic bootstrap explicitly exports `agent-token` and `worker-token` as c
 
 ## Enroll a cluster
 
-1. A trusted operator assigns the worker an explicit owner and adds a protected credential profile to its private configuration. Legacy workers with no owner need explicit operator assignment before browser enrollment. The browser cannot upload SSH keys or choose private executable/credential paths.
-2. Start/restart the worker. It periodically advertises safe aliases and exact allowed targets. Invalid profiles are omitted independently. Private identity files, known-hosts files, MFA socket paths, executable paths and discovery search roots remain in worker configuration.
-3. In **Clusters → Add cluster**, select the owned worker and alias, then enter an approved hostname, remote user, port and staging directory. The worker validates the exact target and directory prefix again.
-4. Discovery is queued and leased to that worker. **Run discovery** requests a fresh asynchronous observation. **Reload saved discovery** only reloads the stored result. The resource table shows observed total CPU/memory/GRES capacity and its timestamp; it omits changing partition and node states. Historical states remain available in the saved JSON. Grant the cluster in project settings, then optionally narrow access per key.
+1. In **Clusters → Add cluster**, save a name, backend and login hostname. The remote username and proposed job directory may be filled in later. You can propose a new canonical directory outside every currently advertised profile. Saving this record creates no executable connection, SSH request, directory or discovery task.
+2. The saved setup page offers **Register a new worker** or a later binding to an existing one. Worker registration issues a worker API token once, with only its hash retained by control. Store it in that worker's private token file; this token is separate from project keys and SSH credentials. Legacy workers with no owner still need trusted operator assignment.
+3. Once a remote username and proposed directory are saved, download the worker configuration template. On a new worker, replace the private-key and pinned known-hosts path placeholders. For an existing worker, merge only the new credential profile into its private configuration, preserving other profiles and settings. The template approves exactly the proposed target/root and starts with automatic execution disabled; verify interpreter paths, site resource bounds and timing assumptions separately. The portal does not install/start a worker or save SSH credentials.
+4. Start/restart the worker. It advertises safe aliases, exact allowed targets and directory prefixes. Invalid profiles are omitted independently. Private identity files, known-hosts files, MFA socket paths, executable paths and discovery search roots remain on the worker. No local path mapping is inferred from the browser's filesystem.
+5. On the saved cluster, choose **Connect worker**, select an owned worker, load its current profiles, and choose an approved remote job directory. If a new directory is not approved yet, keep the setup saved while updating the worker's protected mapping. Binding rechecks the saved revision, current worker ownership/revocation, profile fingerprint, login target and directory under transaction locks.
+6. Binding creates a normal connection and queues discovery. Project execution stays unavailable until first discovery succeeds. Failed discovery or an enable toggle cannot bypass this setup gate. **Run discovery** requests a fresh asynchronous query; **Reload saved discovery** reads only the saved result. Grant the identified cluster and its environment recipes to projects afterward, optionally narrowing access per key.
+
+Saved registrations appear under **Setup in progress** and can be edited until
+bound. Once bound, they point to the ordinary cluster overview. Target edits do
+not rewrite an existing connection or any job's immutable execution revision;
+create another setup for another binding. Existing connections remain available
+after this additive database upgrade. Validated one-step enrollment POSTs remain
+supported for older trusted operator clients.
+
+The resource table reports saved advertised CPU/memory/GRES capacities and its
+timestamp. It omits changing partition/node states; historical states remain in
+the saved JSON. A directory mapping grants the worker a staging scope, not a
+general permission for an agent to copy or delete arbitrary remote files.
 
 Disabling a cluster blocks new access without abandoning submitted jobs' accounting. Resource advertisements do not establish permissions or guarantee immediate capacity. Timing margins and allocation rounding must be verified in the protected site profile before unattended spending; ordinary discovery does not prove cleanup bounds.
 
@@ -77,4 +93,4 @@ Projects display recipe permissions grouped by their allowed clusters. New jobs 
 | Conda | Run the explicitly selected Conda executable/prefix inside the approved compute job; activation hooks can run there |
 | Poetry virtual environment | Use the existing venv interpreter directly; no Poetry CLI or project hooks in the broker/login worker |
 
-Discovered module paths and environment locations prefill suggestions only for an owned cluster. A human chooses a recipe and grants it to projects. Edits require a new recipe/revision, so reviewed packages retain their original binding. These recipes reference existing mutable installations; their digest is not an attestation of every installed package. No environment installation or build service is implemented yet.
+Discovered module paths and environment locations prefill suggestions only for an owned cluster. A human chooses a recipe and grants it to projects. Edits require a new recipe/revision, so reviewed packages retain their original binding. These recipes reference existing mutable installations; their digest is not an attestation of every installed package. The optional, default-disabled [environment-build extension](environment-builds.md) provides the separately authorized scheduled venv builder.

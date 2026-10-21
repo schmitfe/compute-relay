@@ -41,7 +41,7 @@ def worker_identity(request):
 def connection_allowed(credential, connection_id):
     """A key can narrow its project authority; it can never widen it."""
     restricted = credential.allowed_connection_ids
-    return credential.project.connections.filter(id=connection_id, enabled=True).exists() and (
+    return credential.project.connections.filter(id=connection_id, enabled=True, setup_complete=True).exists() and (
         restricted is None or str(connection_id) in restricted)
 
 

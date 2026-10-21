@@ -2,6 +2,7 @@ from django.conf import settings
 from django.urls import include, path
 from . import views
 from . import management
+from . import cluster_setup
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -13,6 +14,10 @@ urlpatterns = [
     path("projects/<uuid:project_id>/keys/<uuid:key_id>/revoke/", management.key_revoke),
     path("projects/<uuid:project_id>/keys/<uuid:key_id>/edit/", management.key_edit),
     path("clusters/", management.clusters), path("clusters/new/", management.cluster_new),
+    path("clusters/setup/<uuid:registration_id>/", cluster_setup.detail),
+    path("clusters/setup/<uuid:registration_id>/edit/", cluster_setup.edit),
+    path("clusters/setup/<uuid:registration_id>/bind/", cluster_setup.bind),
+    path("clusters/setup/<uuid:registration_id>/worker-config/", cluster_setup.worker_config),
     path("clusters/<uuid:connection_id>/", management.cluster_detail),
     path("clusters/<uuid:connection_id>/discover/", management.cluster_discover),
     path("clusters/<uuid:connection_id>/toggle/", management.cluster_toggle),

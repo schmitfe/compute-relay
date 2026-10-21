@@ -246,11 +246,28 @@ def key_edit(request, project_id, key_id):
 
 @human_view
 def clusters(request):
-    return render(request, "broker/clusters.html", {"clusters": owned_connections(request.user), "workers": owned_workers(request.user)})
+    from .cluster_setup import owned_registrations
+    return render(request, "broker/clusters.html", {"clusters": owned_connections(request.user),
+        "registrations": owned_registrations(request.user).filter(connection__isnull=True).order_by("created_at"),
+        "workers": owned_workers(request.user)})
 
 
 @human_view
 def cluster_new(request):
+    from .cluster_setup import RegistrationForm
+    from .models import ClusterRegistration
+    # Preserve the authenticated, scope-checked one-step API used by existing
+    # operator tooling. The ordinary browser flow never requires a worker here.
+    legacy = request.method == "POST" and ("worker" in request.POST or "credential_profile" in request.POST)
+    if not legacy:
+        form = RegistrationForm(request.POST if request.method == "POST" else None)
+        if request.method == "POST" and form.is_valid():
+            data = form.cleaned_data
+            registration = ClusterRegistration.objects.create(owner=request.user, name=data["name"], backend=data["backend"],
+                host=data["host"], remote_user=data["user"], port=data["port"], requested_root=data["remote_root"])
+            services.audit(None, request.user.id, "cluster.registered", registration.id)
+            return redirect(f"/clusters/setup/{registration.id}/")
+        return render(request, "broker/cluster_form.html", {"form": form})
     form = ClusterForm(request.POST if request.method == "POST" else None, user=request.user)
     if request.method == "POST" and form.is_valid():
         data = form.cleaned_data
@@ -258,7 +275,8 @@ def cluster_new(request):
         config = {"backend": profile["backend"], "credential_profile": data["credential_profile"],
                   "ssh": {"host": data["host"], "user": data["user"], "port": data["port"]}, "remote_root": data["remote_root"]}
         connection = Connection.objects.create(owner=request.user, worker=data["worker"], name=data["name"], backend=profile["backend"],
-                                                configuration=config, revision_sha256=services.digest(config), auth_state="discovery_required", discovery_state="queued")
+                                                configuration=config, revision_sha256=services.digest(config), setup_complete=False,
+                                                auth_state="discovery_required", discovery_state="queued")
         services.audit(None, request.user.id, "connection.enrolled", connection.id)
         return redirect(f"/clusters/{connection.id}/")
     return render(request, "broker/cluster_form.html", {"form": form, "workers": owned_workers(request.user)})
