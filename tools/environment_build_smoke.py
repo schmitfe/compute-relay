@@ -121,7 +121,7 @@ def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_maj
     first_attempt = wait_job(agent, job["id"], attempt_id, timeout)
     ready = wait_build(agent, build["id"], timeout)
     require(ready["environment"]["permitted_for_jobs"] is False, "Publication silently expanded execution permission")
-    agent.request("POST", f"/api/v1/environment-builds/{build['id']}/promote", {}, expected=(403,))
+    agent.request("POST", f"/api/v1/environment-builds/{build['id']}/promote", {}, expected=(403,), binary=True)
     promoted = human.request("POST", f"/api/v1/environment-builds/{build['id']}/promote", {})
     require(promoted["environment"]["permitted_for_jobs"] is True, "Explicit human promotion did not update the grant")
     prefix = ready["receipt"]["prefix"]
