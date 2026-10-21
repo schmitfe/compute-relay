@@ -1,0 +1,8 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/">Projects</a> / Storage</p><h1>Approved storage locations</h1>
+<p>Locations come from protected worker configuration. This page does not scan, create, move or delete remote files.</p>
+<p><a class="button" href="/storage/targets/new/">Enroll a location</a></p>
+<section><table><thead><tr><th>Name</th><th>Cluster</th><th>Protected root</th><th>State</th></tr></thead><tbody>
+{% for row in targets %}<tr><td>{{ row.target.name }}<br><small>{{ row.target.roles|join:", " }}</small></td><td>{{ row.target.connection.name }}</td><td><code>{{ row.target.root }}</code></td><td>{% if row.current %}Current binding{% else %}Profile changed or unavailable; enroll the current root again{% endif %}<br>Capacity: {{ row.target.pool.health_state }}</td></tr>
+{% empty %}<tr><td colspan="4">No storage locations enrolled.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
