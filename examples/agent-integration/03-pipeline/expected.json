@@ -1,0 +1,13 @@
+{
+  "case_id": "03",
+  "status": "not_run",
+  "required_check_ids": [
+    "target_gate",
+    "budget",
+    "evidence",
+    "workflow_gate",
+    "dependencies",
+    "provenance"
+  ],
+  "note": "A rubric is not execution evidence. Populate the generated record template only after observing real results."
+}

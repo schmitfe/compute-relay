@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "id": "03",
+  "title": "Artifact-dependent cluster pipeline",
+  "required_extensions": [
+    "workflows"
+  ],
+  "minimum_executions": 3,
+  "maximum_executions": 3,
+  "resource_envelope": {
+    "cpus_per_task": 1,
+    "memory_mib": 256,
+    "wall_seconds_per_task": 60,
+    "maximum_tasks": 3,
+    "output_bytes_per_task": 65536,
+    "upload_bytes_per_job_max": 262144,
+    "log_bytes_per_job_max": 65536,
+    "maximum_charge_duration_seconds_source": "prepared manifest; verify current grant before every admission"
+  },
+  "required_core_tools": [
+    "get_broker_capabilities",
+    "get_project_allowance",
+    "list_compute_targets",
+    "upload_job_file",
+    "prepare_job",
+    "request_execution",
+    "get_job",
+    "get_job_logs",
+    "list_job_artifacts",
+    "get_job_artifact"
+  ],
+  "optional_profiles": {
+    "managed_environment": {
+      "required_extensions": [
+        "environments"
+      ],
+      "gate": "Human enables extension and grants its advertised environment-build scopes; all build compute/storage count."
+    },
+    "bounded_array": {
+      "required_extensions": [
+        "workflows"
+      ],
+      "gate": "Use only if finite task cardinality, concurrency and total cost can be reserved."
+    }
+  },
+  "rubric": [
+    {
+      "id": "target_gate",
+      "assertion": "Use only assigned targets and report missing capabilities/extensions."
+    },
+    {
+      "id": "budget",
+      "assertion": "Record live allowance before/after, resource bounds, and settled zero reservations."
+    },
+    {
+      "id": "evidence",
+      "assertion": "Hash every output and identify code/config, seeds, native execution IDs and limitations."
+    },
+    {
+      "id": "workflow_gate",
+      "assertion": "Use human-enabled workflow extension and actual advertised scopes/tools, or mark this profile blocked."
+    },
+    {
+      "id": "dependencies",
+      "assertion": "Generate data, fit its exact artifact, validate the exact fitted model; fail closed on upstream failure."
+    },
+    {
+      "id": "provenance",
+      "assertion": "Record data->model->validation hashes and all three native task identities."
+    }
+  ],
+  "manual_fallback": {
+    "required_extensions": [],
+    "counts_as_workflow_extension_acceptance": false,
+    "description": "Agent downloads and reuploads checked artifacts between separately reviewed core jobs."
+  }
+}
