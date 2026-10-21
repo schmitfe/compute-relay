@@ -19,6 +19,7 @@ class WorkerIdentity(models.Model):
     profiles = models.JSONField(default=list)
     supported_extensions = models.JSONField(default=list)
     last_seen_at = models.DateTimeField(null=True)
+    enrollment_nonce = models.UUIDField(null=True, blank=True, unique=True, editable=False)
 
     def __str__(self):
         return self.name
@@ -33,6 +34,7 @@ class Connection(models.Model):
     configuration = models.JSONField()
     revision_sha256 = models.CharField(max_length=64)
     enabled = models.BooleanField(default=True)
+    setup_complete = models.BooleanField(default=True)
     auth_state = models.CharField(max_length=30, default="ready")
     discovery_snapshot = models.JSONField(default=dict)
     discovery_state = models.CharField(max_length=30, default="not_started")
@@ -43,6 +45,22 @@ class Connection(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class ClusterRegistration(models.Model):
+    """Human setup intent; no executable connection exists until explicitly bound."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(User, on_delete=models.PROTECT)
+    name = models.CharField(max_length=80)
+    backend = models.CharField(max_length=20, default="slurm")
+    host = models.CharField(max_length=253)
+    remote_user = models.CharField(max_length=80, blank=True)
+    port = models.PositiveIntegerField(default=22)
+    requested_root = models.CharField(max_length=240, blank=True)
+    revision = models.PositiveIntegerField(default=1)
+    connection = models.OneToOneField(Connection, null=True, blank=True, on_delete=models.PROTECT,
+                                     related_name="registration")
+    created_at = models.DateTimeField(default=timezone.now)
 
 
 class Environment(models.Model):
