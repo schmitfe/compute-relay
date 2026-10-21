@@ -78,6 +78,30 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### Cluster-first setup acceptance, 21 October 2026
+
+The management smoke client now saves cluster details without a worker or
+credential profile, opens the saved setup, loads an owned worker's current
+profile fingerprint, and binds an approved directory in a separate request.
+Both the native fake service and a fresh disposable Docker Slurm stack passed
+this flow, including successful discovery and the existing project/key/review
+checks. The fixture execution settled at one CPU core-second with zero
+reservations. No institutional jobs or credentials were used.
+
+Regression coverage includes an owner with no workers, new proposed directories,
+ownership and CSRF, stale setup/profile revisions, concurrent duplicate binding,
+withdrawn/revoked workers during discovery, and the first-discovery execution
+gate. Worker registration tests cover hash-only storage, one-time responses,
+replay and concurrent issuance. The production URL routes are exercised too.
+The final integrated suite passed 630 tests and 64 subtests, with one optional
+NumPy calibration skipped. Migration drift checks reported no changes.
+
+The running local portal was backed up and migrated through broker migrations
+0007 and 0008. Authenticated checks confirmed that existing connection IDs,
+execution revisions and project/job/attempt counts were preserved. This upgrade
+does not establish or start a new worker automatically; protected worker
+configuration remains a separate operator step.
+
 ### Optional extension acceptance, 21 October 2026
 
 The integrated extension branch was checked with Docker Engine 29.9.2 and
@@ -146,7 +170,7 @@ python -m pytest tests/unit/test_management.py -q
 
 It covers human sessions/CSRF, owner/project/key isolation, hash-only key storage and one-time responses, shared balances, rotation atomicity, per-key execution review, historical admission limits, state/attribution rendering, discovery lease fencing and busy-profile updates, snapshot escaping, and immutable existing-environment recipes with canonical module paths. These tests never read institutional SSH credentials or call a cluster. The native synthetic HTTP workflow also passed before the final container runs; it is useful for faster iteration but does not replace container/Slurm acceptance.
 
-Both Compose smoke services enable `--management`. The client enrolls a cluster using the worker's advertised credential-profile alias and allowed public target, waits for discovery, and checks that its software snapshot describes the login node without claiming compute-node verification. It creates a budgeted project with explicit limits and a lifetime limit of one execution, then creates two independent keys sharing one allowance. The keys require review for each execution, demonstrating that a key can require approval on a budgeted project. The client verifies duplicate key-creation requests do not reveal a key again, rotates and revokes keys, and checks deny-all versus inherited cluster access. Full keys stay in the smoke process's memory; they are not printed in test results.
+Both Compose smoke services enable `--management`. The client saves a cluster first, then binds the worker's advertised credential-profile alias, current fingerprint and allowed public target in a separate request. It waits for discovery and checks that its software snapshot describes the login node without claiming compute-node verification. It creates a budgeted project with explicit limits and a lifetime limit of one execution, then creates two independent keys sharing one allowance. The keys require review for each execution, demonstrating that a key can require approval on a budgeted project. The client verifies duplicate key-creation requests do not reveal a key again, rotates and revokes keys, and checks deny-all versus inherited cluster access. Full keys stay in the smoke process's memory; they are not printed in test results.
 
 The client then uses the newly created project and rotated key for denied agent approval, human rejection/comment retrieval, a revised human-approved package, completed execution and settled accounting, log/output hashes, charged CPU usage, and zero outstanding compute reservations. It checks that job states show rejection/completion even though the immutable package remains prepared, and that the API and project job list retain the agent-supplied name, owner, and creating-key attribution. A later allowance edit must preserve spent funds and the durable lifetime count. Finally, a new automatic key must receive `TOTAL_JOB_LIMIT` when requesting another execution of the completed package, without creating a new reservation or consuming compute. The rejected human decision consumes no lifetime slot; the accepted execution consumes one permanently.
 

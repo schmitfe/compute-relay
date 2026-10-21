@@ -69,6 +69,18 @@ def test_new_directory_is_saved_as_unapproved_intent(management):
     assert not form.fields["connections"].queryset.filter(id=draft.id).exists()
 
 
+def test_setup_links_use_registered_human_worker_routes(management):
+    draft = register(management)
+    client = human(management.owner)
+    before = WorkerIdentity.objects.count()
+    page = client.get(f"/workers/new/?setup={draft.id}")
+    assert page.status_code == 200 and b'name="submission_id"' in page.content
+    assert str(draft.id).encode() in page.content
+    status = client.get(f"/workers/{management.worker.id}/")
+    assert status.status_code == 200 and management.worker.name.encode() in status.content
+    assert WorkerIdentity.objects.count() == before
+
+
 @pytest.mark.parametrize("changes", [
     {"host": "-oProxyCommand=bad"}, {"host": "host;id"}, {"user": "person;id"},
     {"remote_root": "/"}, {"remote_root": "/tmp/../escape"}, {"remote_root": "/tmp//jobs"},
