@@ -9,7 +9,9 @@ This implementation saves approved locations, shared project byte/inode budgets,
 and a per-cluster choice of work, environment, results and scratch locations. Its
 agent API reads configuration and performs **dry-run estimates only**. It does
 not redirect existing jobs, reserve physical disk space, enforce OS quotas,
-collect remote usage, build images, extract archives or delete data.
+scan retained data, build images, extract archives or delete data. Optional,
+human-enabled capacity checks read filesystem statistics through the protected
+worker; they do not measure a project's actual retained usage.
 
 ## Human configuration
 
@@ -40,9 +42,12 @@ keys. Location choices are separate for each assigned cluster. An enrolled
 location is usable only by its owner's projects on the same cluster. Key cluster
 restrictions narrow the API inventory and dry-run access further.
 
-Saving a location or project setting does not probe, scan, create or change any
-remote file. Manual usage values are labeled `human_estimate`, with their update
-time; they are not filesystem measurements.
+Capacity checks are **off by default**, including for existing targets after
+migration. An owner can explicitly enable them while enrolling a location or
+using its enable/pause button at `/storage/targets/`. Pausing invalidates in-flight
+leases. Saving project settings does not trigger checks. No storage operation
+scans, creates or changes a remote file. Manual usage values are labeled
+`human_estimate`, with their update time; they are not filesystem measurements.
 
 ## Agent API
 
@@ -85,14 +90,35 @@ held plus proposed peak estimates. Pool headroom subtracts other pending growth
 and operational reserve from current free space; already-retained bytes are not
 subtracted a second time. Available native quota is considered separately.
 
-## Capacity integration hook
+## Opt-in capacity checks
 
-`services.record_observation(worker, pool_id, document)` is an internal hook for
-a future authenticated fixed worker operation. There is **no public observation
-write API**. It checks worker/connection scope, current protected target binding,
-strictly advancing timestamps and safe counter values. No fabricated free-space
-readings are inserted. Until the worker probe is wired, inventories explicitly
-report `probe_wired: false` and missing observations as unknown.
+The control and worker installations must both enable the storage extension.
+The worker advertises that capability before it can receive maintenance leases.
+For each enabled capacity pool, the control service issues one fixed probe of
+the pool's approved root, normally once a minute. One outstanding probe is
+allowed per worker, a completed check yields the maintenance lane for at least
+15 seconds, and unavailable results back off for five minutes. This gives core
+job observations and accounting opportunities between maintenance calls.
+
+The extension implements the generic `services.lease_work(worker)` maintenance
+hook. Its context contains pool/target/connection IDs, a root alias and exact
+protected profile/connection revision digests. The worker resolves the actual
+path from its own protected profile. Neither an agent nor a lease can introduce
+an arbitrary path, endpoint, SSH option, program or script.
+
+Reports go to the worker-authenticated
+`POST /internal/v1/extensions/storage/pools/<pool-id>/report`. A report binds the
+lease ID, generation, target and both revision digests to its observation. Leases
+expire after 90 seconds; pause, configuration changes and newer generations fence
+old results. Identical report retries return a saved receipt; conflicting retries
+are rejected. Timestamps must advance and belong to the current lease, allowing
+30 seconds of clock skew. There is **no project bearer observation-write API**.
+
+Inventories report `probe_wired: true` separately from each pool's
+`probe_enabled`, `probe_supported`, cached observation timestamp and next due
+time. Until an owner enables checks and a supported worker returns a result,
+capacity remains unknown. Fake backends return explicitly unavailable readings;
+they never fabricate capacity.
 
 The versioned observation contract is:
 
@@ -116,14 +142,25 @@ credential, command or URL. Missing expected filesystem identity forces the
 observation to remain unverified. A mismatch becomes unavailable; this prevents
 mistaking an unmounted directory's backing local filesystem for the NAS.
 
-`probe.py` supplies a pure `snapshot_from_statvfs` converter and an unused,
-metadata-only `probe_filesystem` building block. The latter opens one protected
-root through no-follow directory descriptors and reads filesystem statistics.
-It has depth/size/cooperative-time bounds and performs no recursive scan, content
-read, write or subprocess. An integrating worker must resolve roots privately
-and impose an external process timeout because an NFS syscall can block beyond
-a Python deadline. User/group/project quota adapters remain site-specific future
-work; global free space does not establish a user's remaining quota.
+`remote.py` supplies the fixed, standalone probe source executed through the
+existing protected SSH transport. It opens one approved root through no-follow
+directory descriptors and reads `fstat`/`fstatvfs` metadata, without directory
+listing, file contents, writes, job submission or additional programs. Requests,
+depth and counters are bounded. A two-second cooperative deadline is paired with
+an external SSH timeout of at most 30 seconds because an NFS syscall can block
+beyond a Python deadline. `probe.py` also provides pure conversion helpers for
+local tests and future adapters.
+
+Available bytes use the filesystem's user-available count, rather than reserved
+blocks available only to an administrator. Unsupported or out-of-range inode
+sentinels become unknown. Counters above `2^53-1` are not representable by this
+wire contract and otherwise fail closed to unavailable. The reported identity
+combines the device and filesystem IDs; without an operator-pinned expected
+identity it remains explicitly unverified. Current staging-prefix compatibility
+metadata has no identity pin, so a successful reading alone does not establish
+that the intended NAS is mounted. User/group/project quota adapters remain
+site-specific future work; global free space does not establish a user's
+remaining quota. The fixed probe always reports native quota as unknown.
 
 Default health policy warns below the greater of 10% or 1 TiB free, stops planned
 new growth below 5% or 500 GiB, and marks emergency pressure below 2% or 200 GiB.
@@ -142,13 +179,14 @@ UIDs and external writes remain outside the broker's isolation/enforcement.
 
 ## Further implementation
 
-Wire fixed target-ID-based probes and job write-path derivation before treating
-locations as execution destinations. Add authenticated streaming transfer and
+Wire job write-path derivation before treating locations as execution
+destinations. Add authenticated streaming transfer and
 explicit storage quotas appropriate for large scientific package/data objects.
 On inode-limited PFS, an operator-verified read-only SIF/SquashFS execution profile
 can retain environments as single files while builds use node-local scratch.
 Archives alone do not make virtual environments relocatable, prevent expanded
 inode use, or protect against decompression bombs. Safe extraction, packed-image
 builds, retention policies, pinned-object garbage collection, and storage secret
-profiles remain future features. A file owned by the same remote UID is mutable
-even if its mount is read-only or its mode is changed.
+profiles remain future features. Changing an object's mode does not make it
+immutable against its owning remote UID. A read-only execution mount also does
+not prevent that UID from modifying an image through another writable path.

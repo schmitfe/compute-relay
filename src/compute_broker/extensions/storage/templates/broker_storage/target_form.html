@@ -2,6 +2,6 @@
 <p><a href="/storage/targets/">Storage locations</a> / Enroll</p><h1>Enroll a storage location</h1>
 <p>Choose a cluster to load its current operator-approved roots.</p>
 <ul>{% for item in clusters %}<li><a href="?connection={{ item.id }}">{{ item.name }}</a></li>{% endfor %}</ul>
-<section><p class="notice">Enrollment saves configuration only. Capacity, inode availability, filesystem identity and native quotas remain unknown until a protected probe supplies observations. No files are scanned or changed.</p>
+<section><p class="notice">Capacity checks are optional and off by default. If enabled, a protected worker reads filesystem statistics over SSH. No directories are scanned and no files are read or changed. Native quota remains unknown until a site quota adapter is available.</p>
 <form method="post">{% csrf_token %}{{ form.as_p }}<button>Enroll location</button></form></section>
 {% endblock %}

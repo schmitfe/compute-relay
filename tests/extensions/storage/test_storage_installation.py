@@ -37,6 +37,13 @@ else:
     assert result.returncode == 0, result.stderr
 
 
+def test_storage_worker_imports_no_django_or_database_modules(tmp_path):
+    source = Path(__file__).resolve().parents[3] / "src"
+    program = f"import sys; sys.path.insert(0, {str(source)!r}); import compute_broker.extensions.storage.worker; assert not any(name == 'django' or name.startswith('django.') for name in sys.modules)"
+    result = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
 def test_optional_mcp_tools_are_read_only_project_scoped_and_reject_paths_before_http():
     pytest.importorskip("mcp")
     from compute_broker.mcp.facade import ProjectFacade, create_server

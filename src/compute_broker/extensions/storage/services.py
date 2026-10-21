@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uuid import UUID
+from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Sum
@@ -10,11 +11,12 @@ from django.utils import timezone
 
 from compute_broker.control.auth import connection_allowed, human_permission
 from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Connection, Project
-from compute_broker.control.services import audit
-from .models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageEstimateReservation, StorageTarget
+from compute_broker.control.models import Connection, Project, WorkerIdentity
+from compute_broker.control.services import audit, digest
+from .models import (ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool,
+                     StorageEstimateReservation, StorageObservationLease, StorageTarget)
 from .planning import (ROLES, StoragePlanningError, assess_health, canonical_root, integer,
-                       plan_storage, timestamp, total, validate_observation, validate_storage_roots)
+                       plan_storage, roots_from_metadata, timestamp, total, validate_observation)
 
 
 def protected_roots(connection):
@@ -32,14 +34,9 @@ def protected_roots(connection):
             or ssh.get("port") not in profile.get("allowed_ports", [])):
         return []
     try:
-        if "storage_roots" in profile:
-            return validate_storage_roots(profile["storage_roots"])
         # Compatibility with existing public worker metadata. These are exact
         # choices, never a free-text descendant path or a new SSH authorization.
-        return validate_storage_roots([
-            {"alias": f"staging-root-{index}", "path": canonical_root(path), "roles": list(ROLES),
-             "capabilities": {"visibility": "unknown", "formats": ["directory"], "quota_reporting": "unknown"}}
-            for index, path in enumerate(profile.get("remote_root_prefixes", [])[:32])])
+        return roots_from_metadata(profile)
     except (StoragePlanningError, TypeError, AttributeError):
         return []
 
@@ -56,7 +53,7 @@ def target_current(target):
                 and (target.pool.expected_filesystem_id is None or root["filesystem_id"] == target.pool.expected_filesystem_id))
 
 
-def register_target(user, connection, root_alias, name, *, pool=None):
+def register_target(user, connection, root_alias, name, *, pool=None, enable_probes=False):
     if not user.is_superuser and connection.owner_id != user.id:
         raise BrokerError("STORAGE_TARGET_DENIED", "Choose a cluster you own.", 403)
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
@@ -75,6 +72,8 @@ def register_target(user, connection, root_alias, name, *, pool=None):
         if existing:
             if pool and existing.pool_id != pool.id:
                 raise BrokerError("STORAGE_TARGET_EXISTS", "This enrolled target already belongs to another capacity pool.", 409)
+            if enable_probes and not existing.pool.probe_enabled:
+                set_probe_enabled(user, existing.pool, True)
             return existing
         if pool is None:
             pool = StorageCapacityPool.objects.create(owner=connection.owner, connection=connection,
@@ -84,6 +83,8 @@ def register_target(user, connection, root_alias, name, *, pool=None):
             profile_revision_sha256=connection.configuration["credential_profile_revision_sha256"],
             connection_revision_sha256=connection.revision_sha256)
         audit(None, user.id, "storage.target_enrolled", target.id, {"connection_id": str(connection.id), "root_alias": root_alias})
+        if enable_probes:
+            set_probe_enabled(user, pool, True)
         return target
 
 
@@ -158,12 +159,15 @@ def inventory(project, *, credential=None, now=None):
         health = assess_health(pool.observation, pool.health_policy, now=now, previous_state=pool.health_state,
                                recovery_since=pool.recovery_since.isoformat() if pool.recovery_since else None)
         pools[str(pool.id)] = {"id": str(pool.id), "name": pool.name, "observation": pool.observation,
+            "probe_enabled": pool.probe_enabled,
+            "probe_supported": "storage" in target.connection.worker.supported_extensions,
+            "next_probe_at": pool.next_probe_at.isoformat() if pool.probe_enabled else None,
             "health_policy": pool.health_policy, "health_state": pool.health_state,
             "recovery_since": pool.recovery_since.isoformat() if pool.recovery_since else None, "health": health,
             "reserved_bytes_estimate": held["bytes"], "reserved_inodes_estimate": held["inodes"],
             "measurement_status": "cached" if pool.observation else "not_observed"}
     return {"schema_version": "1.0", "project_id": str(project.id), "advisory_only": True,
-        "enforced_at_dispatch": False, "probe_wired": False, "budget": budget_data, "bindings": bindings,
+        "enforced_at_dispatch": False, "probe_wired": True, "budget": budget_data, "bindings": bindings,
         "targets": [{"id": str(target.id), "name": target.name, "connection_id": str(target.connection_id),
                      "pool_id": str(target.pool_id), "roles": target.roles, "capabilities": target.capabilities}
                     for target in targets.values()], "pools": list(pools.values()),
@@ -186,8 +190,8 @@ def plan_for_credential(credential, document):
 def record_observation(worker, pool_id, document):
     """Integration hook only: caller must authenticate a fixed protected probe.
 
-    Not exposed through an HTTP route in this slice. No caller-supplied path is
-    used. Unpinned filesystem identities remain explicitly unverified.
+    The fenced worker report calls this hook; no agent-supplied path is used.
+    Unpinned filesystem identities remain explicitly unverified.
     """
     try:
         data = validate_observation(document)
@@ -260,3 +264,98 @@ def release_estimate(project, reference):
             reservation.state, reservation.released_at = "released", timezone.now()
             reservation.save(update_fields=["state", "released_at"])
         return reservation
+
+
+def set_probe_enabled(user, pool, enabled):
+    if type(enabled) is not bool:
+        raise BrokerError("INVALID_STORAGE", "Choose whether read-only capacity checks are enabled.")
+    if not user.is_superuser and pool.owner_id != user.id:
+        raise BrokerError("STORAGE_TARGET_DENIED", "Only the location owner can enable capacity checks.", 403)
+    with transaction.atomic():
+        pool = StorageCapacityPool.objects.select_for_update().get(id=pool.id)
+        pool.probe_enabled, pool.next_probe_at = enabled, timezone.now()
+        pool.save(update_fields=["probe_enabled", "next_probe_at"])
+        if not enabled:
+            StorageObservationLease.objects.filter(pool=pool, state="leased").update(state="expired")
+        audit(None, user.id, "storage.probe_enabled" if enabled else "storage.probe_paused", pool.id)
+        return pool
+
+
+def lease_work(worker):
+    """One fair, coalesced metadata probe; no project job state is involved."""
+    now = timezone.now()
+    with transaction.atomic():
+        worker = WorkerIdentity.objects.select_for_update().get(id=worker.id)
+        if worker.revoked or "storage" not in worker.supported_extensions:
+            return None
+        leases = StorageObservationLease.objects.filter(pool__connection__worker=worker)
+        if leases.filter(state="leased", expires_at__gt=now).exists():
+            return None
+        # A completed maintenance call yields the worker lane to core jobs.
+        if leases.filter(reported_at__gt=now - timedelta(seconds=15)).exists():
+            return None
+        pools = StorageCapacityPool.objects.select_for_update().select_related("connection__worker").filter(
+            connection__worker=worker, connection__enabled=True, enabled=True, probe_enabled=True,
+            next_probe_at__lte=now).order_by("next_probe_at", "id")
+        for pool in pools[:30]:
+            target = next((item for item in pool.storagetarget_set.select_related("pool", "connection__worker").order_by("id")
+                           if item.root == pool.probe_root and target_current(item)), None)
+            if target is None:
+                pool.next_probe_at = now + timedelta(seconds=300)
+                pool.save(update_fields=["next_probe_at"])
+                continue
+            StorageObservationLease.objects.filter(pool=pool, state="leased").update(state="expired")
+            pool.probe_generation += 1
+            pool.next_probe_at = now + timedelta(seconds=60)
+            pool.save(update_fields=["probe_generation", "next_probe_at"])
+            lease = StorageObservationLease.objects.create(pool=pool, target=target, generation=pool.probe_generation,
+                expires_at=now + timedelta(seconds=90), profile_revision_sha256=target.profile_revision_sha256,
+                connection_revision_sha256=target.connection_revision_sha256)
+            context = {"pool_id": str(pool.id), "target_id": str(target.id), "connection_id": str(target.connection_id),
+                       "root_alias": target.root_alias, "profile_revision_sha256": lease.profile_revision_sha256,
+                       "connection_revision_sha256": lease.connection_revision_sha256}
+            return {"id": str(lease.id), "generation": lease.generation,
+                    "configuration": pool.connection.configuration, "context": context}
+    return None
+
+
+def report_probe(worker, pool_id, document):
+    expected = {"lease_id", "generation", "target_id", "profile_revision_sha256", "connection_revision_sha256", "observation"}
+    if not isinstance(document, dict) or set(document) != expected or type(document.get("generation")) is not int:
+        raise BrokerError("INVALID_STORAGE_REPORT", "Unexpected capacity report fields.")
+    payload_sha256 = digest(document)
+    now = timezone.now()
+    with transaction.atomic():
+        worker = WorkerIdentity.objects.select_for_update().get(id=worker.id)
+        if worker.revoked:
+            raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
+        pool = StorageCapacityPool.objects.select_for_update().filter(id=pool_id, connection__worker=worker).first()
+        if pool is None:
+            raise BrokerError("NOT_FOUND", "Storage pool not found.", 404)
+        lease = StorageObservationLease.objects.select_for_update().select_related("pool__connection__worker", "target__connection__worker", "target__pool").filter(
+            id=document["lease_id"], pool_id=pool_id, pool__connection__worker=worker).first()
+        if lease is None:
+            raise BrokerError("NOT_FOUND", "Capacity lease not found.", 404)
+        if lease.state == "reported":
+            if lease.report_sha256 != payload_sha256:
+                raise BrokerError("STORAGE_REPORT_CONFLICT", "This capacity lease already has a different result.", 409)
+            return lease.response
+        if (lease.state != "leased" or lease.expires_at <= now or not pool.probe_enabled or not pool.enabled
+                or worker.revoked or "storage" not in pool.connection.worker.supported_extensions
+                or lease.generation != pool.probe_generation or document["generation"] != lease.generation):
+            raise BrokerError("STALE_LEASE", "Capacity lease is paused, stale or expired.", 409)
+        if (str(lease.target_id) != document["target_id"] or lease.profile_revision_sha256 != document["profile_revision_sha256"]
+                or lease.connection_revision_sha256 != document["connection_revision_sha256"] or not target_current(lease.target)
+                or lease.target.root != pool.probe_root):
+            raise BrokerError("REVISION_CHANGED", "The protected capacity target changed.", 409)
+        data = validate_observation(document["observation"], now=now)
+        # A pre-existing or replayed sample cannot satisfy a new probe lease.
+        if timestamp(data["observed_at"]) < lease.created_at - timedelta(seconds=30):
+            raise BrokerError("STALE_OBSERVATION", "Capacity sample predates its lease.", 409)
+        response = record_observation(worker, pool.id, data)
+        lease.state, lease.reported_at, lease.report_sha256, lease.response = "reported", now, payload_sha256, response
+        lease.save(update_fields=["state", "reported_at", "report_sha256", "response"])
+        pool.refresh_from_db()
+        pool.next_probe_at = now + timedelta(seconds=60 if pool.observation["status"] == "available" else 300)
+        pool.save(update_fields=["next_probe_at"])
+        return response

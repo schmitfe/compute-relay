@@ -21,7 +21,7 @@ def snapshot_from_statvfs(stats, *, filesystem_id, expected_filesystem_id=None, 
     fragment = integer(stats["f_frsize"])
     total_blocks, available_blocks = integer(stats["f_blocks"]), integer(stats["f_bavail"])
     total_inodes, available_inodes = stats.get("f_files"), stats.get("f_favail")
-    if type(total_inodes) is not int or total_inodes <= 0 or type(available_inodes) is not int or available_inodes < 0:
+    if type(total_inodes) is not int or not 0 < total_inodes <= 2**53 - 1 or type(available_inodes) is not int or not 0 <= available_inodes <= 2**53 - 1:
         total_inodes = available_inodes = None
     verified = bool(expected_filesystem_id and filesystem_id == expected_filesystem_id)
     snapshot = {"schema_version": "1.0", "observed_at": observed_at.isoformat(), "source": "statvfs",

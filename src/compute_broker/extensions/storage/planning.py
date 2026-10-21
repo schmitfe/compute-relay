@@ -75,6 +75,15 @@ def validate_storage_roots(value):
     return result
 
 
+def roots_from_metadata(profile):
+    if "storage_roots" in profile:
+        return validate_storage_roots(profile["storage_roots"])
+    return validate_storage_roots([
+        {"alias": f"staging-root-{index}", "path": canonical_root(path), "roles": list(ROLES),
+         "capabilities": {"visibility": "unknown", "formats": ["directory"], "quota_reporting": "unknown"}}
+        for index, path in enumerate(profile.get("remote_root_prefixes", [])[:32])])
+
+
 def default_health_policy():
     return {"warning_percent": 10, "stop_percent": 5, "emergency_percent": 2, "recovery_percent": 7,
             "warning_floor_bytes": 1024**4, "stop_floor_bytes": 500 * 1024**3,
