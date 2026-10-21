@@ -6,6 +6,66 @@ Build a protected, local-first compute broker with Slurm over SSH, immutable job
 
 The repository now implements a development alpha spanning control, immutable review, reservations, workers, Slurm/SSH, fake execution, and MCP. See [current runtime scope](runtime.md) for precise limits and [container evidence](container-testing.md) for live test results. The source tree below remains the larger target layout. Milestones are ordered by dependencies and acceptance gates; protected installation and several later features remain incomplete.
 
+## Prioritized follow-up: simpler agent onboarding
+
+Recorded on 21 October 2026. **Pending implementation.** A new session should
+open a configured science project and discover its authorized compute context
+without receiving a project UUID, credential contents, or a manual tool list
+in the prompt. These changes apply to core onboarding and must not require
+storage, environment-build, workflow, or transfer extensions.
+
+### ONB-1 — Infer the project from the API key
+
+- Remove mandatory `BROKER_PROJECT_ID` from MCP launch configuration. A project
+  key already identifies exactly one project through server-side authentication.
+- Provide an authenticated context lookup; let the adapter obtain the project
+  identity and insert it into project-scoped routes and job requests internally.
+- Keep the broker authoritative. A supplied project ID cannot expand a key's
+  authority. During migration, an optional legacy ID must match the authenticated
+  project or fail clearly. Preserve opaque keys and hash-only server storage.
+- Update the configuration generator, examples, and onboarding documentation.
+- Acceptance: a fresh client with only endpoint/profile and token-file reference
+  can discover targets, prepare a job, request execution, and retrieve results.
+  Invalid, expired, revoked, and cross-project credentials remain denied; a
+  conflicting legacy project ID fails without admitting work.
+
+### ONB-2 — Configure the broker address once
+
+- Treat the broker URL as MCP adapter connection configuration. It is not
+  information the model must repeat in prompts or supply on individual calls.
+- Support a reusable installation/connection profile containing the endpoint;
+  science projects select that profile and their own credential-file reference.
+  Preserve an explicit endpoint override for local and hosted installations.
+- Generate the appropriate client configuration from the portal or setup tool
+  so users do not manually copy internal deployment details into every project.
+- Keep endpoint selection explicit and bound to the intended credential. Do not
+  discover an arbitrary server and forward a key to it, embed secrets in URLs,
+  or weaken the current HTTPS and redirect restrictions.
+- Acceptance: subsequent sessions and projects can reuse a configured connection;
+  profile/override precedence is deterministic, credential values stay out of
+  generated configuration and logs, and existing explicit URLs remain supported.
+
+### ONB-3 — Expose a complete authorized context through MCP
+
+- Add a versioned read-only context tool/resource with the project name/identity,
+  key scopes and execution-confirmation requirements, effective project and site
+  resource limits, remaining compute/submission allowance, and permitted targets
+  and environment revisions. Include enabled/usable extension capabilities.
+- Supply the job-request schema and a valid request example through MCP so a
+  fresh agent need not inspect broker source or guess an opaque request object.
+- Preserve timestamps and uncertainty for saved inventory. Do not describe
+  advertised capacity as current availability or a linked environment as usable
+  when its revision is outside the grant. Never expose worker/SSH credentials,
+  private authentication paths, or another project's data.
+- Include concise local/hybrid/cluster planning guidance. Local hardware and
+  available-memory inspection remain agent-local operations; local execution is
+  outside the broker's compute ledger. Context discovery does not automatically
+  route jobs, grant permissions, enable extensions, or authorize execution.
+- Acceptance: fresh Codex and Claude Code sessions can learn the tools, request
+  format, constraints and execution choices without repository-source access or
+  a manually maintained onboarding brief. Test scope filtering, current policy
+  changes, disabled extensions, stale/unknown inventory, and key revocation.
+
 ## Selected implementation stack
 
 | Area | Choice | Reason and boundary |
