@@ -98,3 +98,27 @@ def test_after_report_ignores_disabled_extension_without_importing_it(broker, mo
 
 def test_worker_never_loads_an_unconfigured_extension():
     assert extensions.worker_after_observation((), None, {}, {"extension_name": "environments"}, {}) == {}
+
+
+def test_background_work_requires_server_and_worker_enablement(monkeypatch):
+    monkeypatch.setattr(extensions, "control_names", lambda: ("storage",))
+    monkeypatch.setattr(extensions, "services_for", lambda _: SimpleNamespace(
+        lease_work=lambda worker: {"id": "test", "generation": 1, "configuration": {}, "context": {}}))
+    assert extensions.lease_extension_work(SimpleNamespace(supported_extensions=[])) is None
+    result = extensions.lease_extension_work(SimpleNamespace(supported_extensions=["storage"]))
+    assert result["lease"]["extension"] == "storage"
+    assert result["lease"]["operation"] == "extension"
+
+
+def test_background_work_cannot_override_core_lease_fields(monkeypatch):
+    monkeypatch.setattr(extensions, "control_names", lambda: ("storage",))
+    monkeypatch.setattr(extensions, "services_for", lambda _: SimpleNamespace(
+        lease_work=lambda worker: {"attempt_id": "unexpected"}))
+    with pytest.raises(ValueError, match="invalid extension"):
+        extensions.lease_extension_work(SimpleNamespace(supported_extensions=["storage"]))
+
+
+def test_worker_rejects_disabled_background_extension_before_import(monkeypatch):
+    monkeypatch.setattr(extensions, "import_module", lambda _: pytest.fail("disabled extension imported"))
+    with pytest.raises(ValueError, match="not enabled"):
+        extensions.execute_extension_work(SimpleNamespace(extensions=()), {"extension": "storage"})

@@ -238,6 +238,13 @@ def lease(request):
     discovery = lease_discovery(worker)
     if discovery:
         return discovery
+    try:
+        from compute_broker.extensions import lease_extension_work
+        extension_work = lease_extension_work(worker)
+        if extension_work:
+            return extension_work
+    except Exception:
+        logger.warning("Extension maintenance deferred; core work remains available")
     return services.lease_work(worker)
 
 
