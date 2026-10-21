@@ -1,0 +1,13 @@
+{% extends "broker/base.html" %}
+{% block content %}
+<h1>Reusable environments for {{ project.name }}</h1>
+<p>Builds run as scheduled jobs with the project's confirmation, compute and submission limits. Ready environments need an explicit administrator permission change before jobs can select them.</p>
+<p><a href="/projects/{{ project.id }}/environment-build-policy/">Configure build permission</a> · <a href="/projects/{{ project.id }}/">Back to project</a></p>
+<p>Supported builder: Python venv using an empty standard-library environment or an uploaded closure of pinned, hashed wheels. Conda, micromamba and Poetry builders are unavailable in this release.</p>
+<table><thead><tr><th>Name</th><th>State</th><th>Review and logs</th><th>Environment</th></tr></thead><tbody>
+{% for build in builds %}<tr><td>{{ build.spec.document.name }}</td><td>{{ build.state }}{% if build.error_code %} · {{ build.error_code }}{% endif %}</td>
+<td>{% if build.job_id %}<a href="/review/{{ build.job_id }}/">Review build job</a>{% else %}Waiting for preparation{% endif %}</td>
+<td>{% if build.environment_id %}{{ build.environment.name }}<form method="post" action="/environment-builds/{{ build.id }}/promote/">{% csrf_token %}<button>Permit this environment for project jobs</button></form>{% else %}Not published{% endif %}</td></tr>
+{% empty %}<tr><td colspan="4">No environment builds yet. An authorized agent can create a recipe through the environment-build API.</td></tr>{% endfor %}
+</tbody></table><p>Byte/file estimates and free-space checks are advisory. The environment remains in its original cluster attempt directory; do not rename or remove a prefix while it is in use.</p>
+{% endblock %}
