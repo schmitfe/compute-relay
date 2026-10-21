@@ -20,6 +20,9 @@ class StorageCapacityPool(models.Model):
     health_state = models.CharField(max_length=20, default="unknown")
     recovery_since = models.DateTimeField(null=True)
     enabled = models.BooleanField(default=True)
+    probe_enabled = models.BooleanField(default=False)
+    next_probe_at = models.DateTimeField(default=timezone.now)
+    probe_generation = models.PositiveIntegerField(default=0)
 
     def __str__(self):
         return self.name
@@ -78,3 +81,24 @@ class StorageEstimateReservation(models.Model):
     state = models.CharField(max_length=20, default="held")
     created_at = models.DateTimeField(default=timezone.now)
     released_at = models.DateTimeField(null=True)
+
+
+class StorageObservationLease(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pool = models.ForeignKey(StorageCapacityPool, on_delete=models.PROTECT)
+    target = models.ForeignKey(StorageTarget, on_delete=models.PROTECT)
+    generation = models.PositiveIntegerField()
+    profile_revision_sha256 = models.CharField(max_length=64)
+    connection_revision_sha256 = models.CharField(max_length=64)
+    state = models.CharField(max_length=20, default="leased")
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    reported_at = models.DateTimeField(null=True)
+    report_sha256 = models.CharField(max_length=64, blank=True)
+    response = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["pool", "generation"], name="storage_probe_generation_once"),
+            models.UniqueConstraint(fields=["pool"], condition=models.Q(state="leased"), name="storage_probe_pool_active_once"),
+        ]

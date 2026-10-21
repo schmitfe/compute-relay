@@ -8,11 +8,12 @@ from django.http import HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 
 from compute_broker.control.forms import owned_connections
+from compute_broker.control.auth import worker_identity
 from compute_broker.control.management import human_view, managed_project
 from compute_broker.control.views import body, boundary, scope
 from . import services
 from .forms import GIB, ProjectStorageForm, StorageTargetForm
-from .models import ProjectStorageBinding, ProjectStorageBudget, StorageTarget
+from .models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageTarget
 from .planning import ROLES, StoragePlanningError
 
 
@@ -33,7 +34,8 @@ def target_new(request):
                              initial={"connection": request.GET.get("connection")})
     if request.method == "POST" and form.is_valid():
         data = form.cleaned_data
-        services.register_target(request.user, data["connection"], data["root_alias"], data["name"], pool=data.get("pool"))
+        services.register_target(request.user, data["connection"], data["root_alias"], data["name"],
+                                 pool=data.get("pool"), enable_probes=data["enable_probes"])
         return redirect("/storage/targets/")
     return render(request, "broker_storage/target_form.html", {"form": form, "cluster": form.selected_connection,
         "clusters": owned_connections(request.user).filter(enabled=True).order_by("name")})
@@ -83,6 +85,25 @@ def storage_inventory(request, project_id):
     result = JsonResponse(response)
     result["Cache-Control"] = "no-store, private"
     return result
+
+
+@human_view
+def pool_probes(request, pool_id):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    pools = StorageCapacityPool.objects.all() if request.user.is_superuser else StorageCapacityPool.objects.filter(owner=request.user)
+    pool = get_object_or_404(pools, id=pool_id)
+    value = request.POST.get("enabled")
+    if value not in {"true", "false"}:
+        from compute_broker.control.errors import BrokerError
+        raise BrokerError("INVALID_STORAGE", "Choose whether capacity checks are enabled.")
+    services.set_probe_enabled(request.user, pool, value == "true")
+    return redirect("/storage/targets/")
+
+
+@boundary("POST")
+def capacity_report(request, pool_id):
+    return services.report_probe(worker_identity(request), pool_id, body(request, maximum=16384))
 
 
 @boundary("POST")

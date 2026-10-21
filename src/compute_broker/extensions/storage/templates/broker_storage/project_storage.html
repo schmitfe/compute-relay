@@ -1,12 +1,15 @@
 {% extends "broker/base.html" %}{% block content %}
 <p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / Storage</p><h1>Project storage planning</h1>
-<p class="notice">Budgets are advisory estimates. They do not enforce filesystem quotas, reserve physical space, or redirect existing jobs. The worker capacity probe and job storage integration are not connected in this version.</p>
+<p class="notice">Budgets are advisory estimates. They do not enforce filesystem quotas, reserve physical space, or redirect existing jobs. Job storage redirection is not connected in this version. Capacity checks run only when the location owner enables them and the protected worker supports storage.</p>
 <p><a href="/storage/targets/">Manage approved storage locations</a></p>
 <section><h2>Locations by cluster</h2><ul>{% for cluster in connections %}<li><a href="?connection={{ cluster.id }}">{{ cluster.name }}</a></li>{% empty %}<li>Assign a cluster in project settings first.</li>{% endfor %}</ul>
 {% if form %}<h3>{{ selected_connection.name }}</h3><p>Shared budget totals apply across every cluster and API key in this project. Each cluster has its own selected locations.</p>
 <form method="post">{% csrf_token %}<input type="hidden" name="connection_id" value="{{ selected_connection.id }}">{{ form.as_p }}<button>Save advisory storage settings</button></form>{% endif %}</section>
 <section><h2>Cached capacity and quota observations</h2>
 {% for pool in snapshot.pools %}<article><h3>{{ pool.name }}</h3><p>Status: {{ pool.health.state }} · Measurement: {{ pool.measurement_status }}</p><p>Last observed: {{ pool.health.observed_at|default:"Not observed" }}{% if pool.health.age_seconds != None %} · Age: {{ pool.health.age_seconds }} seconds{% endif %}</p>
+<p>Checks: {% if pool.probe_enabled %}enabled{% else %}paused{% endif %} · Worker support: {% if pool.probe_supported %}available{% else %}not advertised{% endif %}</p>
+<p>Available space: {% if pool.observation.available_bytes != None %}{{ pool.observation.available_bytes|filesizeformat }}{% else %}Unknown{% endif %} · Available file/directory entries: {{ pool.observation.available_inodes|default_if_none:"Unknown"|default:"Unknown" }}</p>
+<p>Native quota: {{ pool.observation.quota.status|default:"unknown" }}. Filesystem identity: {% if pool.observation.identity_verified %}matches protected identity{% else %}unverified{% endif %}.</p>
 <p>Unknown information: {{ pool.health.unknowns|join:", "|default:"None recorded" }}</p></article>{% empty %}<p>No current selected locations. No free-space or quota values have been measured.</p>{% endfor %}
 <p>When filesystem health is connected, byte and inode pressure will be evaluated independently. External writes and undeclared growth can exceed planning estimates.</p></section>
 <details><summary>Planning API snapshot</summary><pre>{{ snapshot_text }}</pre></details>

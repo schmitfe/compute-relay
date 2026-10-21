@@ -2,7 +2,6 @@
 
 import json
 from datetime import timedelta
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -15,28 +14,6 @@ from compute_broker.control.models import Connection, Job, Project, ProjectCrede
 from compute_broker.extensions.storage import services
 from compute_broker.extensions.storage.models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageEstimateReservation, StorageTarget
 from compute_broker.extensions.storage.planning import ROLES
-
-
-@pytest.fixture
-def resources(db):
-    owner = User.objects.create_user(username="storage-owner")
-    outsider = User.objects.create_user(username="storage-outsider")
-    profile = {"alias": "protected", "backend": "fake", "revision_sha256": "c" * 64,
-               "allowed_hosts": ["storage.invalid"], "allowed_users": ["researcher"], "allowed_ports": [22],
-               "remote_root_prefixes": ["/approved/project-space"], "site_profile": {}}
-    worker = WorkerIdentity.objects.create(owner=owner, name="protected storage worker", token_hash=token_hash("storage-worker"), profiles=[profile])
-    configuration = {"backend": "fake", "credential_profile": "protected", "credential_profile_revision_sha256": "c" * 64,
-                     "ssh": {"host": "storage.invalid", "user": "researcher", "port": 22},
-                     "remote_root": "/approved/project-space/jobs", "profile_revision": 1, "site_profile": {}}
-    connection = Connection.objects.create(owner=owner, worker=worker, name="Storage cluster", backend="fake",
-                                           configuration=configuration, revision_sha256="a" * 64)
-    project = Project.objects.create(owner=owner, name="Storage project")
-    project.connections.add(connection)
-    secret = "storage-project-token"
-    credential = ProjectCredential.objects.create(project=project, name="planner", prefix="planner", token_hash=token_hash(secret),
-        scopes=["jobs:read"], expires_at=timezone.now() + timedelta(days=1))
-    return SimpleNamespace(owner=owner, outsider=outsider, profile=profile, worker=worker, connection=connection,
-                           project=project, credential=credential, token=secret)
 
 
 def enroll(resources):
@@ -127,7 +104,8 @@ def test_inventory_and_plan_are_read_only_scoped_and_explicit_about_unknown_capa
     response = client.get(f"/api/v1/projects/{resources.project.id}/storage", **headers(resources))
     assert response.status_code == 200
     payload = response.json()
-    assert payload["probe_wired"] is False and payload["advisory_only"] is True
+    assert payload["probe_wired"] is True and payload["advisory_only"] is True
+    assert payload["pools"][0]["probe_enabled"] is False
     assert payload["pools"][0]["measurement_status"] == "not_observed"
     assert "/approved/project-space" not in response.content.decode()
     assert "root" not in payload["targets"][0]

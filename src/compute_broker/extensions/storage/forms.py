@@ -20,6 +20,8 @@ class StorageTargetForm(forms.Form):
     root_alias = forms.ChoiceField(choices=[], label="Operator-approved directory")
     pool = forms.ModelChoiceField(queryset=StorageCapacityPool.objects.none(), required=False, label="Shared capacity pool",
         help_text="Leave blank for a new pool. Group locations only when they use the same backing filesystem; identity remains unverified without a protected observation.")
+    enable_probes = forms.BooleanField(required=False, initial=False, label="Enable read-only capacity checks",
+        help_text="An enabled storage worker may log in and read free byte/inode statistics once per minute. No directory scan, file contents, writes or deletion.")
 
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)

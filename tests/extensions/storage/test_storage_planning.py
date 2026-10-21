@@ -195,6 +195,9 @@ def test_statvfs_conversion_uses_user_available_blocks_and_marks_unknown_identit
     mismatch = snapshot_from_statvfs({"f_frsize": 4096, "f_blocks": 100, "f_bavail": 10, "f_files": 100, "f_favail": 10},
         filesystem_id="1:2", expected_filesystem_id="9:9", observed_at=NOW)
     assert mismatch["status"] == "unavailable"
+    unknown_inodes = snapshot_from_statvfs({"f_frsize": 4096, "f_blocks": 100, "f_bavail": 10,
+        "f_files": 2**64 - 1, "f_favail": 2**64 - 1}, filesystem_id="1:2", observed_at=NOW)
+    assert unknown_inodes["available_inodes"] is None and unknown_inodes["available_bytes"] == 40960
 
 
 def test_unused_probe_reads_only_directory_metadata_and_never_follows_links(tmp_path, monkeypatch):
