@@ -33,7 +33,7 @@ class FacadeTests(unittest.TestCase):
         tools = asyncio.run(server.list_tools())
         names = {tool.name for tool in tools}
         self.assertEqual(names, {"get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
-                                 "prepare_job", "request_execution", "get_job", "get_job_logs",
+                                 "prepare_job", "revise_job", "request_execution", "get_job", "get_job_logs",
                                  "list_job_artifacts", "get_job_artifact", "cancel_job_attempt"})
         self.assertTrue(next(t for t in tools if t.name == "get_job").annotations.readOnlyHint)
 
@@ -54,7 +54,7 @@ class FacadeTests(unittest.TestCase):
                 async with ClientSession(read, write) as client:
                     await client.initialize()
                     result = await client.list_tools()
-                    self.assertEqual(len(result.tools), 11)
+                    self.assertEqual(len(result.tools), 12)
                     self.assertNotIn("approve_job", {tool.name for tool in result.tools})
 
         asyncio.run(session())
@@ -73,6 +73,14 @@ class FacadeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.facade.request_execution("../../admin")
         self.assertEqual(self.client.calls, [])
+
+    def test_revision_keeps_project_and_idempotency_boundaries(self):
+        job_id = str(uuid4())
+        self.facade.revise_job(job_id, {"project_id": self.project_id}, "revision-1")
+        self.assertEqual(self.client.calls[0][1], f"/api/v1/jobs/{job_id}/revisions")
+        self.assertEqual(self.client.calls[1][3]["idempotency_key"], "revision-1:prepare")
+        with self.assertRaises(ValueError):
+            self.facade.revise_job(job_id, {"project_id": str(uuid4())})
 
     def test_upload_uses_content_and_never_opens_local_path(self):
         encoded = base64.b64encode(b"print('source')").decode()

@@ -42,6 +42,16 @@ def services_for(name):
     return import_module(EXTENSIONS[name][0] + ".services")
 
 
+def metadata_items(attribute):
+    from importlib.util import find_spec
+    result = []
+    for name in control_names():
+        module_name = EXTENSIONS[name][0] + ".metadata"
+        if find_spec(module_name):
+            result.extend(getattr(import_module(module_name), attribute, ()))
+    return result
+
+
 def job_hook(job, event, *args, **kwargs):
     name = job.extension_name
     if not name:
@@ -74,6 +84,40 @@ def before_lease(worker):
             handler = getattr(services_for(name), "before_lease", None)
             if handler:
                 handler(worker)
+
+
+def lease_extension_work(worker):
+    """Lease bounded maintenance work from installed, worker-supported plugins."""
+    import json
+    for name in control_names():
+        if name not in worker.supported_extensions:
+            continue
+        handler = getattr(services_for(name), "lease_work", None)
+        if not handler:
+            continue
+        lease = handler(worker)
+        if lease is not None:
+            if not isinstance(lease, dict) or set(lease) - {"id", "generation", "configuration", "context"}:
+                raise ValueError("invalid extension work lease")
+            if not {"id", "generation", "configuration", "context"} <= lease.keys():
+                raise ValueError("incomplete extension work lease")
+            lease = {**lease, "operation": "extension", "extension": name}
+            if len(json.dumps(lease).encode()) > 65536:
+                raise ValueError("extension work lease exceeds limit")
+            return {"lease": lease}
+    return None
+
+
+def execute_extension_work(worker, lease):
+    """Worker entry point: only operator-configured modules can be imported."""
+    import json
+    name = lease.get("extension")
+    if name not in worker.extensions or name not in EXTENSIONS:
+        raise ValueError("extension is not enabled on this worker")
+    if len(json.dumps(lease).encode()) > 65536:
+        raise ValueError("extension work lease exceeds limit")
+    module = import_module(EXTENSIONS[name][0] + ".worker")
+    return module.execute(worker, lease)
 
 
 def worker_after_observation(names, backend, native, manifest, contexts):

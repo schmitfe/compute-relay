@@ -87,6 +87,10 @@ class Worker:
         if lease.get("operation") == "discover":
             self.discover(lease)
             return
+        if lease.get("operation") == "extension":
+            from compute_broker.extensions import execute_extension_work
+            execute_extension_work(self, lease)
+            return
         attempt_id = str(UUID(lease["attempt_id"]))
         operation = lease["operation"]
         if operation not in {"submit", "reconcile", "observe", "cancel"}:
