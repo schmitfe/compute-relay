@@ -18,6 +18,10 @@ SITE_FIELDS = {"partitions", "accounts", "qos", "termination_margin_seconds", "o
 
 
 def publish_profiles(worker, document):
+    from compute_broker.extensions import EXTENSIONS
+    extensions = document.get("extensions", [])
+    if not isinstance(extensions, list) or any(not isinstance(name, str) or name not in EXTENSIONS for name in extensions) or len(set(extensions)) != len(extensions):
+        raise BrokerError("INVALID_PROFILES", "Invalid worker extension capabilities.")
     profiles = document.get("profiles")
     if not isinstance(profiles, list) or len(profiles) > 100:
         raise BrokerError("INVALID_PROFILES", "Invalid worker profiles.")
@@ -38,7 +42,7 @@ def publish_profiles(worker, document):
         for field in ("allowed_hosts", "allowed_users", "allowed_ports", "remote_root_prefixes"):
             if not isinstance(profile[field], list) or not 1 <= len(profile[field]) <= 100:
                 raise BrokerError("INVALID_PROFILES", "Invalid worker target scope.")
-    WorkerIdentity.objects.filter(id=worker.id).update(profiles=profiles, last_seen_at=timezone.now())
+    WorkerIdentity.objects.filter(id=worker.id).update(profiles=profiles, supported_extensions=extensions, last_seen_at=timezone.now())
     return {"accepted": True}
 
 

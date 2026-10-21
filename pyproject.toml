@@ -27,10 +27,10 @@ compute-broker = "compute_broker.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-compute_broker = ["schemas/*.json", "control/templates/broker/*.html"]
+compute_broker = ["schemas/*.json", "control/templates/broker/*.html", "extensions/*/templates/*/*.html", "extensions/*/schemas/*.json"]
 
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "compute_broker.control.settings"
+DJANGO_SETTINGS_MODULE = "compute_broker.control.test_settings"
 pythonpath = ["src", "tools"]
 testpaths = ["tests"]
 markers = [

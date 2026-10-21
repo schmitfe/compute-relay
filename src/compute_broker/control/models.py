@@ -17,6 +17,7 @@ class WorkerIdentity(models.Model):
     revoked = models.BooleanField(default=False)
     owner = models.ForeignKey("User", null=True, blank=True, on_delete=models.PROTECT)
     profiles = models.JSONField(default=list)
+    supported_extensions = models.JSONField(default=list)
     last_seen_at = models.DateTimeField(null=True)
 
     def __str__(self):
@@ -148,6 +149,7 @@ class Job(models.Model):
     credential = models.ForeignKey(ProjectCredential, null=True, on_delete=models.PROTECT)
     previous = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
     request = models.JSONField()
+    extension_name = models.CharField(max_length=64, blank=True, default="")
     state = models.CharField(max_length=30, default="draft")
     manifest = models.JSONField(null=True)
     manifest_sha256 = models.CharField(max_length=64, blank=True)
@@ -279,3 +281,4 @@ class WorkerReport(models.Model):
     generation = models.PositiveIntegerField()
     payload_sha256 = models.CharField(max_length=64)
     response = models.JSONField()
+    extension_data = models.JSONField(default=dict)

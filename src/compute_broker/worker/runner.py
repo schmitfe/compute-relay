@@ -16,12 +16,14 @@ from .enrollment import EnrollmentError, profile_metadata, resolve_connection
 
 class Worker:
     def __init__(self, client, connections: dict, journal: Journal, backend_factory=None,
-                 credential_profiles=None):
+                 credential_profiles=None, extensions=None):
         self.client = client
         self.connections = connections
         self.journal = journal
         self.backend_factory = backend_factory or self._backend
         self.credential_profiles = credential_profiles or {}
+        from compute_broker.extensions import configured_names
+        self.extensions = configured_names(",".join(extensions)) if extensions is not None else configured_names()
         self._profiles_published_at = None
 
     @staticmethod
@@ -54,7 +56,10 @@ class Worker:
                 # One unavailable connection must not block healthy targets.
                 # No invalid profile is advertised and no secret is logged.
                 logging.getLogger(__name__).warning("A credential profile is invalid and was not advertised")
-        self.client.request("POST", "/internal/v1/worker/profiles", {"profiles": profiles})
+        payload = {"profiles": profiles}
+        if self.extensions:
+            payload["extensions"] = list(self.extensions)
+        self.client.request("POST", "/internal/v1/worker/profiles", payload)
         self._profiles_published_at = time.monotonic()
 
     def discover(self, lease):
@@ -132,6 +137,14 @@ class Worker:
                     result = {"outcome": "observed", "native_identity": native,
                               "observation": observation}
                     if observation.get("terminal"):
+                        try:
+                            from compute_broker.extensions import worker_after_observation
+                            extension_data = worker_after_observation(self.extensions, backend, native, manifest,
+                                lease.get("extension_context", {}))
+                            if extension_data:
+                                result["extension_data"] = extension_data
+                        except Exception:
+                            result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
                         try:
                             result.update(self._collect(backend, native, manifest))
                         except Exception:
@@ -212,7 +225,7 @@ def main(*, once=False):
     )
     worker = Worker(client, config.get("connections", {}),
                     Journal(os.environ.get("BROKER_WORKER_JOURNAL", "/var/lib/compute-broker/worker")),
-                    credential_profiles=config.get("credential_profiles", {}))
+                    credential_profiles=config.get("credential_profiles", {}), extensions=config.get("extensions"))
     while True:
         try:
             worked = worker.poll_once()

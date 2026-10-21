@@ -1,4 +1,5 @@
-from django.urls import path
+from django.conf import settings
+from django.urls import include, path
 from . import views
 from . import management
 
@@ -19,6 +20,7 @@ urlpatterns = [
     path("clusters/<uuid:connection_id>/environments/new/", management.environment_new),
     path("environments/", management.environments), path("environments/new/", management.environment_new),
     path("api/v1/connections", views.connections),
+    path("api/v1/capabilities", views.capabilities),
     path("api/v1/projects/<uuid:project_id>/allowance", views.allowance),
     path("api/v1/projects/<uuid:project_id>/objects", views.objects),
     path("api/v1/jobs", views.jobs), path("api/v1/jobs/<uuid:job_id>", views.job_detail),
@@ -33,3 +35,6 @@ urlpatterns = [
     path("internal/v1/connections/<uuid:connection_id>/report", views.discovery_report),
     path("internal/v1/attempts/<uuid:attempt_id>/report", views.report),
 ]
+
+from compute_broker.extensions import EXTENSIONS
+urlpatterns += [path("", include(EXTENSIONS[name][0] + ".urls")) for name in settings.BROKER_EXTENSIONS]

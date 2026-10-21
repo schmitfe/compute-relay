@@ -32,7 +32,7 @@ class FacadeTests(unittest.TestCase):
         server = create_server(self.facade)
         tools = asyncio.run(server.list_tools())
         names = {tool.name for tool in tools}
-        self.assertEqual(names, {"list_compute_targets", "get_project_allowance", "upload_job_file",
+        self.assertEqual(names, {"get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
                                  "prepare_job", "request_execution", "get_job", "get_job_logs",
                                  "list_job_artifacts", "get_job_artifact", "cancel_job_attempt"})
         self.assertTrue(next(t for t in tools if t.name == "get_job").annotations.readOnlyHint)
@@ -54,7 +54,7 @@ class FacadeTests(unittest.TestCase):
                 async with ClientSession(read, write) as client:
                     await client.initialize()
                     result = await client.list_tools()
-                    self.assertEqual(len(result.tools), 10)
+                    self.assertEqual(len(result.tools), 11)
                     self.assertNotIn("approve_job", {tool.name for tool in result.tools})
 
         asyncio.run(session())

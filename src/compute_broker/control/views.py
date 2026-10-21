@@ -229,11 +229,24 @@ def artifact_content(request, artifact_id):
 def lease(request):
     worker = worker_identity(request)
     body(request)
+    try:
+        from compute_broker.extensions import before_lease
+        before_lease(worker)
+    except Exception:
+        logger.warning("Extension dispatch deferred; core work remains available")
     from .cluster_services import lease_discovery
     discovery = lease_discovery(worker)
     if discovery:
         return discovery
     return services.lease_work(worker)
+
+
+@boundary("GET")
+def capabilities(request):
+    credential, _ = scope(request, "jobs:read")
+    from compute_broker.extensions import control_names
+    return {"api_version": "1.0", "mcp_transports": ["stdio"],
+            "enabled_extensions": list(control_names()), "scopes": credential.scopes}
 
 
 @boundary("POST")

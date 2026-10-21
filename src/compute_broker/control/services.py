@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -107,6 +108,12 @@ def prepare_job(job):
     config = dict(connection.configuration, backend=connection.backend, revision_sha256=connection.revision_sha256)
     env = dict(environment.configuration, id=str(environment.id), revision_sha256=environment.revision_sha256)
     result = prepare(job.request, env, config, str(job.id))
+    if job.extension_name:
+        from compute_broker.extensions import services_for
+        from compute_broker.backends.preparation import canonical_json_bytes
+        services_for(job.extension_name)
+        result["manifest"]["extension_name"] = job.extension_name
+        result["manifest_sha256"] = hashlib.sha256(canonical_json_bytes(result["manifest"])).hexdigest()
     generated = {}
     for path, text in result["generated_files"].items():
         relative_path(path)
@@ -179,7 +186,10 @@ def authorize(execution_request, *, decision=None):
         raise BrokerError("BUDGET_UNAVAILABLE", "Insufficient unreserved project allowance.", 409)
     if decision and (not decision.approved or decision.consumed_at or decision.manifest_sha256 != job.manifest_sha256):
         raise BrokerError("APPROVAL_CONSUMED", "Approval is invalid or already consumed.", 409)
+    from compute_broker.extensions import job_hook
+    job_hook(job, "validate_admission", job, credential)
     attempt = Attempt.objects.create(execution_request=execution_request, job=job, connection=connection, grant=grant, reservation_cpu=cpu, reservation_gpu=gpu)
+    job_hook(job, "after_admission", attempt)
     grant.reserved_cpu += cpu
     grant.reserved_gpu += gpu
     grant.save(update_fields=["reserved_cpu", "reserved_gpu"])
@@ -260,6 +270,11 @@ def lease_work(worker):
     with transaction.atomic():
         candidates = Attempt.objects.select_for_update().select_related("job__project", "connection").filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"]).filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now)).order_by("created_at")
         for attempt in candidates[:30]:
+            from compute_broker.extensions import control_names
+            if not attempt.dispatch_started and attempt.job.extension_name and (
+                    attempt.job.extension_name not in control_names()
+                    or attempt.job.extension_name not in worker.supported_extensions):
+                continue
             if not attempt.dispatch_started and (attempt.job.project.paused or not attempt.connection.enabled):
                 continue
             if attempt.cancel_requested and attempt.native_identity:
@@ -276,7 +291,15 @@ def lease_work(worker):
             attempt.operation = operation
             attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "operation"])
             files = {item.path: base64.b64encode(read_blob(item.blob)).decode("ascii") for item in attempt.job.files.select_related("blob")}
-            return {"lease": {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation, "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration, "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}}
+            lease = {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation, "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration, "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
+            if attempt.job.extension_name in control_names():
+                from compute_broker.extensions import job_hook
+                context = job_hook(attempt.job, "worker_lease_context", attempt)
+                if context:
+                    if not isinstance(context, dict) or len(rfc8785.dumps(context)) > 65536:
+                        raise BrokerError("EXTENSION_CONTEXT_LIMIT", "Extension metadata exceeds its limit.")
+                    lease["extension_context"] = {attempt.job.extension_name: context}
+            return {"lease": lease}
     return {"lease": None}
 
 
@@ -308,6 +331,8 @@ def dispatch(worker, attempt_id, data):
         if datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")) <= timezone.now():
             raise BrokerError("GRANT_EXPIRED", "Dispatch cutoff has passed.", 409)
         job = attempt.job
+        from compute_broker.extensions import job_hook
+        job_hook(job, "validate_dispatch", job, credential, attempt=attempt)
         bound_environment(job.project, job.request)
         decision = ApprovalDecision.objects.filter(execution_request=attempt.execution_request, approved=True, consumed_at__isnull=False).first()
         if (str(attempt.connection_id) not in policy["allowed_connection_ids"]
@@ -346,6 +371,9 @@ def _settle(attempt, cpu, gpu, evidence, *, release=False):
 
 
 def report(worker, attempt_id, data):
+    extension_data = data.get("extension_data", {})
+    if not isinstance(extension_data, dict) or len(rfc8785.dumps(extension_data)) > 65536:
+        raise BrokerError("EXTENSION_CONTEXT_LIMIT", "Extension report metadata exceeds its limit.")
     payload_hash = digest(data)
     receipt = WorkerReport.objects.filter(lease_id=data.get("lease_id"), attempt_id=attempt_id, attempt__connection__worker=worker).first()
     if receipt:
@@ -434,7 +462,17 @@ def report(worker, attempt_id, data):
         attempt.next_poll_at = timezone.now() + timedelta(seconds=delay)
         attempt.save()
         response = {"accepted": True, "attempt": serialize_attempt(attempt)}
-        WorkerReport.objects.create(lease_id=data["lease_id"], attempt=attempt, generation=attempt.generation, payload_sha256=payload_hash, response=response)
+        WorkerReport.objects.create(lease_id=data["lease_id"], attempt=attempt, generation=attempt.generation, payload_sha256=payload_hash, response=response, extension_data=extension_data)
+        if attempt.job.extension_name:
+            def notify_extension():
+                try:
+                    from compute_broker.extensions import after_report
+                    after_report(attempt, extension_data)
+                except Exception:
+                    # The durable WorkerReport permits plugin-specific recovery.
+                    # Never undo core accounting or expose exception contents.
+                    logging.getLogger(__name__).warning("Extension report processing deferred")
+            transaction.on_commit(notify_extension)
         return response
 
 

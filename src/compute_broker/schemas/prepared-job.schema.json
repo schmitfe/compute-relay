@@ -5,6 +5,7 @@
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "job_revision_id", "backend", "adapter_version", "helper_sha256", "profile_revision", "connection_revision_sha256", "request", "files", "batch_script", "environment_wrapper", "maximum_allocation", "reservation"],
   "properties": {
+    "extension_name": {"type": "string", "enum": ["storage", "environments", "workflows", "transfers"]},
     "schema_version": {"const": "1.0"},
     "job_revision_id": {"$ref": "common.schema.json#/$defs/uuid"},
     "backend": {"const": "slurm"},

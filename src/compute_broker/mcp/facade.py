@@ -15,9 +15,14 @@ def _uuid(value: str) -> str:
 
 
 class ProjectFacade:
-    def __init__(self, client, project_id: str):
+    def __init__(self, client, project_id: str, enabled_extensions=()):
         self.client = client
         self.project_id = _uuid(project_id)
+        from compute_broker.extensions import configured_names
+        self.enabled_extensions = configured_names(",".join(enabled_extensions))
+
+    def get_broker_capabilities(self):
+        return self.client.request("GET", "/api/v1/capabilities")
 
     def _mutate(self, path, body, key=None):
         return self.client.request("POST", path, body,
@@ -86,6 +91,11 @@ def create_server(facade: ProjectFacade):
                             idempotentHint=False, openWorldHint=True)
 
     @server.tool(annotations=readonly)
+    def get_broker_capabilities() -> dict:
+        """Read server-enabled extensions and this key's scopes before planning work."""
+        return facade.get_broker_capabilities()
+
+    @server.tool(annotations=readonly)
     def list_compute_targets() -> dict:
         """Read assigned clusters and saved capabilities; does not log in to a cluster."""
         return facade.list_compute_targets()
@@ -137,6 +147,10 @@ def create_server(facade: ProjectFacade):
         """Request cancellation; acknowledgement does not prove completion or release funds."""
         return facade.cancel_job_attempt(attempt_id, idempotency_key)
 
+    from importlib import import_module
+    from compute_broker.extensions import EXTENSIONS
+    for name in facade.enabled_extensions:
+        import_module(EXTENSIONS[name][0] + ".mcp").register(server, facade)
     return server
 
 
@@ -146,5 +160,6 @@ def main():
         environment_token("BROKER_PROJECT_TOKEN"),
         allow_insecure_http=os.environ.get("BROKER_ALLOW_INSECURE_HTTP") == "1",
     )
-    facade = ProjectFacade(client, os.environ["BROKER_PROJECT_ID"])
+    from compute_broker.extensions import configured_names
+    facade = ProjectFacade(client, os.environ["BROKER_PROJECT_ID"], configured_names())
     create_server(facade).run(transport="stdio")

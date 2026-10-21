@@ -28,7 +28,12 @@ DEBUG = False
 ALLOWED_HOSTS = os.environ.get("BROKER_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],testserver,control").split(",")
 ROOT_URLCONF = "compute_broker.control.urls"
 AUTH_USER_MODEL = "broker.User"
-INSTALLED_APPS = ["django.contrib.auth", "django.contrib.contenttypes", "django.contrib.sessions", "compute_broker.control.apps.BrokerConfig"]
+from compute_broker.extensions import configured_names, application_configs
+try:
+    BROKER_EXTENSIONS = configured_names()
+except ValueError as exc:
+    raise ImproperlyConfigured(str(exc)) from exc
+INSTALLED_APPS = ["django.contrib.auth", "django.contrib.contenttypes", "django.contrib.sessions", "compute_broker.control.apps.BrokerConfig", *application_configs(BROKER_EXTENSIONS)]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
