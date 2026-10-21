@@ -86,3 +86,17 @@ Byte/file estimates, `statvfs` headroom checks and timestamped measured bytes/fi
 The implemented prefix is under the protected attempt staging root. It does not yet route to an enrolled environment storage target, claim that an unrelated selected target reserved its space, or use the optional storage extension's reservations. Retain this attempt directory and the trusted bootstrap runtime for as long as jobs use its environment. Automatic cleanup, reference-counted leases, deletion, dependency repair, packed/relocatable archives, node-local staging, Apptainer images and migration across storage roots are future work. Python venv prefixes generally cannot be assumed relocatable. Conda/micromamba/Poetry builds need separate tested lock/source validation and validation receipts before being enabled.
 
 The test suite verifies renderer purity, pinned wheel validation, ordinary approvals and budgets/caps, generic-route and dispatch fencing, explicit promotion, conservative cache reuse, fake/failed/stale/mismatched publication denial, durable metadata recovery, typed MCP tools, and a synthetic metadata finalizer whose sentinel interpreter would reveal accidental execution. These tests do not run a package installer on the control or credential worker. Actual Slurm empty-venv acceptance is a separate disposable-cluster test.
+
+## Opt-in disposable Slurm acceptance
+
+`tools/environment_build_smoke.py` reuses the existing bounded HTTP smoke client and requires both an explicit confirmation flag and synthetic `slurm-fixture` metadata. It creates a new review-only project/key, configures a build policy, builds an empty standard-library venv through ordinary human approval and worker execution, waits for settled native accounting and verified finalization, explicitly promotes the environment in a human session, and runs a second approved job using that prefix. It checks the result's hash and actual `sys.prefix`, conservative cache reuse, two lifetime submission slots, nonzero spent CPU time and zero outstanding reservation. Fake mode and nonfixture metadata are refused. No SSH key or worker token is read by this client.
+
+From a checkout with the extension and generic extension key-scope metadata integrated, use a fresh disposable project name and volumes:
+
+```sh
+BROKER_TEST_PORT=18767 docker compose -p cb-environment-acceptance -f deploy/compose.test.yml -f deploy/compose.environments-test.yml up --build -d control worker
+BROKER_TEST_PORT=18767 docker compose -p cb-environment-acceptance -f deploy/compose.test.yml -f deploy/compose.environments-test.yml run --rm smoke
+BROKER_TEST_PORT=18767 docker compose -p cb-environment-acceptance -f deploy/compose.test.yml -f deploy/compose.environments-test.yml down -v
+```
+
+The overlay enables `environments` only for this test and mounts the test client read-only. The first command also starts the disposable Slurm dependency; all installer/interpreter execution remains on its compute job. This empty closure deliberately does not require pip bootstrap. The default pinned target matches the Debian Bookworm fixture (`linux-x86_64`, Python `3.11`); on another architecture, explicitly pass the fixture target options to the smoke client. The cleanup command applies only to that named synthetic Compose project. A successful unit test or Compose configuration check is not evidence that this native acceptance has run; record the actual smoke JSON and final accounting separately.
