@@ -1,0 +1,11 @@
+{
+  "services": {
+    "control": {"environment": {"BROKER_EXTENSIONS": "workflows"}},
+    "worker": {"environment": {"BROKER_EXTENSIONS": "workflows"}},
+    "smoke": {
+      "entrypoint": ["python", "/opt/workflow_smoke.py"],
+      "command": ["--base-url", "http://control:8765", "--demo-file", "/run/demo/demo.json", "--confirm-disposable-fixture"],
+      "volumes": [{"type": "bind", "source": "../tools/workflow_smoke.py", "target": "/opt/workflow_smoke.py", "read_only": true}]
+    }
+  }
+}
