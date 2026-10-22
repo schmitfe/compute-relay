@@ -34,6 +34,16 @@ class DirectoryPrincipal:
     email: str = ""
     display_name: str = ""
 
+    def __post_init__(self):
+        if (not isinstance(self.subject, str) or _subject(self.subject) != self.subject
+                or not isinstance(self.login_name, str) or not 0 < len(self.login_name) <= 150
+                or any(ord(c) < 32 or ord(c) == 127 for c in self.login_name) or type(self.active) is not bool):
+            raise DirectoryFailure("DIRECTORY_RECORD_INVALID")
+        for field, maximum in (("first_name", 150), ("last_name", 150), ("email", 254), ("display_name", 255)):
+            value = getattr(self, field)
+            if not isinstance(value, str) or len(value) > maximum or any(ord(c) < 32 or ord(c) == 127 for c in value):
+                raise DirectoryFailure("DIRECTORY_RECORD_INVALID")
+
 
 def _ldap():
     try:
