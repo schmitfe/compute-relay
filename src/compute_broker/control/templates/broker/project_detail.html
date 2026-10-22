@@ -7,12 +7,12 @@
 <section id="api-keys"><div class="row"><h2>API keys</h2><a class="button" href="/projects/{{ project.id }}/keys/new/">Create API key</a></div><p>Full values are shown once. The service stores only hashes. Identifiers below are independent of the key value.</p>
 <div class="table-scroll"><table class="key-table"><thead><tr><th>Name / identifier</th><th>Access</th><th>Expires</th><th>Manage</th></tr></thead><tbody>
 {% for key in keys %}<tr>
-<td>{{ key.name }}<br><small>{{ key.id }}</small>{% if key.revoked %}<br><span class="badge">Revoked</span>{% endif %}</td>
+<td>{{ key.name }}<br><small>{{ key.id }}</small><br><small>User: {{ key.issued_by.username|default:"Unverified legacy owner" }}</small>{% if key.revoked %}<br><span class="badge">Revoked</span>{% endif %}</td>
 <td>{% if key.allowed_connection_ids == None %}Inherits project clusters{% elif not key.allowed_connection_ids %}All clusters denied{% else %}Selected clusters{% endif %}<p>{{ key.get_execution_mode_display }}</p><details><summary>Permissions</summary>{{ key.scopes|join:", " }}</details></td>
 <td>{{ key.expires_at }}</td>
 <td>{% if not key.revoked %}<div class="key-actions">
 <a class="button secondary" href="/projects/{{ project.id }}/keys/{{ key.id }}/edit/">Edit access</a>
-<form method="post" action="/projects/{{ project.id }}/keys/{{ key.id }}/rotate/">{% csrf_token %}<input type="hidden" name="submission_id" value="{{ rotation_nonce }}"><button>Rotate</button></form>
+{% if key.issued_by_id == request.user.id %}<form method="post" action="/projects/{{ project.id }}/keys/{{ key.id }}/rotate/">{% csrf_token %}<input type="hidden" name="submission_id" value="{{ rotation_nonce }}"><button>Rotate</button></form>{% endif %}
 <form method="post" action="/projects/{{ project.id }}/keys/{{ key.id }}/revoke/">{% csrf_token %}<button class="reject">Revoke / delete access</button></form>
 </div>{% else %}<small>Audit record retained</small>{% endif %}</td>
 </tr>{% empty %}<tr><td colspan="4">No keys yet. Create one for each agent or client.</td></tr>{% endfor %}

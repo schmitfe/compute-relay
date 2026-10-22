@@ -7,13 +7,15 @@ from django.db import migrations, models
 
 def bind_legacy_keys(apps, schema_editor):
     Credential = apps.get_model('broker', 'ProjectCredential')
-    Membership = apps.get_model('broker', 'Membership')
     AuditEvent = apps.get_model('broker', 'AuditEvent')
     User = apps.get_model('broker', 'User')
     alias = schema_editor.connection.alias
     for key in Credential.objects.using(alias).select_related('project').iterator():
         actor = AuditEvent.objects.using(alias).filter(project_id=key.project_id,
             action='credential.created', object_id=str(key.id)).order_by('created_at').first()
+        if actor is None:
+            actor = AuditEvent.objects.using(alias).filter(project_id=key.project_id,
+                action='credential.rotated', details__replacement_id=str(key.id)).order_by('created_at').first()
         user = None
         if actor:
             try:
@@ -21,13 +23,14 @@ def bind_legacy_keys(apps, schema_editor):
                 user = User.objects.using(alias).filter(id=uuid.UUID(actor.actor)).first()
             except (ValueError, TypeError, AttributeError):
                 pass
-        # Original single-owner fixture keys had no creation audit. This is safe
-        # only when no other user has ever been assigned project membership.
-        if user is None and not Membership.objects.using(alias).filter(project_id=key.project_id).exclude(user_id=key.project.owner_id).exists():
-            key.issued_by_id = key.project.owner_id
-        elif user is not None:
+        if user is not None:
             key.issued_by_id = user.id
         else:
+            # Current membership cannot establish a key's historical issuer.
+            # Keep unknown ownership inert until explicitly verified offline.
+            AuditEvent.objects.using(alias).create(project_id=key.project_id,
+                actor='migration', action='credential.owner_unresolved', object_id=str(key.id),
+                details={'was_revoked': key.revoked})
             key.revoked = True
         key.save(using=alias, update_fields=['issued_by', 'revoked'])
 

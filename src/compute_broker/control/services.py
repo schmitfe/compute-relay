@@ -16,7 +16,8 @@ from .auth import human_permission, require_connection, connection_allowed, requ
 from .errors import BrokerError
 from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Connection,
                      Environment, ExecutionRequest, Grant, IdempotencyRecord, Job,
-                     JobFile, LedgerEntry, Project, ProjectCredential, WorkerReport)
+                     JobFile, LedgerEntry, Project, ProjectCredential, WorkerReport, User,
+                     WorkerIdentity, AuthenticationIdentity)
 from .storage import read_blob, store_blob
 
 TERMINAL = {"succeeded", "failed", "cancelled", "expired"}
@@ -156,6 +157,8 @@ def authorize(execution_request, *, decision=None):
     if datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")) <= timezone.now():
         raise BrokerError("GRANT_EXPIRED", "Project allowance has expired.", 409)
     credential = ProjectCredential.objects.get(id=execution_request.credential_id) if execution_request.credential_id else None
+    if credential is None:
+        raise BrokerError("HPC_IDENTITY_REQUIRED", "Execution needs a key bound to its requesting user.", 403)
     if credential and (credential.revoked or credential.expires_at <= timezone.now()):
         raise BrokerError("AUTH_REQUIRED", "The requesting credential is no longer valid.", 403)
     if credential:
@@ -309,6 +312,20 @@ def lease_work(worker):
 
 
 def checked_lease(worker, attempt_id, data):
+    if not WorkerIdentity.objects.select_for_update().filter(id=worker.id, revoked=False).exists():
+        raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
+    # Project administration uses Project -> Credential. Hold the same authority
+    # row before reading related state; an Attempt-only lock is insufficient on
+    # PostgreSQL because a concurrent pause/revocation can otherwise be missed.
+    reference = Attempt.objects.filter(id=attempt_id, connection__worker=worker).values(
+        "job__project_id", "grant_id", "connection_id", "execution_request__credential_id").first()
+    if reference is None:
+        raise BrokerError("NOT_FOUND", "Attempt not found.", 404)
+    Project.objects.select_for_update().get(id=reference["job__project_id"])
+    Grant.objects.select_for_update().get(id=reference["grant_id"])
+    Connection.objects.select_for_update().get(id=reference["connection_id"])
+    if reference["execution_request__credential_id"]:
+        ProjectCredential.objects.select_for_update().get(id=reference["execution_request__credential_id"])
     attempt = Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection", "execution_request__credential").filter(id=attempt_id, connection__worker=worker).first()
     if attempt is None:
         raise BrokerError("NOT_FOUND", "Attempt not found.", 404)
@@ -319,10 +336,19 @@ def checked_lease(worker, attempt_id, data):
 
 def dispatch(worker, attempt_id, data):
     with transaction.atomic():
+        actor_id = Attempt.objects.filter(id=attempt_id, connection__worker=worker).values_list(
+            "execution_request__credential__issued_by_id", flat=True).first()
+        if actor_id:
+            # NO KEY UPDATE still fences account suspension, while allowing key
+            # issuance's FK checks under a project lock without a reverse wait.
+            User.objects.select_for_update(no_key=True).get(id=actor_id)
+            AuthenticationIdentity.objects.select_for_update().filter(user_id=actor_id).first()
         attempt = checked_lease(worker, attempt_id, data)
         if attempt.operation != "submit" or attempt.dispatch_started or attempt.state != "authorized" or attempt.accounting_state != "reserved":
             raise BrokerError("RECONCILIATION_REQUIRED", "Submission intent already exists; reconcile instead.", 409)
         credential = attempt.execution_request.credential
+        if credential is None:
+            raise BrokerError("HPC_IDENTITY_REQUIRED", "Execution needs a verified requesting user.", 403)
         if credential:
             require_credential_actor(credential)
         if attempt.job.project.paused or not attempt.connection.enabled or (credential and (credential.revoked or credential.expires_at <= timezone.now())):
@@ -485,6 +511,9 @@ def report(worker, attempt_id, data):
 
 def cancel_attempt(attempt):
     with transaction.atomic():
+        reference = Attempt.objects.values("job__project_id", "grant_id").get(id=attempt.id)
+        Project.objects.select_for_update().get(id=reference["job__project_id"])
+        Grant.objects.select_for_update().get(id=reference["grant_id"])
         attempt = Attempt.objects.select_for_update().get(id=attempt.id)
         if attempt.state not in TERMINAL:
             if not attempt.dispatch_started:
