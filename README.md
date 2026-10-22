@@ -2,7 +2,9 @@
 
 Compute Broker lets AI clients prepare, submit, and inspect compute jobs on configured clusters. Projects use human approval, a shared compute allowance, or both. Its first backend is Slurm over SSH. A thin MCP facade gives agents project access while the worker holds cluster access.
 
-**Status: development alpha.** The Django control service, project/key/cluster management portal, review pages, transactional ledger, durable worker, Slurm/SSH adapter, simulated backend, and stdio MCP tools are implemented. Projects share compute and submission limits across keys; each key can require human review. Keys are shown once and stored only as hashes. Disposable native and Docker workflows exercise management, approval, rejection, revision, execution, collection, and accounting. See [runtime scope and limitations](docs/runtime.md) and [container acceptance results](docs/container-testing.md) for what has actually been tested. Protected personal/server deployment, institutional MFA acceptance, and hostile-workload isolation are not release-ready. The working name is provisional.
+**Status: development alpha.** The Django control service, management portal, review pages, transactional ledger, durable OpenSSH worker, Slurm adapter, simulated backend, and stdio MCP tools are implemented. SQLite remains the personal default; PostgreSQL settings, concurrency checks and [offline migration/rehearsal tools](docs/database-migration.md) are available. Human login uses explicit local or optional LDAP providers, with a [synthetic TLS directory fixture](deploy/ldap/README.md). Project keys are shown once, stored only as hashes, and bound to their issuing users; execution requires that user's own worker and cluster connection.
+
+Projects share compute and submission limits across keys; each key can require human review. Disposable native and Docker workflows exercise management, approval, rejection, revision, execution, collection, and accounting. See [runtime scope and limitations](docs/runtime.md) and [container acceptance results](docs/container-testing.md) for the evidence and its limits. Protected personal/server deployment, institutional MFA acceptance, membership-management screens and hosted production acceptance remain unfinished. The working name is provisional.
 
 Optional [extensions](docs/extensions.md) add advisory storage planning, scheduled
 reusable Python environment builds, and artifact-dependent workflows. They have
@@ -11,6 +13,11 @@ submission and accounting work without them. Remote filesystem migration,
 packed environments and [native arrays](docs/arrays-design.md) remain planned.
 The [fresh-agent science kit](examples/agent-integration/README.md) provides five
 copyable tasks and private project configuration generation for client acceptance.
+
+An opt-in [asynchronous core Slurm worker](docs/async-workers.md) provides bounded
+SSH/HTTP operations and per-owner lanes. The synchronous worker remains the
+default and supports the optional extensions; those extensions do not yet have
+async worker hooks.
 
 ## Try it
 
@@ -35,7 +42,8 @@ Development mode does not protect secrets from another process running as your a
 - Implement a small Slurm adapter using OpenSSH first. Evaluate FirecREST behind the same interface after proving its fit for the university MFA flow.
 - Keep cluster credentials in a protected worker. The process launched by an AI client holds only its project credential.
 - Run the local service under a separate protected operating-system identity. An agent with no root, sudo, or Docker-daemon access must not read the service's secret files or alter deployed code.
-- Use Django for the control service, persistent SQL attempts and leases for work, and the official MCP SDK for the client facade. SQLite is implemented and tested; PostgreSQL/shared-server support remains planned.
+- Use Django for the control service, persistent SQL attempts and leases for work, and the official MCP SDK for the client facade. SQLite and PostgreSQL use the same models and ledger, with backend-specific locking tests and an explicit offline migration procedure.
+- Route local and LDAP human authentication explicitly. A browser login grants no HPC credential; each user-bound project key can access only that user's approved worker/connection bindings. OIDC and hosted HTTP MCP authentication remain future work.
 - Support single-node, bounded jobs initially. Arrays, automatic requeue, arbitrary scheduler directives, other schedulers, and autonomous agent orchestration are later features.
 
 The service governs jobs submitted through it. Arbitrary code running under a cluster account can potentially submit other jobs, change same-user files, or modify queued jobs. A hard ceiling on all activity under that account requires cluster-side restrictions. See the [security model](docs/security.md).
@@ -45,13 +53,15 @@ The service governs jobs submitted through it. Arbitrary code running under a cl
 | Document | Contents |
 | --- | --- |
 | [Architecture](docs/architecture.md) | Components, trust boundaries, data model, state machine, budget transactions |
-| [Shared-service design](docs/hosted-architecture.md) | Local/LDAP accounts, PostgreSQL migration, async per-user connectors and SSH key custody |
+| [Shared-service design](docs/hosted-architecture.md) | Implemented local/LDAP, PostgreSQL and user-bound execution baseline, plus remaining hosted isolation work |
 | [Implemented runtime](docs/runtime.md) | Entrypoints, configuration, API, modes, current restrictions |
 | [Portal and worker profiles](docs/management.md) | Projects, one-time API keys, cluster enrollment, software discovery and environment recipes |
 | [API and contracts](docs/api.md) | REST and MCP operations, worker protocol, errors, examples |
 | [Security](docs/security.md) | Threat model, protected identities, secrets, MFA, approval limits |
 | [Backends](docs/backends.md) | Slurm implementation, SSH helper, environments, reuse assessment |
 | [Deployment](docs/deployment.md) | Personal and hosted deployment, bootstrap, recovery and migration |
+| [Database migration](docs/database-migration.md) | Offline SQLite/PostgreSQL transfer, verification, legacy key-owner mapping and rollback constraints |
+| [Async workers](docs/async-workers.md) | Opt-in core Slurm concurrency, transport limits and synchronous-extension compatibility |
 | [Implementation](docs/implementation.md) | Proposed source tree, milestone work packages and acceptance gates |
 | [Testing](docs/testing.md) | Test IDs, layers, failure injection, cluster acceptance and release gates |
 | [Decision records](docs/adr/README.md) | Decisions and their consequences |

@@ -2,24 +2,26 @@
 
 This document describes the implemented code. The architecture, API, deployment, and testing documents describe the broader target; their unimplemented endpoints and acceptance gates are not promises of current functionality.
 
-The [shared-service specification](hosted-architecture.md) records the next
-local/LDAP, PostgreSQL and async per-user connector work. Those features and its
-keyless central-session activation are not implemented by the current runtime.
+The [shared-service specification](hosted-architecture.md) separates the implemented
+PostgreSQL, local/LDAP identity and user-bound worker baseline from remaining
+hosted deployment work. Keyless central-session activation, protected installation
+isolation, OIDC and membership-management screens remain unimplemented.
 
 ## Components and startup
 
-Python 3.12/3.13, Django 5.2, SQLite, system OpenSSH, the official MCP Python SDK, JSON Schema, and RFC 8785 canonical manifests form the runtime. `requirements.lock` pins the versions resolved for the current development/test/MCP environment. Docker installs each selected extra under these constraints; base-image digests, artifact hashes, license inventories, and release provenance remain release work. No upstream HPC-MCP source has been copied or executed.
+Python 3.12/3.13, Django 5.2, SQLite or PostgreSQL, system OpenSSH, the official MCP Python SDK, JSON Schema, and RFC 8785 canonical manifests form the runtime. Optional extras add the PostgreSQL driver, LDAP adapter and async HTTP client. `requirements.lock` pins the resolved versions. Docker installs each selected extra under these constraints; base-image digests, artifact hashes, license inventories, and release provenance remain release work. No upstream HPC-MCP source has been copied or executed.
 
 | Entrypoint | Purpose |
 | --- | --- |
 | `python -m compute_broker.cli bootstrap-demo --output local/demo --backend fake --fake-state-directory /absolute/private/fake-state` | Apply shipped migrations and create a synthetic owner, project, connection, environment, project token, worker token/config, and allowance |
 | `python -m compute_broker.control` | Development HTTP service, loopback port 8765 by default |
 | `python -m compute_broker.worker` | Protected-worker process; reads only its configured connection/token and journal |
+| `BROKER_WORKER_ASYNC=1 python -m compute_broker.worker` | Opt-in asynchronous core Slurm runner; requires protected owner configuration and no enabled extensions |
 | `python -m compute_broker.mcp` | Project stdio MCP facade; has no SSH, approval, or project-administration tools |
 | `python -m compute_broker.cli discover --host user@login.example --known-hosts /absolute/pinned/known_hosts --output local/discovery.json` | Read-only Slurm capabilities snapshot; no submissions, node probes, or job execution |
 | `python tools/local_smoke.py` | Disposable native fake end-to-end acceptance and automatic process/state cleanup |
 
-Run from the installed environment; use `.venv/bin/python` in a checkout. The demo bootstrap is intentionally synthetic. Its `--backend slurm` selects only the disposable fixture, never an institutional host. Repeating bootstrap with existing metadata reuses its project; it does not rotate credentials or extend their seven-day expiry. Use a fresh demo directory/database for a clean run.
+Run from the installed environment; use `.venv/bin/python` in a checkout. The demo bootstrap is intentionally synthetic. Its `--backend slurm` selects only the disposable fixture, never an institutional host. Repeating bootstrap with existing metadata reuses its project; it does not rotate credentials or extend the project admission/key's seven-day expiry. Worker credentials do not yet have automatic expiry. Use a fresh demo directory/database for a clean run.
 
 For interactive native development, set `BROKER_DATA_DIR` to a private absolute path. Bootstrap a fake project, then start control and worker in separate terminals. Read the generated owner details in the explicit private `demo.json` file to sign in at `/login/`. Do not pass that file to an agent. The supplied smoke client deliberately holds both authorities solely for acceptance testing.
 
@@ -33,6 +35,55 @@ worker adapter; worker and MCP enablement are independent. Project settings
 cannot install or enable an app. See [the extension contract](extensions.md)
 and [core-only acceptance](module-boundaries.md). Migration checks and CI cover
 both the core and enabled extensions.
+
+## Database and human identity configuration
+
+SQLite is selected by default or by `BROKER_DB_ENGINE=sqlite`, using the existing
+`BROKER_DB_PATH`. PostgreSQL is selected explicitly with
+`BROKER_DB_ENGINE=postgresql` and the `postgres` dependency extra. Configure
+`BROKER_DB_NAME`, `BROKER_DB_USER`, `BROKER_DB_HOST`, optional `BROKER_DB_PORT`
+and `BROKER_DB_PASSWORD_FILE`. The password file must be private; inline password
+variables and DSNs are rejected. `BROKER_DB_SSLMODE` defaults to `verify-full`;
+`BROKER_DB_SSLROOTCERT` selects a trusted CA. An explicit disabled TLS mode is used
+only for isolated loopback development fixtures. SQLite transaction options are
+not passed to PostgreSQL.
+
+The [offline migration tools](database-migration.md) preserve source UUIDs,
+password hashes, session rows, exact relationship records, approvals, ledger and
+artifact metadata and verify retained object bytes. A new database engine is not
+a data migration. The procedure requires stopped writers, paused projects,
+resolved work, an empty migrated target and the original Django secret. Legacy
+keys without verified issuing-user provenance are quarantined and require an
+explicit reviewed owner mapping. Switching Django authentication backend paths
+still requires browser sign-in again even when session rows and the secret are
+preserved.
+
+The sole `IdentityRoutingBackend` selects a local provider or an explicitly
+configured LDAP provider. Omission of `BROKER_IDENTITY_CONFIG_FILE` enables local
+login only. Existing local accounts use Django password verification; LDAP users
+receive unusable local passwords and cannot fall back to a same-name local login.
+Install the `ldap` extra and use a protected provider configuration to enable
+verified LDAPS or mandatory StartTLS. Provider ID plus canonical `entryUUID`
+identifies an external account; a matching username or email does not link it to
+an existing user. First directory login creates no project, worker or HPC grants.
+
+Cached directory eligibility expires within the configured interval, capped at
+300 seconds. Human authority and issuing-user checks fail closed when verification
+expires or access is withdrawn. The optional protected identity-refresh process
+does directory I/O outside database transactions; an outage does not renew
+authority or clear operator suspension. Current eligibility supports explicit
+POSIX group membership, Samba account flags and shadow expiry. Automatic
+group-to-project role mapping, membership-management screens, OIDC and login rate
+limiting are still future work. See [identity configuration](../src/compute_broker/control/identity/README.md)
+and the independent [synthetic LDAP/TLS fixture](../deploy/ldap/README.md).
+
+The synchronous worker remains the default. The [async worker](async-workers.md)
+uses bounded HTTP/SSH I/O, per-owner lanes and the same immutable packages,
+dispatch confirmation, journal and accounting protocol. It supports core Slurm
+operations only, advertises no extension capability and rejects enabled
+extensions. Storage, environment-build and workflow extensions continue to use
+the synchronous worker. The async entry point does not install an isolated
+multi-user supervisor or establish new SSH/MFA authentication.
 
 ## Submission and permissions
 
@@ -51,7 +102,16 @@ The review page displays every input/generated file as escaped plain text with i
 
 The human portal creates and edits projects, compute and submission limits, cluster/environment allowlists, and multiple scoped API keys. Issuance and rotation reveal a key only in that response; the database stores its SHA-256 hash and an independent UUID identifier. Sessions, audit records, idempotency responses and ordinary pages do not retain the value. Lost keys must be rotated. Revocation retains a tombstone for job attribution and audit. Synthetic bootstrap exports a separate client token file only for the disposable acceptance fixture; this is not the normal key-management path.
 
-All keys share their project's allowance, lifetime total submission cap and simultaneous-job cap. A key can inherit project execution policy, always require confirmation, or request automatic execution within project policy. Automatic never overrides a project requiring review. Setting a key to require confirmation also fences an admitted automatic attempt that has not obtained dispatch permission. Jobs already dispatched retain accounting and observation. LDAP/OIDC and member-management screens remain future work. Normal agent APIs never expose worker credentials, SSH paths, host authentication configuration, or a general command runner.
+All keys share their project's allowance, lifetime total submission cap and simultaneous-job cap. A key can inherit project execution policy, always require confirmation, or request automatic execution within project policy. Automatic never overrides a project requiring review. Setting a key to require confirmation also fences an admitted automatic attempt that has not obtained dispatch permission. Jobs already dispatched retain accounting and observation. Normal agent APIs never expose worker credentials, SSH paths, host authentication configuration, or a general command runner.
+
+Each key has an issuing user. Current account eligibility and project roles are
+checked when the key is used and again for execution authority. Its allowed
+connection must be complete, enabled, owned by that user and assigned to an
+unrevoked worker owned by the same user. Sharing a project's allowance does not
+delegate another member's SSH identity. Only the issuing user can rotate and see
+the replacement key; project administration does not permit impersonation.
+Membership and cross-member project-resource grants currently require reviewed
+operator management rather than a complete membership UI.
 
 Agents supply each job's `name` (1–80 letters, digits, underscores, dots or hyphens). The global and project job tables show that name, the owning project/user, the submitting key and latest execution status. Ownership is the project owner's identity; it is not a claim that a human personally submitted an agent job. The package's immutable `prepared` state is separate from the execution status.
 
@@ -65,9 +125,9 @@ Admission atomically checks the project's lifetime `max_total_jobs` and simultan
 
 Maximum charge duration is requested walltime plus explicitly configured termination, overtime, and cleanup margins. The scheduler walltime is whole minutes. Allocation rounding must be bounded by the trusted site profile. Unexpected observed overage is charged in full, recorded as debt, and pauses new admissions. Accounting uses Slurm-reported allocated resource seconds, with a minimum one-second charge for an allocation. Its whole-second meter is not subsecond physical-time measurement, utilization, GPU memory, or site currency/billing weights.
 
-The worker must obtain online dispatch confirmation before remote submission, then writes its own durable intent before contacting the backend. The remote helper also locks and journals each attempt. A saved receipt can be replayed after a report failure without resubmitting. An uncertain outcome reconciles the same attempt, keeps its funds reserved, and never blindly retries or infers non-submission from a missing queue row. Terminal jobs await usable final accounting before settlement. Output collection or storage failure is reported separately and does not suppress valid final accounting. Cancellation acknowledgement is not a refund. New admissions check current policy; dispatch rechecks revocation and policy. SQLite's immediate transactions and per-project serialization cover competing tokens.
+The worker must obtain online dispatch confirmation before remote submission, then writes its own durable intent before contacting the backend. The remote helper also locks and journals each attempt. A saved receipt can be replayed after a report failure without resubmitting. An uncertain outcome reconciles the same attempt, keeps its funds reserved, and never blindly retries or infers non-submission from a missing queue row. Terminal jobs await usable final accounting before settlement. Output collection or storage failure is reported separately and does not suppress valid final accounting. Cancellation acknowledgement is not a refund. New admissions check current policy; dispatch rechecks revocation and policy. SQLite uses immediate transactions; PostgreSQL uses explicit row locks with concurrency regressions for admissions, leases, cancellation, authority changes and storage reservations.
 
-This is conservative recovery, not a claim of distributed exactly-once execution. Operator resolution of persistent ambiguous attempts, journal recovery after loss, queued-expiry automation, full database restore, policy-version administration, and reconciliation after site accounting corrections are still required before protected production use. Per-attempt observations currently back off by two seconds, ten when uncertain/awaiting accounting; large clusters need batched adaptive polling.
+This is conservative recovery, not a claim of distributed exactly-once execution. Offline database transfer and verification are implemented; automated disaster recovery, operator resolution of persistent ambiguous attempts, journal recovery after loss, queued-expiry automation, policy-version administration, and reconciliation after site accounting corrections still need protected-production acceptance. Per-attempt observations currently back off by two seconds, ten when uncertain/awaiting accounting; large clusters need batched adaptive polling.
 
 ## Slurm and environments
 
@@ -104,6 +164,6 @@ The protected site flag `automatic_execution_allowed: false` forces review durin
 
 Public JSON bodies are capped at 2 MiB; an individual upload at 512 KiB. Internal result reports allow 16 MiB for up to 10 MiB of raw declared artifacts plus bounded logs. Discovery snapshots are capped at 1 MiB. Storage reserves project and global bytes before writing; defaults are 64 MiB per project, 256 MiB globally, 1,000 objects per project, and eight in-flight uploads. Crashes retain reservations conservatively. Automatic orphan/reservation garbage collection, project retention/deletion and metadata/rate quotas are not implemented; operators must monitor development instances.
 
-No protected-installation secret isolation, LDAP/OIDC, PostgreSQL deployment, institutional MFA, GPU runtime, or other backend has been accepted yet. A hostile payload sharing the remote account may alter same-user files/jobs or submit nested jobs outside the broker ledger. Hard ceilings across all such activity need cluster-side restrictions. Docker is a packaging and test boundary; giving the agent Docker-daemon access defeats same-host secret protection. Use only the synthetic fixture credentials until the protected-installation gate has passed.
+PostgreSQL concurrency and synthetic TLS directory acceptance do not establish hosted production readiness. Protected-installation secret isolation, institutional directory policy, institutional MFA, GPU runtime and other scheduler backends still need acceptance; OIDC is not implemented. A hostile payload sharing the remote account may alter same-user files/jobs or submit nested jobs outside the broker ledger. Hard ceilings across all such activity need cluster-side restrictions. Docker is a packaging and test boundary; giving the agent Docker-daemon access defeats same-host secret protection. Routine acceptance uses synthetic fixture credentials; a supervised site test is a separately authorized exception, not a protected deployment.
 
 The repository is initialized locally and includes contributor/security guidance, migrations, schemas, pinned Python dependencies, default credential-free tests, and CI definitions. Publication, licensing, security contact setup, base-image pinning, vulnerability/license review, SBOM/signatures, and the broader release gates remain explicit maintainer work.

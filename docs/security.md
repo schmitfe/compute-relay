@@ -99,9 +99,13 @@ endpoint or unauthenticated setup route after initialization.
 
 ### Shared server deployment
 
-The implementation contract is [the shared-service specification](hosted-architecture.md)
-and [ADR 0005](adr/0005-hosted-identity-and-connectors.md). These are pending
-runtime work, not properties established by the current development portal.
+The [shared-service architecture](hosted-architecture.md) and
+[ADR 0005](adr/0005-hosted-identity-and-connectors.md) distinguish implemented
+foundations from the protected deployment target. PostgreSQL/offline migration,
+local/LDAP routing, issuing-user-bound execution checks and opt-in async core
+Slurm workers are implemented. Synthetic fixtures establish their tested
+behavior, not hosted isolation. Protected installation, per-user session
+supervision, site MFA activation and production acceptance remain unfinished.
 
 Use the same domain logic with PostgreSQL, HTTPS, organizational identity
 authentication, project roles, and per-user cluster connections. Organizational
