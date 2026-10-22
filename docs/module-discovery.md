@@ -60,7 +60,8 @@ operator can supply explicit paths if needed. Automatic path discovery has
 fixed bounds of 64 configuration files, 128 KiB total configuration data, 64
 candidate roots and two seconds; profile directory listing is separately
 bounded. Its catalog scanner permits up to 8192 names, 32768 directory entries,
-4096 directories, depth 12 and four seconds. Reaching a limit is always
+4096 directories, depth 12 and twenty seconds. The longer bounded scan accounts
+for cold shared-filesystem metadata caches. Reaching a limit is always
 reported as partial/truncated. Explicit metadata mode retains the existing
 512-name, 4096-entry, 256-directory, depth-eight and two-second bounds.
 
@@ -127,6 +128,15 @@ probes preserve the metadata catalog and report partial results. A successful
 availability query establishes neither a loaded environment nor compute-node
 compatibility. No `module load`, `module spider` or personal initialization is
 requested by the broker.
+
+All intended candidate roots are independently validated before recursive
+enumeration. The snapshot distinguishes `intended_module_paths`,
+`validated_module_paths`, and `module_paths` actually reached by the metadata
+scan. Availability uses the complete independently validated list even when
+an earlier recursive tree exhausts the metadata budget. Search-path validation
+has its own twenty-second bound; if that bound prevents validating the full
+list, availability fails closed with `full_modulepath_validation_incomplete`
+instead of silently querying a shortened search path.
 
 The distinction matters because Modules availability commands can evaluate
 module rc files, and initialization can itself load defaults. Automatic mode
