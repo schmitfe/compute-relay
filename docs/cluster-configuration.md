@@ -1,0 +1,121 @@
+# Cluster configuration defaults and owner review
+
+**Cluster configuration** is the human-facing name. The internal configuration
+object remains `site_profile`, so existing packages and worker profiles retain
+their versioned field names. This guide describes the derivation/form contract;
+the calling view and worker remain responsible for authorization, review,
+configuration revisions and application of changes.
+
+Saved discovery supplies suggestions, not scheduler authorization. Largest
+single-node CPU and memory advertisements provide the resource ceilings, reduced
+by known partition CPU/node-memory limits. A known per-CPU memory ceiling is
+also considered at the observed node CPU ceiling. Partition and cluster totals
+are never summed, and a node appearing in two partitions is never counted as
+extra capacity. These meanings follow [Slurm's partition configuration](https://slurm.schedmd.com/scontrol.html#SECTION_PARTITIONS---SPECIFICATIONS-FOR-CREATE-AND-UPDATE-COMMANDS).
+
+Each current job selects one GPU type. Its suggestion therefore uses the largest
+count of a single GPU family on one node, rather than adding different families.
+Typed counts are listed separately in the evidence. A generic GPU count may be
+shown with its type explicitly unknown; shared MPS/shard advertisements do not
+become physical GPUs. Duplicate or contradictory GPU advertisements remain
+unknown. See [Slurm GRES semantics](https://slurm.schedmd.com/gres.html).
+
+Partition walltime becomes a finite whole-minute ceiling. Fractional minutes are
+rounded down so the suggestion cannot exceed the observed limit. An explicitly
+unlimited scheduler walltime is bounded by the broker's supported maximum.
+Missing/malformed time remains unknown. Slurm accepts several duration forms
+and schedules walltime in minutes; see [the job time option](https://slurm.schedmd.com/sbatch.html#OPT_time).
+
+The implementation currently caps suggestions and owner inputs at 1,024 CPUs,
+16 GPUs of one type, 16,777,216 MiB and seven days per job. The evidence explains
+when such a cap applies. These are software bounds, not claims about a site's
+physical resources or allowance. Known independent maxima can come from
+different nodes or partitions; their combination is not necessarily schedulable.
+Node/partition live state is not used as a persistent resource limit.
+
+Account and job-QoS suggestions come only from a successful snapshot of the
+remote user's associations. A partition's QoS or `AllowAccounts=ALL` is not an
+account grant. Restricted or unavailable association queries leave unknowns;
+the owner may supply explicit safe names. Cached association membership does
+not establish current eligibility, account/QoS limits or scheduler acceptance.
+
+## Preserving owner choices and safety evidence
+
+Derivation fills missing fields. It preserves existing owner ceilings,
+allowlists, allocation rounding and timing values; a later discovery does not
+silently widen a saved owner restriction. Empty existing allowlists are also
+deliberate values. Discovery cannot enable automatic execution: a fresh profile
+has `automatic_execution_allowed: false`; an already explicit true setting is
+retained rather than inferred again.
+
+No termination/overtime/cleanup margin is created from discovery, even when a
+snapshot labels a timing candidate finite. No CPU/GPU allocation floor is
+inferred from hardware capacity. Resource suggestions do not prove rounding,
+memory-driven CPU allocation, billing behavior, requeue safety or cleanup
+duration. Existing package preparation and project compute limits still apply.
+
+The resource form requires an explicit finite value when discovery could not
+provide one. Values must fit the supported bounds, walltime must be whole
+minutes, names must be safe scheduler names, and partition selection cannot be
+empty. Where selected partitions have known ceilings, inputs cannot exceed
+those ceilings. A lower resource ceiling cannot contradict retained allocation
+rounding. Allocation-rounding and automatic-execution fields are not editable
+through this form; forged extra fields cannot change them.
+
+The separate timing section accepts user-supplied termination, overtime and
+cleanup bounds for reviewed jobs, each between zero and 604,800 seconds. The
+first two may be prefilled from finite saved candidates covering every selected
+partition; the largest applicable value and its source are shown as a suggestion.
+Cleanup remains blank unless already explicitly configured. A displayed default
+is not an accepted assumption until posted by the owner. An omitted existing
+bound is retained; an explicitly blank required bound is rejected. Zero is an
+explicit assumption, not evidence that no cleanup exists.
+
+New or changed timing assumptions force automatic execution off, even if the
+previous profile allowed it. Unchanged explicit bounds retain the existing flag.
+The form never marks an assumption verified. A separate protected verification
+path is required before enabling automatic execution. Walltime plus all three
+bounds must fit the supported maximum charge duration.
+
+An owner must not turn saved visibility into unattended spending without the
+separate site evidence and project authorization. Configuration review is also
+distinct from discovering a working directory or granting a project access.
+
+## Integration API
+
+`compute_broker.domain.cluster_configuration` uses only the standard library:
+
+```python
+evidence = derive_cluster_configuration(snapshot, current_profile)
+proposed_profile = evidence["site_profile"]
+# Also: discovered_limits, per-partition evidence, unknowns, unknown_reasons and warnings.
+
+validated = validate_cluster_configuration(proposed_profile, require_limits=False)
+# require_limits=True (default) requires final finite limits and a partition.
+```
+
+Unknown resource fields are absent from `site_profile`, and appear as `None` in
+`discovered_limits`. Per-partition evidence includes type counts and warnings.
+The helper performs no SSH, file access, database query or submitted-code
+execution. `ClusterConfigurationError` reports invalid retained/input values.
+
+The Django-only `compute_broker.control.cluster_configuration` provides:
+
+```python
+form = ClusterConfigurationForm(
+    request.POST or None, snapshot=snapshot, current_profile=current_profile,
+)
+if form.is_valid():
+    edited_profile = form.site_profile()
+```
+
+Templates can render `form.resource_fields` and `form.timing_fields` separately;
+`form.timing_suggestions` includes candidate values, source, selected partition
+names and an explicit requirement for user confirmation.
+
+The caller must authenticate the owner, check the current connection revision,
+reject stale/busy changes and arrange protected-worker validation/application.
+The form cannot itself change a connection, bind a worker or approve execution.
+Tests cover maxima, heterogeneous GPUs, unknowns, implementation caps, retained
+settings, explicit timing assumptions, forged automatic/rounding fields and a fresh worker-process import with Django and
+controller imports blocked. No real cluster or compute allocation is involved.
