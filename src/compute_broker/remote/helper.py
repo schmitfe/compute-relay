@@ -35,6 +35,11 @@ SYSTEM_MODULE_PATHS = (
     "/etc/modulefiles", "/usr/share/modulefiles", "/usr/share/Modules/modulefiles",
     "/usr/share/lmod/lmod/modulefiles", "/opt/modulefiles", "/usr/local/modulefiles",
 )
+MODULE_PATH_CONFIGURATION_FILES = (
+    "/etc/profile", "/etc/environment", "/etc/lmod/.modulespath", "/etc/lmod/modulespath",
+    "/etc/environment-modules/modulespath", "/usr/share/Modules/init/.modulespath",
+    "/usr/share/modules/init/.modulespath",
+)
 
 
 def canonical(value):
@@ -241,7 +246,7 @@ def discovery_config(config):
         raise ValueError("Invalid software discovery configuration")
     result = dict(value)
     mode = value.get("module_inventory_mode", "availability")
-    if not isinstance(mode, str) or mode not in {"availability", "metadata"}:
+    if not isinstance(mode, str) or mode not in {"availability", "metadata", "auto"}:
         raise ValueError("Unsupported module inventory mode")
     result["module_inventory_mode"] = mode
     if value.get("module_init") is not None:
@@ -379,6 +384,190 @@ def effective_module_paths(options):
                 raise ValueError("Explicit module path failed trust or bounded metadata checks") from exc
             skipped.append({"path": path, "status": "not_found" if isinstance(exc, FileNotFoundError) else "not_trusted_or_audit_limited"})
     return paths, skipped
+
+
+def read_trusted_module_configuration(path, maximum):
+    """Read only bounded root-owned system configuration; never source it."""
+    trusted_system_path(path, directory=False)
+    resolved = os.path.realpath(path)
+    descriptor = os.open(resolved, os.O_RDONLY | NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022
+                or info.st_size > maximum):
+            raise ValueError("System module configuration failed metadata or size checks")
+        with os.fdopen(os.dup(descriptor), "rb") as stream:
+            data = stream.read(maximum + 1)
+        if len(data) > maximum:
+            raise ValueError("System module configuration exceeds its size limit")
+        return data.decode("utf-8", "strict")
+    finally:
+        os.close(descriptor)
+
+
+def literal_module_paths(text, *, path_file=False):
+    """Extract literal path data only; shell syntax/expansions are never run.
+
+    Conditional assignments are candidates, not evaluated shell state. The
+    result is suitable only for a provisional filename catalog.
+    """
+    import shlex
+    paths, references, unsupported = [], [], 0
+    for line in text.replace("\\\n", "").splitlines():
+        try:
+            fields = shlex.split(line, comments=True, posix=True)
+        except ValueError:
+            unsupported += 1
+            continue
+        if not fields:
+            continue
+        if fields[0] == "export":
+            fields = fields[1:]
+        if path_file:
+            values = fields
+        else:
+            if not fields or not re.match(r"(?:MODULEPATH|LMOD_SITE_MODULEPATH|MODULEPATH_ROOT|LMOD_MODULEPATH_INIT|MODULEPATH_INIT)=", fields[0]):
+                continue
+            if len(fields) != 1:
+                unsupported += 1
+                continue
+            variable, _, value = fields[0].partition("=")
+            if any(character in value for character in "$`;&|<>(){}\\"):
+                unsupported += 1
+                continue
+            if variable in {"LMOD_MODULEPATH_INIT", "MODULEPATH_INIT"}:
+                if value.startswith("/") and os.path.basename(value) in {".modulespath", "modulespath"}:
+                    references.append(value)
+                continue
+            values = [value + "/*" if variable == "MODULEPATH_ROOT" else value]
+        for value in values:
+            if any(character in value for character in "$`;&|<>(){}\\"):
+                unsupported += 1
+                continue
+            for path in value.split(":"):
+                try:
+                    discovery_path(path)
+                except ValueError:
+                    unsupported += 1
+                    continue
+                paths.append(path)
+    return paths, references, unsupported
+
+
+def automatic_module_inventory(options):
+    """Find the site catalog from trusted configuration data without evaluation.
+
+    In particular, do not source /etc/profile: even a trusted initializer can
+    load defaults or evaluate unaudited modulerc files. Literal assignments and
+    Modules/Lmod path-list files provide bounded, provisional candidate roots.
+    """
+    candidates, provenance, warnings, configuration_sources = [], [], [], []
+    truncated, unsupported, total_bytes, entries = False, 0, 0, 0
+    deadline = time.monotonic() + 2
+    initializers = [options["module_init"]] if options.get("module_init") else list(MODULE_INITIALIZERS)
+    chosen_initializer = None
+    for initializer in initializers:
+        try:
+            trusted_system_path(initializer, directory=False)
+            chosen_initializer = initializer
+            break
+        except (OSError, ValueError):
+            pass
+    if "module_paths" in options:
+        sources = [(path, "configured_module_paths") for path in options["module_paths"]]
+    else:
+        sources = []
+        pending = list(dict.fromkeys([*MODULE_PATH_CONFIGURATION_FILES, *initializers]))
+        for initializer in initializers:
+            pending.append(os.path.dirname(os.path.realpath(initializer)) + "/.modulespath")
+        seen = set()
+        while pending and len(seen) < 32 and total_bytes < 131072 and time.monotonic() < deadline:
+            filename = pending.pop(0)
+            if filename in seen:
+                continue
+            seen.add(filename)
+            try:
+                text = read_trusted_module_configuration(filename, min(65536, 131072 - total_bytes))
+            except (OSError, ValueError, UnicodeError) as error:
+                configuration_sources.append({"path": filename,
+                    "status": "not_found" if isinstance(error, FileNotFoundError) else "unsafe_unavailable_or_size_limited"})
+                continue
+            total_bytes += len(text.encode("utf-8"))
+            configuration_sources.append({"path": filename, "status": "read", "size_bytes": len(text.encode("utf-8"))})
+            paths, references, omitted = literal_module_paths(text, path_file=os.path.basename(filename) in {".modulespath", "modulespath"})
+            unsupported += omitted
+            sources.extend((path, filename) for path in paths)
+            pending.extend(references)
+        if pending:
+            truncated = True
+        # Site path data takes precedence. Adding a parent/default tree as well
+        # can invent prefixed names (Core/python3 instead of python3).
+        if not sources:
+            sources.extend((path, "standard_module_directory") for path in SYSTEM_MODULE_PATHS)
+    for candidate, source in sources:
+        if len(candidates) >= 16 or time.monotonic() >= deadline:
+            truncated = True
+            break
+        roots = [candidate]
+        home = pwd.getpwuid(os.getuid()).pw_dir.rstrip("/")
+        if (candidate == home or candidate.startswith(home + "/")
+                or candidate in {"/home", "/users", "/root"} or candidate.startswith(("/home/", "/users/", "/root/"))):
+            unsupported += 1
+            continue
+        if any(character in candidate for character in "*?["):
+            # Only one final '*' component is supported, with bounded iteration.
+            # A full glob engine can traverse arbitrarily large directory trees.
+            if not candidate.endswith("/*") or any(character in candidate[:-2] for character in "*?["):
+                unsupported += 1
+                continue
+            roots = []
+            descriptor = None
+            try:
+                parent = discovery_path(os.path.realpath(candidate[:-2]))
+                descriptor = open_metadata_module_root(parent, deadline=deadline)
+                with os.scandir(descriptor) as directory:
+                    for entry in directory:
+                        if entries >= 4096 or len(roots) >= 16 or time.monotonic() >= deadline:
+                            truncated = True
+                            break
+                        entries += 1
+                        if entry.is_dir(follow_symlinks=False):
+                            roots.append(parent + "/" + entry.name)
+            except (OSError, ValueError):
+                continue
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+        for root in roots:
+            if len(candidates) >= 16 or time.monotonic() >= deadline:
+                truncated = True
+                break
+            try:
+                resolved = discovery_path(os.path.realpath(root))
+            except (OSError, ValueError):
+                unsupported += 1
+                continue
+            if resolved not in candidates:
+                candidates.append(resolved)
+                provenance.append({"path": root, "resolved_path": resolved, "source": source})
+    scan_options = {"module_paths": candidates}
+    if chosen_initializer:
+        scan_options["module_init"] = chosen_initializer
+    result = metadata_module_inventory(scan_options)
+    result.update(requested_inventory_mode="auto", path_source="configured" if "module_paths" in options else "trusted_system_configuration",
+        source="automatic_system_modulepath_metadata", path_provenance=provenance,
+        configuration_bytes_read=total_bytes, configuration_sources=configuration_sources,
+        unsupported_configuration_lines=unsupported,
+        loaded=[], loaded_state="not_observed")
+    if unsupported:
+        result["partial"] = True
+        warnings.append("Dynamic or unsupported configuration syntax was not evaluated; candidate roots may be incomplete.")
+    if truncated:
+        result["truncated"] = result["partial"] = True
+        warnings.append("Automatic path discovery reached a configuration, time, directory-entry or path-count bound.")
+    result["warnings"].extend(warnings)
+    result["explanation"] = "Provisional catalog from literal system MODULEPATH data and regular module-file metadata. System shell startup, module files and rc files were not executed; aliases, loaded state and compute-node availability are unverified."
+    return result
 
 
 def metadata_module_directory_permissions(info, path, *, final, ancestor_warnings):
@@ -598,7 +787,9 @@ def software_discovery(config):
     except ValueError:
         snapshot["status"] = "invalid_configuration"
         return snapshot
-    if options["module_inventory_mode"] == "metadata":
+    if options["module_inventory_mode"] == "auto":
+        snapshot["modules"] = automatic_module_inventory(options)
+    elif options["module_inventory_mode"] == "metadata":
         snapshot["modules"] = metadata_module_inventory(options)
     else:
         snapshot["modules"].update(module_paths=module_paths, skipped_paths=skipped_module_paths,
@@ -612,7 +803,7 @@ def software_discovery(config):
                 snapshot["python"].append({"kind": "system", "interpreter": path, "source": "configured_path_metadata", "verified_on_compute": False})
         except OSError:
             pass
-    initializers = [] if options["module_inventory_mode"] == "metadata" else ([options["module_init"]] if options.get("module_init") else MODULE_INITIALIZERS)
+    initializers = [] if options["module_inventory_mode"] in {"metadata", "auto"} else ([options["module_init"]] if options.get("module_init") else MODULE_INITIALIZERS)
     for initializer in initializers:
         try:
             # Only root-owned, non-writable system initialization files may run.
