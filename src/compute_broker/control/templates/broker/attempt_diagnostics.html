@@ -1,0 +1,26 @@
+{% autoescape on %}
+<section class="attempt-diagnostics" data-diagnostic-category="{{ diagnostics.category }}" data-state="{{ diagnostics.state }}" data-accounting-state="{{ diagnostics.accounting_state }}" aria-labelledby="attempt-diagnostic-{{ diagnostics.attempt_id }}">
+<h2 id="attempt-diagnostic-{{ diagnostics.attempt_id }}">{{ diagnostics.title }}</h2>
+<p>{{ diagnostics.message }}</p>
+<p><strong>Next step:</strong> {{ diagnostics.suggestion }}</p>
+<dl>
+<dt>Slurm job ID</dt><dd>{{ diagnostics.native_job_id|default:"Not recorded" }}</dd>
+<dt>Cluster</dt><dd>{% if diagnostics.connection_id %}<a href="/clusters/{{ diagnostics.connection_id }}/">{{ diagnostics.cluster_name }}</a>{% else %}{{ diagnostics.cluster_name }}{% endif %}</dd>
+<dt>Broker attempt</dt><dd>{{ diagnostics.attempt_id|default:"Not recorded" }}</dd>
+<dt>Broker job</dt><dd>{{ diagnostics.job_id|default:"Not recorded" }}</dd>
+<dt>Execution state</dt><dd>{{ diagnostics.state }}</dd>
+<dt>Native state</dt><dd>{{ diagnostics.native_state|default:"Not reported" }}</dd>
+<dt>Exit status (exit code:signal)</dt><dd>{{ diagnostics.exit_code|default:"Not reported" }}</dd>
+<dt>Broker error code</dt><dd>{{ diagnostics.error_code|default:"No broker error code recorded" }}</dd>
+<dt>Accounting</dt><dd>{{ diagnostics.accounting_state }}{% if diagnostics.accounting_final == True %} · Final usage reported{% elif diagnostics.accounting_final == False %} · Final usage not reported{% endif %}</dd>
+<dt>Observation source</dt><dd>{{ diagnostics.source|default:"Not reported" }}</dd>
+<dt>Reported allocation</dt><dd>{{ diagnostics.allocated_cpus|default_if_none:"Unknown" }} CPUs · {{ diagnostics.allocated_gpus|default_if_none:"Unknown" }} GPUs · {{ diagnostics.elapsed_seconds|default_if_none:"Unknown" }} seconds</dd>
+<dt>Reported usage</dt><dd>{{ diagnostics.cpu_core_seconds|default_if_none:"Unknown" }} CPU-core seconds · {{ diagnostics.gpu_device_seconds|default_if_none:"Unknown" }} GPU-device seconds</dd>
+</dl>
+{% for notice in diagnostics.notices %}<p class="notice">{{ notice }}</p>{% endfor %}
+<h3>Standard error</h3><pre>{{ diagnostics.stderr|default:"No standard error collected." }}</pre>
+{% if diagnostics.stderr_truncated %}<p class="notice">Standard error preview is limited to {{ diagnostics.log_limit_bytes }} bytes. Additional text is not shown here.</p>{% endif %}
+<h3>Standard output</h3><pre>{{ diagnostics.stdout|default:"No standard output collected." }}</pre>
+{% if diagnostics.stdout_truncated %}<p class="notice">Standard output preview is limited to {{ diagnostics.log_limit_bytes }} bytes. Additional text is not shown here.</p>{% endif %}
+</section>
+{% endautoescape %}
