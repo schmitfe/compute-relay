@@ -57,8 +57,10 @@ An agent key belongs to one project and an actor label, with a hash, independent
 Cluster definitions describe capabilities. Cluster connections bind a user, worker, remote username, allowed Slurm accounts and a credential reference. The API must not let a project key override the binding's host, user, key path or Slurm account allowlist. Multiple projects using one remote Unix UID do not receive cluster-side filesystem isolation.
 
 Hosted control and runner storage must not retain user private SSH keys, including
-encrypted copies. Use a verified HPC principal with explicit delegation and an
-isolated per-principal connector. Server-side connectors consume approved live
+encrypted copies. Bind each user's agent key to their own verified HPC principal
+and isolated per-principal OpenSSH worker. Sharing a project does not change
+the execution account; cross-user HPC delegation is outside the initial scope.
+Server-side connectors consume approved live
 sessions only after keyless activation and isolation pass site acceptance;
 outbound personal connectors keep credentials on the user's protected device.
 An authenticated SSH control socket is a sensitive access capability even though

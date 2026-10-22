@@ -23,11 +23,15 @@ central storage of user SSH private keys.
    not identities or ledgers invented afresh. No live cutover occurs merely by
    accepting this decision.
 3. Separate application user, project-scoped agent credential and verified HPC
-   principal. Project membership is not delegation of another user's HPC account.
-   Principal ownership/delegation and directory status are rechecked at dispatch.
+   principal. Every person executes through their own HPC account. Bind the agent
+   key's issuing user, connection owner, principal owner and OpenSSH worker owner;
+   recheck this chain and directory status at dispatch. Cross-user HPC delegation
+   is outside the initial shared-service scope, even within one shared project.
 4. Store no HPC private keys centrally, including encrypted vaults. The broker
    has no SSH client, agent or control socket. Use isolated per-principal
-   connectors with a narrow typed outbound lease/report protocol.
+   OpenSSH workers with a narrow typed outbound lease/report protocol. OpenSSH
+   runs in these workers and authenticates as each user's own HPC account;
+   local/LDAP login is solely application authentication.
 5. A server connector may hold a site-approved, expiring authenticated SSH session
    under a distinct OS security identity. Treat the session socket as a sensitive
    capability. Require an actually tested keyless bootstrap mechanism; do not

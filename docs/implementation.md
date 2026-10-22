@@ -247,7 +247,7 @@ Follow [the shared-service specification](hosted-architecture.md) and
 [ADR 0005](adr/0005-hosted-identity-and-connectors.md), accepted as implementation
 direction on 22 October 2026. Work packages MU-01 through MU-06 cover PostgreSQL
 and real locking tests; local and optional LDAP identity routing/deprovisioning;
-verified HPC principals and delegation; bounded async workers/transports;
+verified user-owned HPC principals and user-bound keys; bounded async OpenSSH workers/transports;
 isolated session activation; and rehearsed server cutover. No central user SSH
 private-key storage is permitted. A central authenticated session needs a real
 keyless bootstrap mechanism and site acceptance; a protected outbound personal

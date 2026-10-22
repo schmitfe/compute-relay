@@ -9,6 +9,12 @@ identities. It retains Django, the transactional ledger, immutable review
 packages and the worker boundary. It does not require a FastAPI rewrite or a
 REST service on either cluster.
 
+Clarification, 2026-10-22: **OpenSSH workers are the required HPC access path.**
+Each person uses their own account on each HPC. "Connector" below means that
+person's OpenSSH worker, not a replacement for SSH or a shared cluster login.
+Local/LDAP authentication identifies the broker user; it never substitutes for
+authentication to that user's HPC account.
+
 ## 1. Deployment and credential boundaries
 
 ```mermaid
@@ -17,8 +23,8 @@ flowchart LR
     A[Agent MCP client] -->|Project credential| C
     C --> P[(PostgreSQL: policy, queue, history)]
     C -->|TLS search and bind| L[LDAP directory: optional]
-    W[Per-user isolated async connector] -->|Outbound HTTPS: bounded leases and reports| C
-    W -->|Approved session-only SSH operations| S[Slurm login node]
+    W[Per-user isolated async OpenSSH worker] -->|Outbound HTTPS: bounded leases and reports| C
+    W -->|SSH authenticated as this user's HPC account| S[Slurm login node]
     S --> J[Slurm compute jobs]
     B[Trusted interactive bootstrap] --> W
 ```
@@ -28,6 +34,9 @@ columns, decrypted-key cache, user SSH-agent mount or multiplex socket mount.
 Its image does not contain an SSH client. Central LDAP lookup credentials,
 database credentials and TLS keys are separate service secrets, not HPC user
 credentials. Job packages and audit records never carry those secrets.
+The worker image does contain OpenSSH and invokes it for discovery, staging,
+submission, monitoring, cancellation and collection. The restriction concerns
+credential custody in the control service, not whether workers use SSH.
 
 One connector security domain binds one application owner and one HPC principal
 (cluster plus verified remote account). Separate processes alone are insufficient:
@@ -43,21 +52,42 @@ only the assigned connector's lease/report API. Neither credential is an SSH
 identity. Connector credentials remain one-time-issued and hash-only in control;
 hosted enrollment adds finite expiry, rotation and explicit principal bindings.
 
-## 2. Three identities, with explicit delegation
+## 2. Three identities, with user-bound HPC execution
 
 | Identity | Meaning | Must not imply |
 | --- | --- | --- |
 | Application user | Person authenticated by a local password or a directory | An HPC account, cluster access, or administrator rights |
-| Agent credential | Named, scoped access issued by a project administrator | Human login, approval authority, or the key issuer's entire account authority |
+| Agent credential | Named, scoped project access bound to its issuing user | Human login, approval authority, or another project member's HPC identity |
 | HPC principal | Verified remote identity on one cluster | Permission for every project member to submit as that identity |
 
-Authorization resolves project key, issuing user, project membership, permitted
-connection and explicit HPC delegation before reserving resources. Repeat the
-relevant checks at dispatch. Sharing a project or joining an LDAP group cannot
-silently lend another user's HPC identity. Delegation requires that principal's
-owner to consent to a bounded project/role and the site to permit that use.
-The default is no delegation. A project administrator cannot grant a principal
-they do not own or already have authority to delegate.
+Submission authorization resolves project key, its bound application user, project
+membership and that user's permitted HPC connection before reserving resources.
+Repeat the relevant checks at dispatch. Enforce
+`credential.issued_by == connection.owner == principal.owner == worker.owner`.
+The worker additionally binds the verified remote account and cluster. Project
+ownership is not the execution identity, and an agent cannot supply a different
+user, SSH identity or worker to override this chain. Account impersonation and
+cross-user HPC delegation are outside the initial shared-service scope.
+
+For example, Alice and Bob can share a project and its compute allowance while
+submitting under different HPC accounts:
+
+| Request | Worker routing | Cluster execution identity |
+| --- | --- | --- |
+| Alice's project API key | Alice's worker for cluster A | Alice's verified account on A |
+| Bob's project API key | Bob's worker for cluster A | Bob's verified account on A |
+| Alice's project API key targeting cluster B | Alice's worker for cluster B | Alice's verified account on B |
+
+Each person creates their own user-bound keys within a project they may submit
+to. A project administrator may revoke keys and set project policy, but cannot
+change a key's bound user or route a job through another person's HPC account.
+Only the bound user may issue or rotate/reveal that user's execution keys;
+allowing an administrator to rotate Bob's key and see its replacement would
+give that administrator Bob's submission authority. Rotation preserves the
+bound user. Recovery revokes access and requires the owner to re-enroll rather
+than revealing an impersonation credential to another project member.
+An HPC username may differ from the local/LDAP login and from that person's
+username on another cluster. Keep these mappings explicit and verified.
 
 Keep the existing UUID `User`, `Project`, `Membership`, jobs and ledger. Add the
 following concepts incrementally; these are proposed tables, not current models:
@@ -71,8 +101,7 @@ following concepts incrementally; these are proposed tables, not current models:
 | `HPCPrincipal` | Owner, cluster, claimed remote name, verified name/numeric UID and cluster identity, proof timestamp, state; claimed and verified values distinguished |
 | Connector binding | Existing worker identity plus principal, deployment kind, credential expiry/revocation and isolation attestation; separate public metadata from protected runtime config |
 | `HPCSession` | Principal, connector, generation, state, reason, started/last-seen/absolute-expiry; no key, password, agent path or control socket in central records |
-| `PrincipalDelegation` | Principal owner's explicit project/user/role permission, bounds, expiry, revocation and audit actor |
-| Agent attribution | Add immutable `issued_by` and key generation; jobs retain submitting credential, application actor, approving actor and execution principal |
+| Agent attribution | Add immutable `issued_by` and key generation; connection, principal and worker owner must match that user; jobs retain submitting credential, application actor, approving actor and execution principal |
 | Durable work | Operation kind, attempt/principal/session binding, lease generation, deadline, retry/backoff and fair scheduling key |
 
 HPC verification is a fixed read-only helper over a pinned authenticated target
@@ -165,7 +194,7 @@ Login and privileged mutations require fresh directory entitlement. A proposed
 default validity is five minutes, configurable downward; deprovisioning takes
 effect within that explicit bound, not instantaneously. Refresh before expiry
 with a bounded background task. When freshness expires during an outage, block
-new login, admission, approval, delegation and dispatch for affected identities;
+new login, admission, approval, account binding and dispatch for affected identities;
 do not invent fresh entitlements. A local authenticated administrator retains
 the explicit recovery path.
 
@@ -305,7 +334,7 @@ If no submission intent or remote side effect exists, a queued operation may
 wait for reconnection with a deadline. An already admitted waiting attempt keeps
 its existing reservation and lifetime slot; reconnecting does not create another
 attempt. Release only with durable proof that submission never began. Recheck
-grant/credential/delegation expiry before eventual dispatch.
+grant/credential/account authority before eventual dispatch.
 
 After dispatch intent, timeout, task cancellation or SSH loss means possible
 acceptance until reconciled. Killing local `ssh` does not prove `sbatch` failed.
@@ -380,7 +409,7 @@ dependencies. Authentication and authorization interfaces belong in core.
 | --- | --- | --- |
 | MU-01 PostgreSQL baseline | Backend-specific settings, `postgres` dependency extra/lock, disposable PostgreSQL Compose service and CI matrix; audit transaction lock order and joined locks | Real independent-process admission/settlement/lease races pass on PostgreSQL and SQLite |
 | MU-02 account providers | `control/identity/` models, provider router/local backend, optional LDAP adapter, login/provider UI, rate limiting, entitlement refresh and epoch checks; admin membership/account management | No LDAP/local collision or fallback; directory disablement revokes new authority within configured bound |
-| MU-03 principals and connector authority | Split shared cluster metadata from verified account connections; principal/delegation/session models, paired expiring connector credentials, migration and audit | Two users sharing a cluster cannot use each other's account, paths, sessions, outputs or worker leases |
+| MU-03 principals and connector authority | Split shared cluster metadata from each user's verified account connections; principal/session models, user-bound project keys, paired expiring OpenSSH worker credentials, migration and audit | Two users sharing a project/cluster execute as their own HPC accounts; actor/connection/principal/worker owner mismatches are rejected |
 | MU-04 async connectors | Async transport/backend protocol and worker/client runner; bounded subprocess/streaming/journal work; async optional hooks and lease renewal | Slow/unreachable connection does not block another; timeout/cancel/crash never duplicates submission or refunds uncertainty |
 | MU-05 isolated session deployment | Separate supervisor/packaging, per-principal runtime/UID, session-only transport, trusted activation and revocation UI; personal connector packaging in parallel | No server private keys/ambient agents; selected keyless bootstrap and actual Cisco session expiry/reconnect pass site acceptance |
 | MU-06 hosted cutover | TLS/ASGI, secret mounting, backups/restore, observability, copied-data import rehearsal and legacy binding quarantine | One authoritative ledger; upgrade/rollback and recovery tested before allowing shared lab access |
@@ -404,10 +433,11 @@ No institutional keys, LDAP passwords or unattended real compute in ordinary CI.
 | MU-AUTH-03 | Same username/email in local and LDAP never merges or falls back; rename retains identity; recreated LDAP subject cannot inherit old jobs/permissions |
 | MU-AUTH-04 | Directory disable/group removal, expired freshness, existing browser session, old API key and already leased submission cannot authorize new work |
 | MU-AUTH-05 | Recovery admin is deliberately selected; LDAP outage never selects it automatically; source-derived roles remove correctly without dropping manual grants |
-| MU-ISO-01 | User A cannot list/claim/use user B's principal, connector token, socket, journal, environments, artifacts or delegation; mixed-owner worker profiles rejected |
+| MU-ISO-01 | User A cannot claim/use user B's HPC connection, worker token, socket, journal or private remote paths; mixed-owner worker profiles rejected. Project artifact sharing follows explicit project permissions and never grants access to another user's SSH account. |
 | MU-ISO-02 | Control container/UID cannot read private keys or access user agent/control sockets; no agent/Docker socket mounts; connector A cannot access connector B's runtime |
 | MU-ISO-03 | Session-only mode never opens a fresh authenticated connection when master is missing or dies after precheck; no inherited `SSH_AUTH_SOCK`, config, identity, proxy or forwarding fallback |
-| MU-ISO-04 | Claimed remote user/host/UID mismatch, stale enrollment challenge, session generation replay and unapproved principal delegation rejected |
+| MU-ISO-04 | Claimed remote user/host/UID mismatch, stale enrollment challenge, session generation replay and actor/connection/principal/worker owner mismatch rejected |
+| MU-ISO-05 | Alice and Bob share one project and cluster definition but use separate keys/workers/HPC accounts; scheduler and output provenance identify the correct account. Project ownership, human approval, key rotation and forged target fields cannot switch the execution user. An administrator cannot obtain another user's execution key by rotating it. |
 | MU-IO-01 | Concurrent slow and healthy connectors demonstrate bounded overlap, fair queue service, capped scheduler polling and bounded RAM/FD/subprocess counts |
 | MU-IO-02 | Large stdin plus stdout/stderr floods and task cancellation drain or terminate/reap without deadlock; event loop remains responsive during journaling/hashing |
 | MU-IO-03 | Kill before intent, after intent, after remote acceptance and before report; journal restart and lease expiry/renewal preserve exactly one logical submission and correct reservations |
