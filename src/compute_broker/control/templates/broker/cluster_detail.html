@@ -30,10 +30,17 @@
 <section><h2>Saved scheduler resources</h2>
 <p>Observed: <strong>{{ cluster.discovery_snapshot.observed_at }}</strong><br>{{ cluster.discovery_snapshot.version }}</p>
 <p>These are advertised total capacities from saved discovery. Live partition and node states are not displayed here.</p>
-<div class="table-scroll"><table><thead><tr><th>Partition / node</th><th>Total CPUs</th><th>Total memory (MiB)</th><th>GPU GRES</th></tr></thead><tbody>
-{% for node in cluster.discovery_snapshot.nodes %}<tr><td>{{ node.partition }}<br><small>{{ node.name }}</small></td><td>{{ node.cpus }}</td><td>{{ node.memory_mib }}</td><td>{{ node.gres }}</td></tr>
-{% empty %}<tr><td colspan="4">No node inventory reported{% if cluster.backend == "fake" %} (simulated cluster){% endif %}.</td></tr>{% endfor %}
-</tbody></table></div>
+{% for partition in scheduler_partitions %}
+<details class="partition-resources" data-partition="{{ partition.name }}">
+<summary><strong>{{ partition.name }}</strong> · {% if partition.node_count != None %}{{ partition.node_count }} node{{ partition.node_count|pluralize }}{% else %}Unknown node count{% endif %}</summary>
+{% if partition.fields %}<dl>{% for field in partition.fields %}<dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>{% endfor %}</dl>{% endif %}
+{% if partition.inconsistent %}<p class="notice">Saved partition totals and node membership differ. Reload discovery for an updated count.</p>{% endif %}
+{% if partition.details_limited %}<p class="notice">Node details were limited for display. The saved discovery JSON contains the original observation.</p>{% endif %}
+{% if partition.nodes %}<div class="table-scroll"><table><thead><tr><th>Node / node range</th><th>CPUs per node</th><th>Memory per node (MiB)</th><th>GPU GRES</th></tr></thead><tbody>
+{% for node in partition.nodes %}<tr><td>{{ node.name }}</td><td>{{ node.cpus }}</td><td>{{ node.memory_mib }}</td><td>{{ node.gres }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No node inventory reported{% if cluster.backend == "fake" %} (simulated cluster){% endif %}.</p>{% endif %}
+</details>
+{% empty %}<p>No partition or node inventory reported{% if cluster.backend == "fake" %} (simulated cluster){% endif %}.</p>{% endfor %}
 <p>Partitions can overlap. Visible resources do not establish authorization or reserve capacity.</p></section>
 {% endif %}
 <section>
