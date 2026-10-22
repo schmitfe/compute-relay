@@ -33,8 +33,10 @@ the synthetic identities and secrets.
 
 For the local portal, add `-f deploy/ldap/compose.portal.yml` to the same
 Compose commands. This publishes only `127.0.0.1:1636`, with a certificate
-valid for `localhost` and `127.0.0.1`. Keep the server running while using the
-mock provider. Export the public CA and selected generated password files
+valid for `localhost` and `127.0.0.1`. This overlay adds a separate bridge for
+host port publishing; the default acceptance profile keeps only its internal
+fixture network. Keep the server running while using the mock provider.
+Export the public CA and selected generated password files
 into an ignored, private local directory using Compose's file-copy command;
 do not print them into logs. Example, after creating a `0700` destination:
 

@@ -78,6 +78,42 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### PostgreSQL, LDAP and async Slurm acceptance, 22 October 2026
+
+A full PostgreSQL regression run passed **780 tests and 65 subtests**, with one
+optional NumPy check skipped. Independent clients exercised shared admission
+balances, unique claims, cancellation settlement and concurrent withdrawal of
+dispatch authority. Storage regression tests covered project/pool lock order in
+reservation, publication and failed-publication cleanup. An existing development
+SQLite installation was transferred offline and independently verified across
+all 46 tables, including artifact bytes and accounting balances; its obsolete
+SQLite configuration was fenced before resuming the PostgreSQL portal.
+
+The native asynchronous core Slurm stack used `compose.test.yml` plus
+`compose.async-test.yml`. The management smoke passed rejection, linked revision,
+human approval, SSH submission, output/hash checks and settled native job `1`.
+Accounting charged one CPU core-second and retained zero reservations. Only
+this disposable stack and its synthetic volumes were removed afterward. No
+institutional submission was made for these checks. Optional extension workers
+remain synchronous; this result does not claim async extension support.
+
+The independent [synthetic LDAP fixture](../deploy/ldap/README.md) passed native
+LDAPS and mandatory StartTLS, wrong-CA/hostname rejection, two eligible accounts,
+disabled/expired account rejection, local/directory name collision separation,
+stale verification refresh and preserved operator suspension. No plaintext
+directory passwords were persisted in application records. Native testing found
+and fixed a strict TLS certificate-chain defect and the SDK's mapping type;
+their regressions plus the final identity/user/dispatch checks passed **55
+focused PostgreSQL tests**. Actual portal logins also accepted the two eligible
+mock users without automatically granting projects or HPC connections.
+
+The optional portal overlay needs its separate bridge to publish verified LDAPS
+on loopback; the default LDAP acceptance remains on an internal-only network.
+CI defines native LDAP, PostgreSQL and async Slurm jobs, but local acceptance
+does not establish that remote CI has run. Protected OS identity separation,
+institutional MFA, hostile workload isolation and shared-server production
+acceptance remain separate gates.
+
 ### Cluster-first setup acceptance, 21 October 2026
 
 The management smoke client now saves cluster details without a worker or
