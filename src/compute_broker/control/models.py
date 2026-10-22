@@ -35,6 +35,7 @@ class Connection(models.Model):
     configuration = models.JSONField()
     revision_sha256 = models.CharField(max_length=64)
     enabled = models.BooleanField(default=True)
+    archived = models.BooleanField(default=False)
     setup_complete = models.BooleanField(default=True)
     auth_state = models.CharField(max_length=30, default="ready")
     discovery_snapshot = models.JSONField(default=dict)
@@ -59,6 +60,7 @@ class ClusterRegistration(models.Model):
     port = models.PositiveIntegerField(default=22)
     requested_root = models.CharField(max_length=240, blank=True)
     connector_settings = models.JSONField(default=dict)
+    archived = models.BooleanField(default=False)
     revision = models.PositiveIntegerField(default=1)
     connection = models.OneToOneField(Connection, null=True, blank=True, on_delete=models.PROTECT,
                                      related_name="registration")
