@@ -630,18 +630,50 @@ def automatic_module_inventory(options):
                 provenance.append({"path": root, "resolved_path": resolved, "source": source})
             if root_declared and resolved not in group_managed_roots:
                 group_managed_roots.append(resolved)
-    scan_options = {"module_paths": candidates, "group_managed_roots": group_managed_roots,
+    # Validate the complete intended search path independently of recursive
+    # enumeration. A cold/large earlier tree must not hide later valid roots
+    # from the separately authorized availability command.
+    validated_paths, validation_skipped, validation_truncated = [], [], False
+    validation_deadline = time.monotonic() + 20
+    for root in candidates:
+        if time.monotonic() >= validation_deadline:
+            validation_truncated = True
+            validation_skipped.append({"path": root, "status": "not_scanned_limit"})
+            continue
+        descriptor = None
+        try:
+            descriptor = open_metadata_module_root(root, deadline=validation_deadline,
+                allow_group_writable=root in group_managed_roots)
+            validated_paths.append(root)
+        except (OSError, ValueError) as error:
+            limited = isinstance(error, TimeoutError)
+            validation_truncated = validation_truncated or limited
+            validation_skipped.append({"path": root, "status": "not_scanned_limit" if limited else
+                "not_found" if isinstance(error, FileNotFoundError) else "unsafe_or_inaccessible"})
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+    scan_options = {"module_paths": validated_paths, "group_managed_roots": group_managed_roots,
                     "automatic_limits": True}
     if chosen_initializer:
         scan_options["module_init"] = chosen_initializer
     result = metadata_module_inventory(scan_options)
     result.update(requested_inventory_mode="auto", path_source="configured" if "module_paths" in options else "trusted_system_configuration",
         source="automatic_system_modulepath_metadata", path_provenance=provenance,
+        intended_module_paths=candidates, validated_module_paths=validated_paths,
+        module_path_validation_truncated=validation_truncated,
         path_semantics="literal_candidate_union",
         configuration_bytes_read=total_bytes, configuration_sources=configuration_sources,
         configuration_directories=configuration_directories,
         unsupported_configuration_lines=unsupported,
         loaded=[], loaded_state="not_observed")
+    if validation_skipped:
+        result["skipped_paths"].extend(validation_skipped)
+        result["partial"] = True
+        warnings.append("Some declared module roots failed independent path validation; inspect skipped_paths.")
+    if validation_truncated:
+        result["truncated"] = result["partial"] = True
+        warnings.append("Module search-path validation reached its twenty-second bound; availability will not run with a shortened path.")
     if unsupported:
         result["partial"] = True
         warnings.append("Dynamic or unsupported configuration syntax was not evaluated; candidate roots may be incomplete.")
@@ -763,7 +795,7 @@ def metadata_module_inventory(options):
     # small tree. These are internal fixed bounds, not caller-supplied budgets.
     automatic = options.get("automatic_limits", False)
     max_entries, max_directories, max_names = (32768, 4096, 8192) if automatic else (4096, 256, 512)
-    max_depth, seconds = (12, 4) if automatic else (8, 2)
+    max_depth, seconds = (12, 20) if automatic else (8, 2)
     result["limits"] = {"entries": max_entries, "directories": max_directories, "names": max_names,
                         "depth": max_depth, "seconds": seconds}
     group_managed_roots = set(options.get("group_managed_roots", []))
@@ -890,7 +922,12 @@ def augment_module_availability(modules):
     modules["availability"] = observation
     modules["metadata_available"] = list(modules["available"])
     initializer = modules.get("init_path")
-    paths = modules.get("module_paths", [])
+    paths = modules.get("validated_module_paths", modules.get("module_paths", []))
+    observation["module_paths"] = list(paths)
+    if modules.get("module_path_validation_truncated"):
+        observation["reason"] = "full_modulepath_validation_incomplete"
+        modules["partial"] = True
+        return
     if not initializer or not paths:
         observation["reason"] = "trusted_initializer_or_module_paths_unavailable"
         modules["partial"] = True

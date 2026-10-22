@@ -212,6 +212,7 @@ def test_auto_catalog_larger_than_512_names_has_explicit_fixed_bounds(metadata_m
     result = helper.automatic_module_inventory({})
     assert len(result["available"]) == 600 and not result["truncated"]
     assert result["limits"]["names"] == 8192 and result["limits"]["entries"] == 32768
+    assert result["limits"]["seconds"] == 20
 
 
 def test_auto_never_reads_non_root_site_configuration(metadata_module_catalog, monkeypatch):
@@ -299,3 +300,36 @@ def test_fixed_probe_larger_output_bound_remains_bounded():
     assert result["truncated"] and len(result["stdout"]) <= 131072
     with pytest.raises(ValueError):
         helper.software_command(["/bin/true"], max_output_bytes=262145)
+
+
+def test_availability_keeps_later_validated_roots_when_metadata_scan_is_truncated(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    early = root / "early";early.mkdir()
+    later = root / "later";later.mkdir()
+    paths = [str(early), str(later)]
+    system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + ":".join(paths)})
+    original = helper.metadata_module_inventory
+    def cold_scan(options):
+        result = original({**options, "module_paths": options["module_paths"][:1]})
+        result["truncated"] = result["partial"] = True
+        return result
+    monkeypatch.setattr(helper, "metadata_module_inventory", cold_scan)
+    calls = []
+    def command(argv, **kwargs):
+        calls.append(kwargs["extra_env"]["MODULEPATH"])
+        return {"returncode": 0, "stdout": "later/Python/3.13\n", "stderr": "", "truncated": False}
+    monkeypatch.setattr(helper, "software_command", command)
+    m = helper.software_discovery({"environment_discovery": {"module_inventory_mode": "auto",
+        "module_availability_enabled": True, "python_executables": []}})["modules"]
+    assert m["module_paths"] == [str(early)] and m["truncated"]
+    assert m["intended_module_paths"] == paths and m["validated_module_paths"] == paths
+    assert calls == [":".join(paths)] and m["availability"]["module_paths"] == paths
+    assert m["availability"]["status"] == "available" and "later/Python/3.13" in m["available"]
+
+
+def test_availability_refuses_incomplete_path_validation(monkeypatch):
+    monkeypatch.setattr(helper, "software_command", lambda *_args, **_kwargs: pytest.fail("shortened path was used"))
+    m = {"available": [], "module_paths": ["/software/first"], "validated_module_paths": ["/software/first"],
+         "module_path_validation_truncated": True, "init_path": "/etc/profile.d/modules.sh", "partial": True}
+    helper.augment_module_availability(m)
+    assert m["availability"]["reason"] == "full_modulepath_validation_incomplete"
