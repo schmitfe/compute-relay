@@ -270,7 +270,8 @@ def cluster_new(request):
         if request.method == "POST" and form.is_valid():
             data = form.cleaned_data
             registration = ClusterRegistration.objects.create(owner=request.user, name=data["name"], backend=data["backend"],
-                host=data["host"], remote_user=data["user"], port=data["port"], requested_root=data["remote_root"])
+                host=data["host"], remote_user=data["user"], port=data["port"], requested_root=data["remote_root"],
+                connector_settings=data["connector_settings"])
             services.audit(None, request.user.id, "cluster.registered", registration.id)
             return redirect(f"/clusters/setup/{registration.id}/")
         return render(request, "broker/cluster_form.html", {"form": form})
@@ -290,8 +291,11 @@ def cluster_new(request):
 
 @human_view
 def cluster_detail(request, connection_id):
+    from .models import ClusterRegistration
     connection = get_object_or_404(owned_connections(request.user), id=connection_id)
     return render(request, "broker/cluster_detail.html", {"cluster": connection,
+        "personal_connector_allowed": connection.backend == "slurm" and connection.owner_id == request.user.id,
+        "personal_setup": ClusterRegistration.objects.filter(owner=request.user, connection=connection).first(),
         "snapshot_text": json.dumps(connection.discovery_snapshot, indent=2),
         "software": connection.discovery_snapshot.get("software", {}), "profile": connection.configuration.get("site_profile", {}),
         "environments": owned_environments(request.user).filter(connection=connection).order_by("name")})

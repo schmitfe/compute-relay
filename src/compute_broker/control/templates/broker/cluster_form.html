@@ -1,7 +1,7 @@
 {% extends "broker/base.html" %}{% block content %}
 <p><a href="/clusters/">Clusters</a>{% if setup %} / <a href="/clusters/setup/{{ setup.id }}/">{{ setup.name }}</a>{% endif %}</p>
 <h1>{% if setup %}Edit cluster details{% else %}Add a cluster{% endif %}</h1>
-<p>Save the login target first. A worker, credential profile and approved directory mapping can be configured afterward.</p>
-<p class="notice">Saving these details makes no SSH connection and creates no remote directory. Discovery and jobs become available after you connect a protected worker and identify the cluster.</p>
+<p>Save the login target, then download a personal connector setup to run on your device. You do not need to register a worker manually.</p>
+<p class="notice">Saving these details makes no SSH connection and creates no remote directory. Your SSH key, passphrase and second factor stay on the device running the connector. Optional local paths below are hints, not file uploads.</p>
 <section><form method="post">{% csrf_token %}{{ form.as_p }}<button>{% if setup %}Save details{% else %}Save cluster and continue setup{% endif %}</button></form></section>
 {% endblock %}

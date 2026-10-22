@@ -18,8 +18,9 @@ from .services import audit, digest
 
 
 def owned_registrations(user):
-    rows = ClusterRegistration.objects.all()
-    return rows if user.is_superuser else rows.filter(owner=user)
+    # Personal setup can enroll credentials for its owner, including when the
+    # caller has administrator privileges elsewhere in the portal.
+    return ClusterRegistration.objects.filter(owner=user)
 
 
 def canonical_root(value):
@@ -36,7 +37,16 @@ class RegistrationForm(forms.Form):
         help_text="Can be filled in later, before connecting the cluster.")
     port = forms.IntegerField(min_value=1, max_value=65535, initial=22)
     remote_root = forms.CharField(max_length=240, required=False, label="Proposed remote job directory",
-        help_text="Optional. You may propose a new directory; this only saves the plan. A protected worker must approve its mapping before use.")
+        help_text="Optional while saving. Set an absolute directory before starting your personal connector; the connector will identify the cluster before jobs are allowed.")
+    identity_file = forms.CharField(max_length=4096, required=False, strip=False,
+        label="Local SSH key path (optional)",
+        help_text="A path on the device that will run your connector, such as ~/.ssh/id_ed25519. Only the path is saved; the key and passphrase stay on that device.")
+    known_hosts = forms.CharField(max_length=4096, required=False, strip=False,
+        label="Local known-hosts path (optional)",
+        help_text="Use an absolute path or ~/.ssh/known_hosts on your device. If omitted, the connector manages its own host-key confirmation locally.")
+    session_seconds = forms.IntegerField(required=False, min_value=60, max_value=86400,
+        initial=28800, label="Requested SSH session lifetime (seconds)",
+        help_text="Default: 28,800 seconds (8 hours). This does not extend a shorter session permitted by the cluster.")
     setup_revision = forms.IntegerField(required=False, min_value=1, widget=forms.HiddenInput)
 
     def clean_host(self):
@@ -56,6 +66,20 @@ class RegistrationForm(forms.Form):
         if value and not canonical_root(value):
             raise forms.ValidationError("Use a canonical absolute directory without shell syntax, traversal or a trailing slash.")
         return value
+
+    def clean(self):
+        data = super().clean()
+        settings = {"session_seconds": data.get("session_seconds") or 28800}
+        for field in ("identity_file", "known_hosts"):
+            value = data.get(field, "")
+            if not value:
+                continue
+            if any(char in value for char in "\r\n\x00") or not value.startswith(("/", "~/")):
+                self.add_error(field, "Use an absolute path or a path beginning with ~/ without line breaks or NUL characters.")
+            else:
+                settings[field] = value
+        data["connector_settings"] = settings
+        return data
 
 
 class BindingForm(forms.Form):
@@ -151,6 +175,8 @@ def edit(request, registration_id):
     form = RegistrationForm(request.POST if request.method == "POST" else None, initial={
         "name": registration.name, "backend": registration.backend, "host": registration.host,
         "user": registration.remote_user, "port": registration.port, "remote_root": registration.requested_root,
+        **{key: value for key, value in registration.connector_settings.items()
+           if key in {"identity_file", "known_hosts", "session_seconds"}},
         "setup_revision": registration.revision})
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
@@ -159,7 +185,8 @@ def edit(request, registration_id):
                 raise BrokerError("SETUP_CHANGED", "This setup changed. Reload before saving.", 409)
             data = form.cleaned_data
             for field, value in {"name": data["name"], "backend": data["backend"], "host": data["host"],
-                    "remote_user": data["user"], "port": data["port"], "requested_root": data["remote_root"]}.items():
+                    "remote_user": data["user"], "port": data["port"], "requested_root": data["remote_root"],
+                    "connector_settings": data["connector_settings"]}.items():
                 setattr(current, field, value)
             current.revision += 1
             current.save()
