@@ -93,17 +93,22 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
         raise ValueError("Session lifetime must be 60–86400 seconds.")
     return {"schema_version": "1.0", "owner_id": owner, "registration_id": identifier,
         "broker_url": setup["broker_url"], "connection": private, "session_seconds": lifetime,
-        "allow_insecure_http": allow_insecure_http, "site_profile": setup["site_profile"]}
+        "allow_insecure_http": allow_insecure_http, "site_profile": setup["site_profile"],
+        "module_discovery_mode": "auto"}
 
 
 def runtime_profile(state, session):
     connection = session.runtime_configuration()
+    connection["remote_root"] = state["connection"]["remote_root"]
     alias = "personal-" + UUID(state["registration_id"]).hex[:16]
     profile = {"backend": "slurm", "allowed_hosts": [connection["ssh"]["host"]],
         "allowed_users": [connection["ssh"]["user"]], "allowed_ports": [connection["ssh"]["port"]],
         "remote_root_prefixes": [connection["remote_root"]], "profile_revision": 1,
         "site_profile": state["site_profile"], "python_path": connection["python_path"],
         "ssh": {key: value for key, value in connection["ssh"].items() if key not in {"host", "user", "port"}}}
+    profile["profile_revision"] = state.get("profile_generation", 1)
+    if state.get("module_discovery_mode") == "auto":
+        profile["environment_discovery"] = {"module_inventory_mode": "auto"}
     return alias, profile
 
 
@@ -121,21 +126,28 @@ def pair(setup, state, session, *, client_factory=JsonClient):
 
 async def serve(state, session, state_directory, *, once=False, deadline=None):
     from .async_client import AsyncJsonClient
-    from .async_runner import AsyncWorker
+    from .personal_setup import PersonalWorker
     from .journal import Journal
     alias, profile = runtime_profile(state, session)
     client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
-    worker = AsyncWorker(client, {}, Journal(state_directory / "journal"), credential_profiles={alias: profile},
-        extensions=[], owner_id=state["owner_id"])
+    worker = PersonalWorker(client, {}, Journal(state_directory / "journal"), credential_profiles={alias: profile},
+        extensions=[], owner_id=state["owner_id"], state=state, session=session, state_directory=state_directory)
     try:
         remaining = max(0, deadline - time.monotonic()) if deadline is not None else state["session_seconds"]
         async with asyncio.timeout(remaining):
+            try:
+                await worker.hello()
+            except ControlError as error:
+                if error.status == 401:
+                    print("Connector access was withdrawn. Sign in to the portal before reconnecting.", file=sys.stderr)
+                    return
+                raise
             while True:
                 if not session.check():
                     print("SSH session ended. Restart the connector to sign in again.", file=sys.stderr)
                     return
                 try:
-                    worked = await worker.poll_once()
+                    worked = await worker.setup_once() or await worker.poll_once()
                 except ControlError as error:
                     if error.status in {401, 403}:
                         print("Connector access was withdrawn. Sign in to the portal before reconnecting.", file=sys.stderr)
@@ -192,6 +204,9 @@ def run(args):
             session.start(interactive=not args.non_interactive)
             deadline = time.monotonic() + state["session_seconds"]
             if setup:
+                if not state["connection"].get("remote_root"):
+                    from .personal_setup import default_work_root
+                    state["connection"]["remote_root"] = asyncio.run(default_work_root(session))
                 write_private(directory / "pairing-pending.json", {"registration_id": state["registration_id"]})
                 state = pair(setup, state, session)
                 write_private(path, state)

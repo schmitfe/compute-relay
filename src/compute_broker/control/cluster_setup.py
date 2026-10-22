@@ -36,8 +36,8 @@ class RegistrationForm(forms.Form):
     user = forms.CharField(max_length=80, required=False, label="Remote username",
         help_text="Can be filled in later, before connecting the cluster.")
     port = forms.IntegerField(min_value=1, max_value=65535, initial=22)
-    remote_root = forms.CharField(max_length=240, required=False, label="Proposed remote job directory",
-        help_text="Optional while saving. Set an absolute directory before starting your personal connector; the connector will identify the cluster before jobs are allowed.")
+    remote_root = forms.CharField(max_length=240, required=False, label="Working directory hint (optional)",
+        help_text="You can choose this after connecting. The running connector lets you browse remote directories and confirm the baseline working directory.")
     identity_file = forms.CharField(max_length=4096, required=False, strip=False,
         label="Local SSH key path (optional)",
         help_text="Leave empty to choose your key in a native file picker on your device when the connector starts. Or enter a local path such as ~/.ssh/id_ed25519. Only the path is saved; the key and passphrase stay local.")

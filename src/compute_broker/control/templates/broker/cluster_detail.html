@@ -1,12 +1,12 @@
 {% extends "broker/base.html" %}{% block content %}
 <p><a href="/clusters/">Clusters</a> / {{ cluster.name }}</p>
-<h1>{{ cluster.name }}</h1>
+<h1 data-discovery-state="{{ cluster.discovery_state }}" data-configuration-confirmed="{{ cluster.configuration_confirmed|yesno:'true,false' }}">{{ cluster.name }}</h1>
 <nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></nav>
 {% if cluster.owner_id == user.id %}<p><a href="/clusters/{{ cluster.id }}/remove/">Remove cluster configuration</a></p>{% endif %}
 <p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }} · Discovery: <strong>{{ cluster.discovery_state }}</strong></p>
 <p>Job directory: <code>{{ cluster.configuration.remote_root|default:"Legacy configuration" }}</code></p>
 <details><summary>Advanced connection details</summary><p>Worker: <a href="/workers/{{ cluster.worker_id }}/">{{ cluster.worker.name }}</a> · Credential profile: {{ cluster.configuration.credential_profile|default:"Legacy configuration" }}</p></details>
-{% if not cluster.setup_complete %}<p class="notice">Worker connected · Identification required. This cluster remains unavailable to project execution until its first discovery succeeds.</p>{% endif %}
+{% if not cluster.setup_complete %}<p class="notice">Worker connected · {% if cluster.discovery_state == "ready" and not cluster.configuration_confirmed %}Discovery completed. Confirm cluster configuration before submitting jobs.{% else %}Identification required. This cluster remains unavailable to project execution until its first discovery succeeds.{% endif %}</p>{% endif %}
 {% if cluster.discovery_error %}<p class="error">{{ cluster.discovery_error }}. Check the connector's settings and authentication. Reconnect through its local terminal or trusted operator channel when SSH or MFA login is required.</p>{% endif %}
 {% if personal_connector_allowed %}
 <section><h2>Personal connector</h2>
@@ -64,10 +64,12 @@
 </tbody></table></div>
 <p>Discovery searches only configured environment directories. An absent entry can mean its location has not been configured.</p>
 </section>
-<section><h2>Execution profile</h2>
-{% if profile.automatic_execution_allowed == False %}<p class="notice">This cluster profile requires human confirmation for every execution. Automatic project or API-key settings cannot override it. Timing and allocation assumptions need verification before unattended execution.</p>{% endif %}
+<section><div class="row"><h2>Cluster configuration</h2>{% if personal_configuration %}<a class="button" href="/clusters/{{ cluster.id }}/configuration/">Configure cluster</a>{% endif %}</div>
+{% if not cluster.configuration_confirmed %}<p class="notice">Discovery has completed. Choose the working directory and confirm the cluster configuration before submitting jobs.</p>{% endif %}
+<p>Baseline working directory: <code>{{ cluster.configuration.remote_root }}</code>{% if personal_configuration %} · <a href="/clusters/{{ cluster.id }}/directories/">Browse remote directories</a>{% endif %}</p>
+{% if profile.automatic_execution_allowed == False %}<p class="notice">This cluster configuration requires human confirmation for every execution. Automatic project or API-key settings cannot override it. Timing and allocation assumptions need verification before unattended execution.</p>{% endif %}
 <p>Partitions: {{ profile.partitions|join:", " }}<br>Accounts: {{ profile.accounts|join:", " }}<br>Maximum CPUs: {{ profile.maximum_cpus|default:"Not configured" }}<br>Maximum memory (MiB): {{ profile.maximum_memory_mib|default:"Not configured" }}<br>Termination / overtime / cleanup seconds: {{ profile.termination_margin_seconds }} / {{ profile.overtime_margin_seconds }} / {{ profile.cleanup_margin_seconds }}</p>
-<p>Timing margins and allocation bounds come from the worker profile. Discovery alone does not enable unattended spending.</p></section>
+<p>Resource defaults come from discovered capacities and can be adjusted in cluster configuration. Timing margins still need verification; discovery alone does not enable unattended spending.</p></section>
 <details><summary>Saved discovery JSON, including historical states</summary><pre>{{ snapshot_text }}</pre></details>
 <script>
 const moduleFilter = document.getElementById('module-filter');

@@ -6,6 +6,7 @@ from . import cluster_setup
 from . import worker_management
 from . import personal_connectors
 from . import cluster_removal
+from . import connector_setup
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -24,6 +25,10 @@ urlpatterns = [
     path("clusters/setup/<uuid:registration_id>/connect/", personal_connectors.download),
     path("clusters/<uuid:connection_id>/connect/", personal_connectors.download_connection),
     path("internal/v1/connectors/enroll", personal_connectors.enroll),
+    path("internal/v1/connectors/tasks", connector_setup.tasks),
+    path("internal/v1/connectors/tasks/<uuid:task_id>/report", connector_setup.report),
+    path("clusters/<uuid:connection_id>/configuration/", connector_setup.configure),
+    path("clusters/<uuid:connection_id>/directories/", connector_setup.directories),
     path("clusters/setup/<uuid:registration_id>/remove/", cluster_removal.registration),
     path("clusters/<uuid:connection_id>/remove/", cluster_removal.connection),
     path("workers/new/", worker_management.worker_new),

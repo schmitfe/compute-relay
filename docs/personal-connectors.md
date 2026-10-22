@@ -13,9 +13,11 @@ sharing a project's allowance does not delegate another user's HPC account.
 ## Save the cluster and download its setup
 
 1. Sign in to the human portal and open **Clusters → Add a cluster**.
-2. Enter the Slurm login hostname, remote username, SSH port and proposed remote
-   job directory. You may initially save without the username or directory, but
-   both are needed before starting the connector.
+2. Enter the Slurm login hostname, remote username and SSH port. The working
+   directory is optional: choose it interactively through the running connector
+   after discovery. If omitted, the connector identifies the remote account's
+   canonical home and proposes `.compute-broker/jobs` beneath it without creating
+   that directory. The username is needed before starting the connector.
 3. Leave the SSH key path empty to choose the file with your device's native
    picker at interactive connector startup. You may instead enter SSH key and
    known-hosts **paths on your device**, using an absolute path or one beginning
@@ -112,11 +114,28 @@ permission checks; a directory or missing file is not a valid key selection.
 
 After local authentication, the connector enrolls its owner-scoped worker,
 publishes a narrow profile for the selected target, binds the cluster and runs
-read-only discovery. Reload the portal to see the saved result. The first
-successful discovery completes the connection setup; it does not grant project
-access or permit automatic compute spending. Review the site resource/timing
-assumptions, add environment recipes and explicitly allow the connection in a
-project before submitting work.
+read-only discovery. Reload the portal and open **Configure cluster**. Missing
+resource limits are populated from discovered single-node maxima, within the
+broker's supported job sizes. Existing owner edits survive rediscovery. The
+personal software inventory uses the site's module search paths and a
+provisional filename catalog; it does not evaluate modulefiles or load modules.
+
+Select **Browse directories on this cluster** to navigate folders through the
+running worker. Only bounded directory metadata returns to your human session;
+there is no general remote command or file-content browser for agents. Select
+a baseline directory or edit its path, then confirm resource limits and explicit
+accounting bounds. The worker validates access without creating files, saves its
+new protected scope locally and acknowledges it before job access is enabled.
+Changes are refused while execution or accounting is unsettled. Project/key
+permissions, environment recipes and execution review still apply afterward.
+See [cluster configuration](cluster-configuration.md) and
+[module discovery](module-discovery.md).
+
+After upgrading an older personal connector, restart with the same state
+directory. When idle, it refreshes discovery and asks for post-login
+configuration confirmation. If old executions still need accounting, their
+existing profile is kept until they settle; automatic migration must not move
+an active execution to another directory or resource binding.
 
 ## Resume and reconnect
 
@@ -186,6 +205,15 @@ connector-owned SSH master. SIGKILL, host crashes and power loss cannot run that
 cleanup. Inspect any stale socket or master through a trusted local operator
 channel before removing files; the connector refuses an unknown pre-existing
 socket. A local journal with a submission intent must be preserved for recovery.
+
+Configuration acknowledgements are replayable. A locally saved configuration
+receipt freezes its canonical path across retries and restarts. If confirmation
+does not reach the broker before the five-minute request expires, new execution
+stays blocked: open **Configure cluster** and explicitly save it again. Do not
+delete local state or roll back an uncertain configuration. Expired account
+verification pauses new setup operations while existing jobs continue through
+the core observation and accounting path; revoked worker credentials still
+close the session.
 
 Advanced operators can still register and bind workers manually from the setup
 page's **Advanced** section. That path retains its explicit profile/target/root

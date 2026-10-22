@@ -9,8 +9,67 @@ import subprocess
 import sys
 import tempfile
 import time
+from html import unescape
+from html.parser import HTMLParser
+from urllib.parse import urlsplit
 
 from container_smoke import Client, SmokeFailure, require, run as job_smoke
+
+
+class ConfigurationFields(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.values = {}
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "input" and values.get("name"):
+            self.values[values["name"]] = values.get("value", "")
+
+
+def redirected_path(client):
+    parsed = urlsplit(client.last_url)
+    return parsed.path + ("?" + parsed.query if parsed.query else "")
+
+
+def finish_configuration(human, demo, directory):
+    import re
+    connection_id = demo["connection_id"]
+    page = human.request("GET", f"/clusters/{connection_id}/configuration/", binary=True)
+    fields = ConfigurationFields();fields.feed(page.decode())
+    human.request("POST", f"/clusters/{connection_id}/directories/", {
+        "path": "", "connection_revision": fields.values["connection_revision"]}, form=True, binary=True)
+    pending = redirected_path(human)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        page = human.request("GET", pending, binary=True)
+        match = re.search(rb'data-home="([^"]+)"', page)
+        if match:
+            home = unescape(match.group(1).decode())
+            break
+        time.sleep(0.25)
+    else:
+        raise SmokeFailure("Remote directory listing timed out")
+    # Select a baseline outside the original fixture profile. This demonstrates
+    # owner-approved scope changes and no-write preflight before real execution.
+    chosen = home + "/personal-broker-jobs"
+    page = human.request("GET", f"/clusters/{connection_id}/configuration/", binary=True)
+    fields = ConfigurationFields();fields.feed(page.decode())
+    fields.values["remote_root"] = chosen
+    human.request("POST", f"/clusters/{connection_id}/configuration/", fields.values, form=True, binary=True)
+    pending = redirected_path(human)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        page = human.request("GET", pending, binary=True)
+        if b'id="setup-task" data-state="succeeded"' in page:
+            break
+        if b'id="setup-task" data-state="failed"' in page:
+            raise SmokeFailure("Cluster configuration was rejected by its connector")
+        time.sleep(0.25)
+    else:
+        raise SmokeFailure("Cluster configuration did not finish")
+    saved = json.loads((directory / "state.json").read_bytes())
+    require(saved["connection"]["remote_root"] == chosen, "Selected baseline was not persisted locally")
 
 
 def run():
@@ -47,8 +106,8 @@ def run():
                 agent = Client(base, token=(args.demo_file.parent / "agent-token").read_text().strip())
                 while time.monotonic() < deadline:
                     require(worker.poll() is None, "Personal connector exited during pairing or discovery")
-                    entries = agent.request("GET", "/api/v1/connections")["connections"]
-                    if (directory / "state.json").exists() and any(row["id"] == demo["connection_id"] and row["auth_state"] == "ready" for row in entries):
+                    page = human.request("GET", f"/clusters/{demo['connection_id']}/", binary=True)
+                    if (directory / "state.json").exists() and b'data-discovery-state="ready"' in page and json.loads((directory / "state.json").read_bytes()).get("defaults_initialized"):
                         break
                     time.sleep(0.25)
                 else:
@@ -56,6 +115,9 @@ def run():
                 require(all(p.stat().st_mode & 0o777 == 0o700 for p in [root / "connectors", directory]), "Nested state was not created privately")
                 state = json.loads((directory / "state.json").read_bytes())
                 require(state["connection_id"] == demo["connection_id"], "Pairing replaced the cluster identity")
+                require(not agent.request("GET", "/api/v1/connections")["connections"], "Unconfirmed configuration is available to agents")
+                run.stage = "post_login_directory_and_configuration"
+                finish_configuration(human, demo, directory)
                 # Real submitted Python, result hashes and final Slurm accounting
                 # all travel through the newly established master socket.
                 run.stage = "reviewed_native_job"
@@ -81,7 +143,8 @@ def run():
                 rb'name="(setup_revision|connection_revision_sha256)" value="([^"]*)"', confirmation)}
             human.request("POST", removal_path, fields, form=True, binary=True)
             resumed.wait(timeout=15)
-            require(resumed.returncode == 0 and not (directory / "s").exists(), "Revocation left the connector or its SSH master active")
+            require(resumed.returncode == 0 and not (directory / "s").exists(),
+                f"Revocation did not finish cleanly (exit={resumed.returncode}, socket_present={(directory / 's').exists()})")
             require(not agent.request("GET", "/api/v1/connections")["connections"], "Removed configuration remains executable")
         finally:
             if resumed.poll() is None:
@@ -89,7 +152,8 @@ def run():
         print(json.dumps({"ok": True, "fixture_only": True, "automatic_worker_pairing": True,
             "native_ssh_master": True, "nested_private_state": True, "discovery": True, "reviewed_slurm_execution": True,
             "same_worker_on_resume": True, "master_closed_on_shutdown": True,
-            "removed_configuration": True, "master_closed_on_revocation": True}))
+            "removed_configuration": True, "master_closed_on_revocation": True,
+            "post_login_directory_browser": True, "owner_configuration_persisted": True}))
 
 
 if __name__ == "__main__":

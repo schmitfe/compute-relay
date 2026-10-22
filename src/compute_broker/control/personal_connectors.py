@@ -26,10 +26,10 @@ def require_owner(user):
 def target(registration):
     if registration.archived or (registration.connection_id and registration.connection.archived):
         raise BrokerError("CLUSTER_REMOVED", "This cluster configuration was removed.", 409)
-    if registration.backend != "slurm" or not registration.remote_user or not registration.requested_root:
-        raise BrokerError("SETUP_INCOMPLETE", "Set a Slurm hostname, username and job directory first.", 409)
+    if registration.backend != "slurm" or not registration.remote_user:
+        raise BrokerError("SETUP_INCOMPLETE", "Set a Slurm hostname and remote username first.", 409)
     from .cluster_setup import canonical_root
-    if not canonical_root(registration.requested_root):
+    if registration.requested_root and not canonical_root(registration.requested_root):
         raise BrokerError("SETUP_INCOMPLETE", "Set a canonical job directory first.", 409)
     return {"host": registration.host, "user": registration.remote_user, "port": registration.port}
 
@@ -129,9 +129,13 @@ def enroll(request):
             registration.connection = current
         # The local connector chooses a private runtime, but cannot widen the
         # target or grant itself an automatic-execution site policy.
+        from .cluster_setup import canonical_root
+        roots = profile.get("remote_root_prefixes") if isinstance(profile, dict) else None
         if (not isinstance(profile, dict) or profile.get("backend") != "slurm"
                 or profile.get("allowed_hosts") != [ssh["host"]] or profile.get("allowed_users") != [ssh["user"]]
-                or profile.get("allowed_ports") != [ssh["port"]] or profile.get("remote_root_prefixes") != [registration.requested_root]
+                or profile.get("allowed_ports") != [ssh["port"]]
+                or not isinstance(roots, list) or len(roots) != 1 or not canonical_root(roots[0])
+                or (registration.requested_root and roots != [registration.requested_root])
                 or profile.get("site_profile") != site_profile(registration)):
             raise BrokerError("PAIRING_SCOPE", "Connector scope does not match the saved cluster.", 403)
         check_idle(registration)
@@ -139,7 +143,7 @@ def enroll(request):
         worker = WorkerIdentity.objects.create(owner=owner, name=registration.name[:69] + " connector", token_hash=token_hash(secret))
         publish_profiles(worker, {"profiles": [profile], "extensions": []})
         configuration = {"backend": "slurm", "credential_profile": profile["alias"], "ssh": ssh,
-            "remote_root": registration.requested_root, "site_profile": site_profile(registration),
+            "remote_root": roots[0], "site_profile": site_profile(registration),
             "credential_profile_revision_sha256": profile["revision_sha256"]}
         if registration.connection_id:
             connection = Connection.objects.select_for_update().get(pk=registration.connection_id, owner=owner)
@@ -150,6 +154,7 @@ def enroll(request):
             connection.worker = worker
             connection.configuration, connection.revision_sha256 = configuration, digest(configuration)
             connection.setup_complete, connection.discovery_state, connection.auth_state = False, "queued", "discovery_required"
+            connection.configuration_confirmed = False
             connection.discovery_lease_id = connection.discovery_lease_expires_at = None
             connection.save()
             if (ConnectorEnrollment.objects.filter(worker=old_worker, consumed_at__isnull=False).exists()
@@ -158,10 +163,12 @@ def enroll(request):
         else:
             connection = Connection.objects.create(owner=owner, worker=worker, name=registration.name, backend="slurm",
                 configuration=configuration, revision_sha256=digest(configuration), setup_complete=False,
+                configuration_confirmed=False,
                 auth_state="discovery_required", discovery_state="queued")
             registration.connection = connection
         registration.revision += 1
-        registration.save(update_fields=["connection", "revision"])
+        registration.requested_root = roots[0]
+        registration.save(update_fields=["connection", "revision", "requested_root"])
         pairing.worker, pairing.consumed_at = worker, timezone.now()
         pairing.save(update_fields=["worker", "consumed_at"])
         audit(None, owner.id, "connector.paired", worker.id, {"connection_id": str(connection.id)})

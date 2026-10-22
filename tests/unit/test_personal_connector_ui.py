@@ -71,7 +71,7 @@ def test_personal_setup_is_primary_with_revision_and_csrf(management):
     assert "No compute job is submitted during setup" in body
 
 
-@pytest.mark.parametrize("changes", [{"user": ""}, {"remote_root": ""}, {"backend": "fake"}])
+@pytest.mark.parametrize("changes", [{"user": ""}, {"backend": "fake"}])
 def test_incomplete_and_simulator_setups_do_not_offer_personal_download(management, changes):
     client = human(management.owner)
     response = form_post(client, "/clusters/new/", registration_data(**{"backend": "slurm", **changes}))

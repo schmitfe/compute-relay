@@ -1,0 +1,31 @@
+{% extends "broker/base.html" %}
+{% block content %}
+<p><a href="/clusters/{{ cluster.id }}/">← {{ cluster.name }}</a></p>
+<h1>Cluster configuration</h1>
+<p>Connect first, then choose the working directory and the resources this connection may use. Initial limits use the largest discovered single-node capacities within the broker's supported job sizes. Partitions may overlap, and visible capacity does not reserve resources or prove account access.</p>
+{% if not connector_ready %}<p class="notice">Restart your personal connector with the updated broker environment to enable directory browsing and configuration changes.</p>{% endif %}
+{% if not cluster.configuration_confirmed %}<p class="notice">Discovery is available. Confirm this configuration before the cluster can receive jobs.</p>{% endif %}
+{% if task %}<p id="setup-task" data-state="{{ task.state }}">Request: {{ task.state }}</p>{% endif %}
+{% if waiting %}<p role="status">Waiting for your connector to validate and save the configuration. Keep the connector running.</p><script>setTimeout(() => location.reload(), 1500);</script>
+{% elif task.state == "succeeded" %}<p class="notice">Configuration saved. Working directory: <code>{{ task.result.path }}</code>.</p>
+{% elif task %}<p class="error">The configuration was not completed: {{ task.error_code|default:"The request expired" }}. Check the directory and connector, then retry.</p>{% endif %}
+{% if derived.warnings %}<ul>{% for item in derived.warnings %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+{% if derived.unknowns %}<p>Not established by discovery: {{ derived.unknowns|join:", " }}. Set explicit limits where required.</p>{% endif %}
+<form method="post">
+{% csrf_token %}<input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}">
+<section><h2>Working directory</h2>
+<label>Baseline working directory <input name="remote_root" value="{{ remote_root }}" maxlength="240" required></label>
+{% if root_error %}<p class="error">{{ root_error }}</p>{% endif %}
+<p>The connector checks this path using your HPC account. Choosing it does not create files; private job directories are created only when an execution is accepted.</p>
+<a class="button secondary" href="/clusters/{{ cluster.id }}/directories/">Browse directories on this cluster</a></section>
+<section><h2>Resource limits and scheduler access</h2>{{ form.non_field_errors }}
+{% for field in form.resource_fields %}<p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</p>{% endfor %}
+<p>CPU, GPU and memory limits are per job. Project and API-key limits still apply. Discovery does not verify termination, overtime or cleanup bounds and does not enable automatic spending.</p></section>
+<section><h2>Accounting bounds for reviewed jobs</h2>
+<p>Enter explicit site assumptions. Scheduler suggestions need your confirmation; cleanup cannot be inferred from discovery. Changing these bounds keeps automatic execution disabled.</p>
+{% if form.timing_suggestions.termination_margin_seconds %}<p>Saved scheduler termination suggestion: {{ form.timing_suggestions.termination_margin_seconds.value }} seconds across {{ form.timing_suggestions.termination_margin_seconds.partitions|join:", " }}.</p>{% endif %}
+{% if form.timing_suggestions.overtime_margin_seconds %}<p>Saved scheduler overtime suggestion: {{ form.timing_suggestions.overtime_margin_seconds.value }} seconds across {{ form.timing_suggestions.overtime_margin_seconds.partitions|join:", " }}.</p>{% endif %}
+{% for field in form.timing_fields %}<p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</p>{% endfor %}</section>
+<button type="submit"{% if waiting or not connector_ready %} disabled{% endif %}>Validate and save cluster configuration</button>
+</form>
+{% endblock %}

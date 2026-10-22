@@ -1,5 +1,14 @@
 # Cluster configuration defaults and owner review
 
+After your personal connector finishes discovery, open the cluster overview and
+select **Configure cluster**. Browse remote directories through the connected
+worker, choose a baseline working directory, review discovered resource defaults
+and supply the explicit accounting bounds. Saving queues a human-owned setup
+request; the worker validates the path, persists its new scope and acknowledges
+the configuration before new jobs are allowed. No remote files are created by
+selection or validation. Existing execution and accounting must finish before
+the configuration can change. Project keys cannot access these setup routes.
+
 **Cluster configuration** is the human-facing name. The internal configuration
 object remains `site_profile`, so existing packages and worker profiles retain
 their versioned field names. This guide describes the derivation/form contract;

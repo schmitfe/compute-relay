@@ -111,7 +111,7 @@ jobs:
         run: docker compose build control slurm personal-smoke
       - name: Start broker and Slurm without a manually registered worker
         run: docker compose up -d --wait control slurm
-      - name: Verify automatic pairing, native execution, shutdown and resume
+      - name: Verify pairing, post-login configuration, directory browsing and execution
         run: docker compose run --rm --no-deps personal-smoke
       - name: Remove disposable services and generated credentials
         if: always()

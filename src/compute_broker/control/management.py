@@ -292,10 +292,12 @@ def cluster_new(request):
 @human_view
 def cluster_detail(request, connection_id):
     from .models import ClusterRegistration
+    from .connector_setup import personal
     connection = get_object_or_404(owned_connections(request.user), id=connection_id)
     return render(request, "broker/cluster_detail.html", {"cluster": connection,
         "personal_connector_allowed": connection.backend == "slurm" and connection.owner_id == request.user.id,
         "personal_setup": ClusterRegistration.objects.filter(owner=request.user, connection=connection).first(),
+        "personal_configuration": connection.owner_id == request.user.id and personal(connection),
         "snapshot_text": json.dumps(connection.discovery_snapshot, indent=2),
         "software": connection.discovery_snapshot.get("software", {}), "profile": connection.configuration.get("site_profile", {}),
         "environments": owned_environments(request.user).filter(connection=connection).order_by("name")})

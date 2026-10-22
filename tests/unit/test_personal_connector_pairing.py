@@ -31,10 +31,10 @@ def download(context):
     return response.json()
 
 
-def public_profile(registration):
+def public_profile(registration, root=None):
     return profile_metadata("personal-test", {"backend": "slurm", "allowed_hosts": [registration.host],
         "allowed_users": [registration.remote_user], "allowed_ports": [registration.port],
-        "remote_root_prefixes": [registration.requested_root], "site_profile": {"automatic_execution_allowed": False},
+        "remote_root_prefixes": [root or registration.requested_root], "site_profile": {"automatic_execution_allowed": False},
         "ssh": {"mode": "mfa", "control_path": "/private/local/s", "known_hosts": "/private/local/known_hosts"}})
 
 
@@ -62,6 +62,19 @@ def test_pairing_automatically_creates_owned_worker_and_discovery_binding(setup_
     assert "/private/local" not in serialized and "lab-key" not in serialized
     assert enroll(setup_cluster, document).status_code == 409
     assert WorkerIdentity.objects.count() == 1
+
+
+def test_working_directory_can_be_chosen_after_personal_login(setup_cluster):
+    _, registration, _ = setup_cluster
+    registration.requested_root = "";registration.save()
+    document = download(setup_cluster)
+    assert document["remote_root"] == ""
+    root = "/home/hpc-user/.compute-broker/jobs"
+    response = enroll(setup_cluster, document, public_profile(registration, root=root))
+    assert response.status_code == 201
+    connection = Connection.objects.get()
+    assert connection.configuration["remote_root"] == root
+    assert not connection.configuration_confirmed and not connection.setup_complete
 
 
 @pytest.mark.parametrize("change", ["expired", "stale", "disabled", "reissued"])

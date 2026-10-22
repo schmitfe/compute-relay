@@ -84,6 +84,19 @@ def test_expired_setup_has_actionable_safe_cli_diagnostic(setup, tmp_path, sessi
     assert setup["pairing_token"] not in diagnostic and not sessions and not pairing.calls
 
 
+def test_empty_working_directory_is_identified_after_ssh_login(setup, tmp_path, sessions, pairing, served, monkeypatch):
+    from compute_broker.worker import personal_setup
+    setup["remote_root"] = ""
+    async def root(session):
+        assert session.started == [False]
+        return "/home/synthetic/.compute-broker/jobs"
+    monkeypatch.setattr(personal_setup, "default_work_root", root)
+    connector.run(arguments(tmp_path, setup))
+    saved = connector.read_private(tmp_path / "state/state.json")
+    assert saved["connection"]["remote_root"] == "/home/synthetic/.compute-broker/jobs"
+    assert pairing.calls[0][2]["profile"]["remote_root_prefixes"] == [saved["connection"]["remote_root"]]
+
+
 @pytest.fixture
 def setup():
     return {"schema_version": "1.0", "broker_url": "https://broker.example.invalid",
@@ -264,6 +277,7 @@ def test_private_setup_file_cannot_be_public_or_aliased(tmp_path, setup, session
 
 
 def patch_async_runtime(monkeypatch, *, poll):
+    from compute_broker.worker import personal_setup
     closed = []
     class Client:
         def __init__(self, *args, **kwargs):
@@ -275,8 +289,13 @@ def patch_async_runtime(monkeypatch, *, poll):
             pass
         async def poll_once(self):
             return await poll()
+        async def hello(self):
+            pass
+        async def setup_once(self):
+            return False
     monkeypatch.setattr(async_client, "AsyncJsonClient", Client)
     monkeypatch.setattr(async_runner, "AsyncWorker", Worker)
+    monkeypatch.setattr(personal_setup, "PersonalWorker", Worker)
     return closed
 
 
@@ -300,6 +319,20 @@ def test_revoked_connector_closes_client_and_master(tmp_path, setup, sessions, p
     closed = patch_async_runtime(monkeypatch, poll=withdrawn)
     connector.main(arguments(tmp_path, setup))
     assert closed == [True] and sessions[0].closed == 1
+
+
+def test_revocation_during_startup_is_graceful_and_closes_master(tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    from compute_broker.worker import personal_setup
+    async def poll():
+        pytest.fail("A revoked startup reached the core worker")
+    closed = patch_async_runtime(monkeypatch, poll=poll)
+    async def revoked(self):
+        raise ControlError("private-broker-body-must-not-appear", 401)
+    monkeypatch.setattr(personal_setup.PersonalWorker, "hello", revoked)
+    connector.main(arguments(tmp_path, setup))
+    assert closed == [True] and sessions[0].closed == 1
+    output = capsys.readouterr().err
+    assert "withdrawn" in output and "private-broker-body" not in output
 
 
 def test_sigterm_closes_master_and_restores_previous_handler(tmp_path, setup, sessions, pairing, monkeypatch, capsys):

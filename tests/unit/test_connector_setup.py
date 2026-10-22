@@ -1,0 +1,264 @@
+"""Owner-only remote setup through a leased personal connector."""
+
+from datetime import timedelta
+import json
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from django.test import Client
+from django.utils import timezone
+
+from compute_broker.control.auth import token_hash
+from compute_broker.control.models import (Connection, ConnectorEnrollment, ConnectorTask, ClusterRegistration,
+    User, WorkerIdentity)
+from compute_broker.control.services import digest
+from compute_broker.worker.enrollment import profile_metadata, resolve_connection
+
+pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture
+def personal():
+    owner = User.objects.create_user(username="personal-setup-owner")
+    token = "cbw_synthetic-connector-token"
+    site = {"partitions": ["cpu"], "accounts": [], "qos": [], "maximum_cpus": 8,
+        "maximum_gpus": 0, "maximum_memory_mib": 8192, "maximum_time_limit_seconds": 600,
+        "termination_margin_seconds": 30, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30,
+        "automatic_execution_allowed": False}
+    protected = {"backend": "slurm", "allowed_hosts": ["cluster.example"], "allowed_users": ["researcher"],
+        "allowed_ports": [22], "remote_root_prefixes": ["/home/researcher/jobs"], "site_profile": site,
+        "profile_revision": 1, "ssh": {"mode": "mfa", "control_path": "/private/s", "known_hosts": "/private/known_hosts"}}
+    metadata = profile_metadata("personal-test", protected)
+    worker = WorkerIdentity.objects.create(owner=owner, name="Personal", token_hash=token_hash(token),
+        profiles=[metadata], connector_features=["personal_setup_v1"])
+    public = resolve_connection({"backend": "slurm", "credential_profile": "personal-test",
+        "ssh": {"host": "cluster.example", "user": "researcher", "port": 22}, "remote_root": "/home/researcher/jobs"},
+        {"personal-test": protected})[1]
+    snapshot = {"nodes": [{"name": "n1", "partition": "cpu", "cpus": "8", "memory_mib": "8192", "gres": "(null)"}],
+        "partitions": [{"PartitionName": "cpu", "MaxTime": "00:10:00"}], "associations": []}
+    connection = Connection.objects.create(owner=owner, worker=worker, name="Cluster", backend="slurm",
+        configuration=public, revision_sha256=digest(public), discovery_snapshot=snapshot, discovery_state="ready")
+    registration = ClusterRegistration.objects.create(owner=owner, name="Cluster", host="cluster.example", remote_user="researcher",
+        requested_root="/home/researcher/jobs", connection=connection)
+    ConnectorEnrollment.objects.create(registration=registration, setup_revision=1, worker=worker,
+        token_hash=token_hash("cbpair_synthetic"), consumed_at=timezone.now(), expires_at=timezone.now() + timedelta(minutes=5))
+    human = Client();human.force_login(owner)
+    return SimpleNamespace(owner=owner, worker=worker, connection=connection, registration=registration, human=human,
+        token=token, protected=protected, site=site)
+
+
+def api(context, path, payload):
+    return Client().post(path, json.dumps(payload), content_type="application/json", HTTP_AUTHORIZATION="Bearer " + context.token)
+
+
+def queue_browse(context, path=""):
+    response = context.human.post(f"/clusters/{context.connection.id}/directories/", {
+        "path": path, "connection_revision": context.connection.revision_sha256})
+    assert response.status_code == 302
+    return ConnectorTask.objects.latest("created_at")
+
+
+def lease(context):
+    response = api(context, "/internal/v1/connectors/tasks", {"connection_id": str(context.connection.id)})
+    assert response.status_code == 200
+    return response.json()["task"]
+
+
+def reply(context, task, **changes):
+    return api(context, f"/internal/v1/connectors/tasks/{task['id']}/report", {
+        "connection_id": str(context.connection.id), "lease_id": task["lease_id"], "generation": task["generation"],
+        "outcome": "succeeded", "result": {"ok": True, "path": "/home/researcher", "parent": "/home", "home": "/home/researcher",
+            "entries": [{"name": "science", "path": "/home/researcher/science"}], "writable": True, "truncated": False,
+            "scanned_entries": 1}, **changes})
+
+
+def test_directory_listing_is_queued_owned_and_read_only(personal):
+    context = personal
+    assert context.human.get(f"/clusters/{context.connection.id}/directories/").status_code == 200
+    assert not ConnectorTask.objects.exists()
+    queue_browse(context)
+    task = lease(context)
+    assert task["kind"] == "browse" and task["request"] == {"path": ""}
+    assert reply(context, task).status_code == 200
+    assert reply(context, task).status_code == 200
+    page = context.human.get(f"/clusters/{context.connection.id}/directories/?task={task['id']}")
+    assert b"science/" in page.content and b"Use this working directory" in page.content
+
+
+@pytest.mark.parametrize("superuser", [False, True])
+def test_other_users_cannot_browse_or_edit_personal_configuration(personal, superuser):
+    other = User.objects.create_user(username="other-owner", is_superuser=superuser)
+    client = Client();client.force_login(other)
+    for endpoint in ("directories", "configuration"):
+        assert client.get(f"/clusters/{personal.connection.id}/{endpoint}/").status_code == 404
+    assert not ConnectorTask.objects.exists()
+
+
+def test_agent_bearer_is_not_a_human_setup_session(personal):
+    response = Client().post(f"/clusters/{personal.connection.id}/directories/", {"path": "/"},
+        HTTP_AUTHORIZATION="Bearer cbp_synthetic-agent")
+    assert response.status_code == 403 and not ConnectorTask.objects.exists()
+
+
+def test_directory_mutation_requires_csrf(personal):
+    client = Client(enforce_csrf_checks=True);client.force_login(personal.owner)
+    assert client.post(f"/clusters/{personal.connection.id}/directories/", {"path": "/"}).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["relative", "/tmp/../etc", "/tmp;touch", "/tmp//path"])
+def test_invalid_directory_paths_never_reach_worker(personal, path):
+    response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {
+        "path": path, "connection_revision": personal.connection.revision_sha256})
+    assert response.status_code == 400 and not ConnectorTask.objects.exists()
+
+
+def test_stale_owner_request_does_not_queue(personal):
+    response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {"connection_revision": "a" * 64})
+    assert response.status_code == 409 and not ConnectorTask.objects.exists()
+
+
+def test_old_connector_gets_upgrade_guidance(personal):
+    personal.worker.connector_features = [];personal.worker.save()
+    response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {
+        "connection_revision": personal.connection.revision_sha256})
+    assert response.status_code == 409 and b"Restart" in response.content
+
+
+def test_revised_or_expired_task_cannot_change_configuration(personal):
+    task = queue_browse(personal)
+    current = lease(personal)
+    task.expires_at = timezone.now() - timedelta(seconds=1);task.save()
+    assert reply(personal, current).status_code == 409
+
+
+def test_worker_cannot_report_someone_elses_task(personal):
+    queue_browse(personal)
+    current = lease(personal)
+    other = WorkerIdentity.objects.create(owner=personal.owner, name="Another", token_hash=token_hash("cbw_other"))
+    response = Client().post(f"/internal/v1/connectors/tasks/{current['id']}/report", json.dumps({
+        "connection_id": str(personal.connection.id)}), content_type="application/json", HTTP_AUTHORIZATION="Bearer cbw_other")
+    assert response.status_code == 404
+
+
+def test_worker_hello_defers_new_jobs_until_post_login_confirmation(personal):
+    response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
+        "hello": True, "needs_discovery": True})
+    assert response.status_code == 200
+    personal.connection.refresh_from_db()
+    assert not personal.connection.setup_complete and not personal.connection.configuration_confirmed
+    assert personal.connection.discovery_state == "queued"
+
+
+def test_directory_results_are_escaped(personal):
+    queue_browse(personal)
+    current = lease(personal)
+    result = {"ok": True, "path": "/home/researcher", "entries": [{"name": "<script>bad</script>", "path": "/home/researcher/test"}]}
+    assert reply(personal, current, result=result).status_code == 200
+    page = personal.human.get(f"/clusters/{personal.connection.id}/directories/?task={current['id']}")
+    assert b"&lt;script&gt;bad&lt;/script&gt;" in page.content and b"<script>bad</script>" not in page.content
+
+
+def configuration_fields(context, **changes):
+    result = {key: ", ".join(value) if isinstance(value, list) else value for key, value in context.site.items()
+        if key != "automatic_execution_allowed"}
+    return {**result, "remote_root": "/scratch/researcher/jobs", "connection_revision": context.connection.revision_sha256, **changes}
+
+
+def test_human_configuration_requires_worker_ack_and_pins_profile(personal):
+    context = personal
+    response = context.human.post(f"/clusters/{context.connection.id}/configuration/", configuration_fields(context, maximum_cpus=4))
+    assert response.status_code == 302
+    context.connection.refresh_from_db()
+    assert not context.connection.setup_complete
+    task = lease(context)
+    assert task["kind"] == "configure" and task["request"]["site_profile"]["maximum_cpus"] == 4
+    protected = {**context.protected, "remote_root_prefixes": [task["request"]["remote_root"]],
+        "site_profile": task["request"]["site_profile"], "profile_revision": 2}
+    context.worker.profiles = [profile_metadata("personal-test", protected)];context.worker.save()
+    config = resolve_connection({**context.connection.configuration, "remote_root": task["request"]["remote_root"]},
+        {"personal-test": protected}, refresh=True)[1]
+    result = {"ok": True, "path": task["request"]["remote_root"], "writable": True, "exists": False}
+    assert reply(context, task, result=result, configuration=config).status_code == 200
+    context.connection.refresh_from_db();context.registration.refresh_from_db()
+    assert context.connection.configuration["site_profile"]["maximum_cpus"] == 4
+    assert context.connection.configuration_confirmed and context.connection.setup_complete
+    assert context.registration.requested_root == "/scratch/researcher/jobs"
+    assert reply(context, task, result=result, configuration=config).status_code == 200
+
+
+def test_unconfirmed_discovery_does_not_enable_agent_execution(personal):
+    context = personal
+    context.connection.configuration_confirmed = False;context.connection.setup_complete = False;context.connection.save()
+    response = context.human.get(f"/clusters/{context.connection.id}/configuration/")
+    assert response.status_code == 200 and b"Confirm this configuration" in response.content
+
+
+def test_bad_configuration_ack_cannot_widen_selected_limits(personal):
+    context = personal
+    response = context.human.post(f"/clusters/{context.connection.id}/configuration/", configuration_fields(context, maximum_cpus=4))
+    assert response.status_code == 302
+    task = lease(context)
+    assert reply(context, task, configuration=context.connection.configuration,
+        result={"ok": True, "path": "/scratch/researcher/jobs", "writable": True}).status_code == 409
+    context.connection.refresh_from_db()
+    assert not context.connection.setup_complete and context.connection.configuration["site_profile"]["maximum_cpus"] == 8
+
+
+def test_no_configuration_before_discovery(personal):
+    personal.connection.discovery_state = "queued";personal.connection.save()
+    response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal))
+    assert response.status_code == 409 and not ConnectorTask.objects.exists()
+
+
+def active_attempt(context):
+    from compute_broker.control.models import Attempt, ExecutionRequest, Grant, Job, Project
+    project = Project.objects.create(owner=context.owner, name="Active test")
+    project.connections.add(context.connection)
+    grant = Grant.objects.create(project=project, policy={})
+    job = Job.objects.create(project=project, request={})
+    execution = ExecutionRequest.objects.create(job=job)
+    return Attempt.objects.create(job=job, execution_request=execution, connection=context.connection,
+        grant=grant, reservation_cpu=1, reservation_gpu=0)
+
+
+def test_configuration_is_refused_until_accounting_finishes(personal):
+    active_attempt(personal)
+    response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal))
+    assert response.status_code == 409 and not ConnectorTask.objects.exists()
+    personal.connection.refresh_from_db();assert personal.connection.setup_complete
+
+
+def test_upgrade_with_active_jobs_preserves_current_binding(personal):
+    active_attempt(personal)
+    response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
+        "hello": True, "needs_discovery": True})
+    assert response.status_code == 200 and response.json()["defaults_deferred"] is True
+    personal.connection.refresh_from_db()
+    assert personal.connection.setup_complete and personal.connection.configuration_confirmed
+
+
+def test_suspension_is_rechecked_under_setup_authority_fence(personal, monkeypatch):
+    from compute_broker.control import connector_setup
+    original = connector_setup.authenticated_connection
+    def suspended(request, document):
+        result = original(request, document)
+        User.objects.filter(id=personal.owner.id).update(is_active=False)
+        return result
+    monkeypatch.setattr(connector_setup, "authenticated_connection", suspended)
+    response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id)})
+    assert response.status_code == 403
+
+
+def test_discovery_during_configuration_cannot_reopen_admission(personal):
+    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    context = personal
+    assert context.human.post(f"/clusters/{context.connection.id}/configuration/", configuration_fields(context)).status_code == 302
+    context.connection.refresh_from_db();assert not context.connection.configuration_confirmed
+    context.connection.discovery_state = "queued";context.connection.save()
+    work = lease_discovery(context.worker)["lease"]
+    report_discovery(context.worker, context.connection.id, {"lease_id": work["id"], "generation": work["generation"],
+        "outcome": "discovered", "configuration": context.connection.configuration,
+        "connection_revision_sha256": context.connection.revision_sha256, "discovery_snapshot": context.connection.discovery_snapshot})
+    context.connection.refresh_from_db()
+    assert not context.connection.setup_complete and not context.connection.configuration_confirmed

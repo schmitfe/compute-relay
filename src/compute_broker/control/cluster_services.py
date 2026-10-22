@@ -9,7 +9,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .errors import BrokerError
-from .models import Attempt, Connection, WorkerIdentity
+from .models import Attempt, Connection, ConnectorTask, Project, WorkerIdentity
 from .services import audit, digest
 
 PUBLIC_CONFIG_FIELDS = {"backend", "credential_profile", "ssh", "remote_root", "profile_revision", "site_profile", "credential_profile_revision_sha256"}
@@ -70,6 +70,7 @@ def report_discovery(worker, connection_id, document):
         worker = WorkerIdentity.objects.select_for_update().filter(id=worker.id, revoked=False).first()
         if worker is None:
             raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
+        list(Project.objects.select_for_update(of=("self",)).filter(connections=connection_id).order_by("id"))
         connection = Connection.objects.select_for_update().filter(id=connection_id, worker=worker, archived=False).first()
         if connection is None:
             raise BrokerError("NOT_FOUND", "Connection not found.", 404)
@@ -91,13 +92,14 @@ def report_discovery(worker, connection_id, document):
                 raise BrokerError("INVALID_DISCOVERY", "Discovery binding does not match.")
             if revision != connection.revision_sha256 and Attempt.objects.filter(connection=connection).exclude(
                     accounting_state__in=["settled", "released"]).exists():
-                raise BrokerError("CONNECTION_BUSY", "Finish accounting for existing attempts before changing this connection's execution profile. Use a new profile alias and connection for a new configuration.", 409)
+                raise BrokerError("CONNECTION_BUSY", "Finish accounting for existing attempts before changing this cluster configuration.", 409)
             snapshot = document.get("discovery_snapshot")
             if not isinstance(snapshot, dict) or len(rfc8785.dumps(snapshot)) > 1024 * 1024:
                 raise BrokerError("DISCOVERY_LIMIT", "Discovery exceeds the snapshot limit.", 413)
             connection.configuration = config
             connection.revision_sha256 = revision
-            connection.setup_complete = True
+            connection.setup_complete = connection.configuration_confirmed and not ConnectorTask.objects.filter(
+                connection=connection, kind="configure", state__in=["queued", "running"]).exists()
             connection.discovery_snapshot = snapshot
             connection.discovery_state, connection.discovery_error, connection.auth_state = "ready", "", "ready"
         elif document.get("outcome") == "discovery_failed":

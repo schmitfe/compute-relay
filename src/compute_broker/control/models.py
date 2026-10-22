@@ -21,6 +21,7 @@ class WorkerIdentity(models.Model):
     supported_extensions = models.JSONField(default=list)
     last_seen_at = models.DateTimeField(null=True)
     enrollment_nonce = models.UUIDField(null=True, blank=True, unique=True, editable=False)
+    connector_features = models.JSONField(default=list)
 
     def __str__(self):
         return self.name
@@ -37,6 +38,7 @@ class Connection(models.Model):
     enabled = models.BooleanField(default=True)
     archived = models.BooleanField(default=False)
     setup_complete = models.BooleanField(default=True)
+    configuration_confirmed = models.BooleanField(default=True)
     auth_state = models.CharField(max_length=30, default="ready")
     discovery_snapshot = models.JSONField(default=dict)
     discovery_state = models.CharField(max_length=30, default="not_started")
@@ -77,6 +79,27 @@ class ConnectorEnrollment(models.Model):
     consumed_at = models.DateTimeField(null=True)
     worker = models.ForeignKey(WorkerIdentity, null=True, on_delete=models.PROTECT)
     created_at = models.DateTimeField(default=timezone.now)
+
+
+class ConnectorTask(models.Model):
+    """Owner-only setup work, consumed by that user's personal connector."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    connection = models.ForeignKey(Connection, on_delete=models.PROTECT)
+    owner = models.ForeignKey(User, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=20)
+    state = models.CharField(max_length=20, default="queued")
+    request = models.JSONField(default=dict)
+    result = models.JSONField(default=dict)
+    connection_revision = models.CharField(max_length=64)
+    generation = models.PositiveIntegerField(default=0)
+    lease_id = models.UUIDField(null=True)
+    lease_expires_at = models.DateTimeField(null=True)
+    error_code = models.CharField(max_length=80, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=["connection", "state", "created_at"], name="connector_task_pending")]
 
 
 class Environment(models.Model):

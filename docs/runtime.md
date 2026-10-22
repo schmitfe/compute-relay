@@ -50,6 +50,17 @@ starting a new login. Normal termination and the configured deadline close the
 owned master. This core Slurm connector does not enable optional extension
 workers or establish same-user OS isolation.
 
+Personal setup now continues after discovery: **Cluster configuration** supplies
+missing resource defaults from discovered single-node ceilings, and its
+owner-only directory browser uses leased, bounded, read-only requests through
+the running connector. Final confirmation validates the selected work root,
+persists a new local profile and waits for its acknowledgement before admitting
+jobs. Configuration changes are blocked until accounting is settled. These
+human operations are not MCP tools or project-key capabilities. Module auto
+discovery uses trusted path data and a provisional filename catalog without
+evaluating modulefiles. See [cluster configuration](cluster-configuration.md)
+and [module discovery](module-discovery.md).
+
 SQLite is selected by default or by `BROKER_DB_ENGINE=sqlite`, using the existing
 `BROKER_DB_PATH`. PostgreSQL is selected explicitly with
 `BROKER_DB_ENGINE=postgresql` and the `postgres` dependency extra. Configure
