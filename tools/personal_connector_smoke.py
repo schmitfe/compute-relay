@@ -111,9 +111,17 @@ def finish_configuration(human, demo, directory):
 
 def cluster_check(human, demo):
     """Use the same preview, review and settled results a human sees."""
+    import re
+    human.request("POST", f"/clusters/{demo['connection_id']}/environments/new/", {
+        "name": "Fixture cluster modules", "kind": "modules", "interpreter": "python3",
+        "modules": "fixture-python/1.0", "module_init": "", "module_paths": "/opt/fixture/modulefiles",
+    }, form=True, binary=True)
     path = f"/clusters/{demo['connection_id']}/test/"
     page = human.request("GET", path, binary=True)
     fields = ClusterCheckFields();fields.feed(page.decode())
+    environment = re.search(rb'<option value="([0-9a-f-]{36})">Fixture cluster modules</option>', page)
+    require(environment is not None, "Module recipe was not offered for this cluster's test")
+    fields.values["environment"] = environment.group(1).decode()
     require(b"Prepare test for review" in page, "Cluster check preview is unavailable")
     page = human.request("POST", path, fields.values, form=True, binary=True)
     review_path = redirected_path(human)
@@ -126,7 +134,7 @@ def cluster_check(human, demo):
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         page = human.request("GET", review_path, binary=True)
-        if "succeeded · accounting settled".encode() in page:
+        if b'data-state="succeeded" data-accounting-state="settled"' in page:
             break
         time.sleep(0.5)
     else:
@@ -140,6 +148,8 @@ def cluster_check(human, demo):
             continue
         if isinstance(result, dict) and result.get("marker") == "compute-broker-cluster-check-v1":
             require(result.get("hostname") and result.get("python"), "Cluster check lacks remote identity")
+            require("fixture-python/1.0" in result.get("loaded_modules", "").split(":"),
+                    "The cluster-provided module command did not load the selected module")
             return
     raise SmokeFailure("Cluster check returned no diagnostic JSON output")
 
@@ -228,7 +238,8 @@ def run():
             "same_worker_on_resume": True, "master_closed_on_shutdown": True,
             "removed_configuration": True, "master_closed_on_revocation": True,
             "post_login_directory_browser": True, "created_selected_folder": True,
-            "owner_configuration_persisted": True, "reviewed_cluster_check": True}))
+            "owner_configuration_persisted": True, "reviewed_cluster_check": True,
+            "cluster_provided_modules": True}))
 
 
 if __name__ == "__main__":

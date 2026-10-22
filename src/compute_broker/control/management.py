@@ -374,7 +374,7 @@ def environment_new(request, connection_id=None):
     software = connection.discovery_snapshot.get("software", {})
     if initial["kind"] == "modules":
         module_data = software.get("modules", {})
-        initial.update(interpreter="python3", module_init=module_data.get("init_path", ""),
+        initial.update(interpreter="python3", module_init="",
                        module_paths="\n".join(module_data.get("module_paths", [])))
     elif initial["kind"] == "conda":
         initial["conda_executable"] = software.get("conda", {}).get("executable", "")
@@ -399,6 +399,8 @@ def environment_new(request, connection_id=None):
     if valid:
         data = form.cleaned_data
         config = {"kind": data["kind"], "interpreter": data["interpreter"], "modules": data["module_names"]}
+        if data["kind"] == "modules":
+            config["module_init"] = data.get("module_init", "")
         for key in ("module_init", "prefix", "conda_executable"):
             if data.get(key):
                 config[key] = data[key]

@@ -891,7 +891,7 @@ def test_modules_recipe_saves_exact_search_paths_in_immutable_digest(management)
     assert services.digest(changed) != environment.revision_sha256
 
 
-def test_modules_environment_form_prefills_only_saved_owner_snapshot(management):
+def test_modules_environment_form_prefills_paths_and_defaults_to_cluster_command(management):
     context = management
     connection = context.connections[0]
     connection.discovery_snapshot = {"software": {"modules": {
@@ -901,7 +901,8 @@ def test_modules_environment_form_prefills_only_saved_owner_snapshot(management)
     assert page.status_code == 200
     form = page.context["form"]
     assert form.initial["interpreter"] == "python3"
-    assert form.initial["module_init"] == "/etc/profile.d/z00_lmod.sh"
+    assert form.initial["module_init"] == ""
+    assert "/etc/profile.d/z00_lmod.sh" in dict(form.fields["module_init"].choices)
     assert form.initial["module_paths"] == "/opt/site/modules\n/opt/shared/modulefiles"
     connection.owner = context.outsider
     connection.save(update_fields=["owner"])

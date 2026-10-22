@@ -461,7 +461,10 @@ def test_modules_use_loaded_interpreter_and_bind_the_exact_wrapper(sample):
                        module_init="/usr/share/lmod/lmod/init/bash")
     prepared, files = package(sample)
     wrapper = prepared["generated_files"]["_broker/environment.sh"]
-    assert ". /usr/share/lmod/lmod/init/bash\nmodule purge\nmodule load Python/3.12.1 CUDA/12.4\n" in wrapper
+    assert "if ! command -v module" in wrapper
+    assert "  . /usr/share/lmod/lmod/init/bash\nfi\n" in wrapper
+    assert "module purge\nmodule load Python/3.12.1 CUDA/12.4\n" in wrapper
+    assert prepared["generated_files"]["_broker/batch.sh"].startswith("#!/bin/bash -l\n")
     assert "exec python3 ./main.py\n" in prepared["generated_files"]["_broker/batch.sh"]
     verify_package(prepared["manifest"], prepared["manifest_sha256"], files)
     environment["modules"] = ["Python/3.13.0"]
@@ -685,11 +688,11 @@ def test_module_environment_binds_the_selected_path_before_and_after_initializat
     import shlex
 
     sample[1].update(kind="modules", interpreter="python3", modules=["Python/3.12"],
-                     module_paths=["/apps/modulefiles/Core", "/apps/modulefiles/path with ' quote"])
+                     module_paths=["/apps/modulefiles/Core", "/apps/modulefiles/path with ' quote"], module_init="/etc/profile.d/modules.sh")
     prepared, files = package(sample)
     lines = prepared["generated_files"]["_broker/environment.sh"].splitlines()
     exports = [index for index, line in enumerate(lines) if line.startswith("export MODULEPATH=")]
-    initialization = lines.index(". /etc/profile.d/modules.sh")
+    initialization = lines.index("  . /etc/profile.d/modules.sh")
     assert len(exports) == 2 and exports[0] < initialization < lines.index("module purge") < exports[1] < lines.index("module load Python/3.12")
     joined_path = ":".join(sample[1]["module_paths"])
     assert shlex.split(lines[exports[0]].split("=", 1)[1]) == [joined_path]

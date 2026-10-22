@@ -45,13 +45,13 @@ _MESSAGES = {
         "Keep the connector available for reconciliation. Do not treat this request as a refund or proof that the allocation has stopped."),
     "module_initializer_missing": ("error", "Module initialization file is missing",
         "The job's environment setup reports that its configured module initialization file could not be found. This is not evidence that the Python script ran.",
-        "Edit the cluster's environment recipe: select the initialization path actually provided there, or use its existing module command when supported. Prepare a new revision and review it; this job will not rerun automatically."),
+        "Create a corrected recipe using the cluster-provided module command, then prepare a new job for review. The saved failed package stays unchanged."),
     "module_command_unavailable": ("error", "The module command is unavailable",
         "The environment wrapper reports that no module command is available in this job's environment. This does not establish that Python started.",
-        "Choose the cluster's correct module initialization method or an existing Python environment, then prepare and review a new revision."),
+        "Check the cluster's login-shell setup or choose an existing Python environment, then prepare and review a new job."),
     "module_initializer_unreadable": ("error", "Module initialization file could not be read",
         "The environment wrapper reports that the configured initialization file is not readable. It may be missing or inaccessible; this does not establish that Python started.",
-        "Select a readable initialization path provided by the cluster, or use its existing module command when supported. Prepare and review a new revision; the failed job is not rerun automatically."),
+        "Create a corrected recipe using the cluster-provided module command, then prepare a new job for review. An explicit initializer is an advanced fallback."),
     "outputs_unavailable": ("warning", "Job outputs could not be retained",
         "A reported output-collection or storage failure prevented retention of one or more declared results. This does not prove that the program failed or that the files were never created.",
         "Check the declared output paths, job logs and broker storage status. Keep the existing attempt identity and accounting; do not automatically rerun the compute job."),
@@ -172,7 +172,7 @@ def build_attempt_diagnostics(attempt):
     accounting_state = raw_accounting if isinstance(raw_accounting, str) and raw_accounting in _ACCOUNTING else "unknown"
     notices = []
     if accounting_state == "settled":
-        notices.append("Accounting is settled. A failed allocation can still consume compute allowance.")
+        notices.append("Accounting is settled. A failed allocation can still consume compute allowance." if state == "failed" else "Accounting is settled.")
     elif accounting_state in {"reserved", "settlement_pending"}:
         notices.append("Accounting is not settled; reservations can remain held while reconciliation waits for usable evidence.")
     elif accounting_state == "released":

@@ -19,7 +19,8 @@ opening the page, preparing or rejecting a test never submits an allocation.
 Rejection comments remain in the normal job history.
 
 The fixed stdlib script sleeps for two seconds, prints its hostname and Python
-version, and writes `cluster-check.json` containing those details and the marker
+version, selected Python executable and loaded module names, and writes
+`cluster-check.json` containing those details and the marker
 `compute-broker-cluster-check-v1`. It requests two logical CPUs, or one when the
 configured ceiling is one, 128 MiB, zero GPUs and a one-minute scheduler limit.
 Queueing, startup and cleanup can take longer than the script. The reservation
@@ -68,6 +69,12 @@ outside the outer idempotency transactions so upload reservations remain durable
 Return to the cluster test page for recent review links, bounded escaped logs,
 accounting state and hash-verified `cluster-check.json` previews. The page reads
 already collected broker artifacts; it never fetches files directly from SSH.
+The review page shows the same diagnosis before the prepared scripts: Slurm job
+ID, scheduler state, exit status, reported usage and a bounded standard-error and
+standard-output preview. Recognized failures have a fixed explanation and next
+step; unknown failures retain the actual facts without inventing a cause. Logs
+are shown only after the existing human/project authorization check, escaped as
+text, and limited to 16 KiB per stream with an explicit truncation notice.
 The normal job records and accounting remain authoritative. A successful tiny
 test checks this selected environment/partition path; it does not verify GPU
 execution, throughput, worst-case cleanup or unrestricted automatic spending.

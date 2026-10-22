@@ -80,7 +80,11 @@ def render_environment(environment: dict, logical_interpreter: str) -> tuple[str
     lines = ["#!/bin/bash", "# Approved existing environment; no installation occurs on worker or login node.",
              "# Referenced modules, binaries and packages may change outside this broker."]
     if kind == "modules":
-        initializer = module_init_path(environment.get("module_init", "/etc/profile.d/modules.sh"))
+        initializer = environment.get("module_init", "")
+        if initializer:
+            initializer = module_init_path(initializer)
+        elif not isinstance(initializer, str):
+            raise EnvironmentProfileError("Module initialization must be an optional path")
         module_path_export = None
         if "module_paths" in environment:
             paths = environment["module_paths"]
@@ -91,7 +95,14 @@ def render_environment(environment: dict, logical_interpreter: str) -> tuple[str
                 raise EnvironmentProfileError("A module path cannot contain a path-list separator")
             module_path_export = "export MODULEPATH=" + shlex.quote(":".join(paths))
             lines.append(module_path_export)
-        lines.append(". " + shlex.quote(initializer))
+        if initializer:
+            lines += ["if ! command -v module >/dev/null 2>&1; then",
+                      "  if [ ! -r " + shlex.quote(initializer) + " ]; then",
+                      "    printf '%s\\n' " + shlex.quote("BROKER_ENVIRONMENT_ERROR: MODULE_INITIALIZER_UNREADABLE: " + initializer) + " >&2",
+                      "    exit 127", "  fi", "  . " + shlex.quote(initializer), "fi"]
+        lines += ["if ! command -v module >/dev/null 2>&1; then",
+                  "  printf '%s\\n' 'BROKER_ENVIRONMENT_ERROR: MODULE_COMMAND_UNAVAILABLE: The cluster login shell did not provide the module command.' >&2",
+                  "  exit 127", "fi"]
         lines.append("module purge")
         if module_path_export:
             # Initializers and unloading default modules may rewrite MODULEPATH.

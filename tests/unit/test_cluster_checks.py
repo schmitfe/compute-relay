@@ -321,6 +321,31 @@ def test_results_are_bounded_escaped_owner_only_and_need_no_revealed_token(diagn
     assert human(diagnostic.outsider).get(diagnostic.path).status_code == 404
 
 
+def test_failed_review_and_test_page_show_native_cause_before_prepared_files(diagnostic):
+    _, job = prepared(diagnostic)
+    with transaction.atomic():
+        services.decide(job, diagnostic.owner, {"execution_request_id": str(job.execution_requests.get().id),
+            "manifest_sha256": job.manifest_sha256, "approved": True})
+    attempt = Attempt.objects.get(job=job)
+    attempt.state = "failed"
+    attempt.native_identity = {"job_id": "196068"}
+    attempt.observation = {"native_state": "FAILED", "exit_code": "1:0", "source": "sacct"}
+    attempt.stderr = "./_broker/environment.sh: line 5: /usr/share/lmod/lmod/init/bash: No such file or directory\n<script>bad()</script>"
+    attempt.save(update_fields=["state", "native_identity", "observation", "stderr"])
+    client = human(diagnostic.owner)
+    page = client.get(f"/review/{job.id}/")
+    assert page.status_code == 200
+    assert "no-store" in page.headers["Cache-Control"]
+    body = page.content.decode()
+    assert "Module initialization file is missing" in body and "196068" in body and "1:0" in body
+    assert body.index("Module initialization file is missing") < body.index("Exact prepared package")
+    assert "&lt;script&gt;bad()&lt;/script&gt;" in body and "<script>bad()</script>" not in body
+    assert human(diagnostic.outsider).get(f"/review/{job.id}/").status_code == 403
+    test_page = client.get(diagnostic.path)
+    assert test_page.status_code == 200
+    assert b"Module initialization file is missing" in test_page.content and b"196068" in test_page.content
+
+
 @pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
 def test_missing_or_unreadable_result_does_not_break_test_page(diagnostic, error):
     config, job = prepared(diagnostic)

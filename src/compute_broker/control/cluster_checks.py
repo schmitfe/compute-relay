@@ -26,6 +26,7 @@ from .storage import read_blob, store_blob
 CPU_ALLOWANCE = 3600
 TOTAL_JOBS = 20
 SOURCE = b'''import json
+import os
 import socket
 import sys
 import time
@@ -34,7 +35,9 @@ from pathlib import Path
 started = time.monotonic()
 time.sleep(2)
 result = {"marker": "compute-broker-cluster-check-v1", "hostname": socket.gethostname(),
-          "python": sys.version, "elapsed_seconds": round(time.monotonic() - started, 3)}
+          "python": sys.version, "python_executable": sys.executable,
+          "loaded_modules": os.environ.get("LOADEDMODULES", ""),
+          "elapsed_seconds": round(time.monotonic() - started, 3)}
 text = json.dumps(result, sort_keys=True) + "\\n"
 Path("cluster-check.json").write_text(text, encoding="utf-8")
 print(text, end="", flush=True)
@@ -242,10 +245,11 @@ def prepare_check(user, connection_id, data):
 
 
 def _results(jobs):
+    from .job_diagnostics import build_attempt_diagnostics
     results = []
     for job in jobs:
         attempts = []
-        for attempt in job.attempts.order_by("-created_at")[:3]:
+        for attempt in job.attempts.select_related("connection").order_by("-created_at")[:3]:
             outputs = []
             for artifact in attempt.artifacts.select_related("blob").filter(path="cluster-check.json"):
                 text = "Output is too large for an inline preview."
@@ -256,6 +260,7 @@ def _results(jobs):
                         text = "Stored output could not be verified."
                 outputs.append({"path": artifact.path, "sha256": artifact.blob.sha256, "text": text})
             attempts.append({"id": attempt.id, "state": attempt.state, "accounting_state": attempt.accounting_state,
+                "diagnostics": build_attempt_diagnostics(attempt),
                 "stdout": attempt.stdout[:8192], "stderr": attempt.stderr[:8192], "outputs": outputs})
         results.append({"job": job, "attempts": attempts})
     return results

@@ -32,5 +32,9 @@
 .form-field [aria-invalid=true]{border:2px solid #943d33}
 .validation-summary{border-left:4px solid #943d33;padding:.8rem 1rem;background:#fff4f2}
 .validation-summary a{color:#943d33}
+.attempt-diagnostics dl{display:grid;grid-template-columns:minmax(10rem,1fr) minmax(0,3fr);gap:.35rem 1rem}
+.attempt-diagnostics dt{font-weight:600}
+.attempt-diagnostics dd{margin:0;overflow-wrap:anywhere}
+@media(max-width:620px){.attempt-diagnostics dl{display:block}.attempt-diagnostics dd{margin:0 0 .7rem}}
 </style>
 {% block content %}{% endblock %}</body></html>

@@ -150,6 +150,19 @@ def test_chosen_modules_and_explicit_advanced_modules_are_saved_without_local_ex
     assert recipe.revision_sha256 == services.digest(recipe.configuration)
 
 
+def test_module_recipe_defaults_to_cluster_command_without_explicit_initializer(catalog):
+    context = catalog
+    client = human(context.owner)
+    path = f"/clusters/{context.first.id}/environments/new/"
+    page = client.get(path, {"kind": "modules"})
+    assert page.status_code == 200
+    assert page.context["form"].initial["module_init"] == ""
+    response = post(client, path, module_data(context, module_init=""))
+    assert response.status_code == 302
+    recipe = Environment.objects.get(name="Chosen catalog module recipe")
+    assert recipe.configuration["module_init"] == ""
+
+
 @pytest.mark.parametrize("chosen", ["GROMACS/2025.1", "PrivateSuite/1.0", "Python/3.12;touch /tmp/injected", "$(whoami)"])
 def test_forged_or_other_cluster_catalog_selection_cannot_create_a_recipe(catalog, chosen):
     context = catalog

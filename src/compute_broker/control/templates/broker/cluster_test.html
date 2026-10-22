@@ -21,9 +21,7 @@
 {% empty %}<li>No tests prepared yet.</li>{% endfor %}
 </ul></section>
 {% for result in recent_results %}{% if result.attempts %}<section><h2>Results: <a href="/review/{{ result.job.id }}/">{{ result.job.name }}</a></h2>
-{% for attempt in result.attempts %}<p>{{ attempt.state }} · Accounting: {{ attempt.accounting_state }}</p>
-<h3>Standard output</h3><pre>{{ attempt.stdout|default:"No output collected yet." }}</pre>
-{% if attempt.stderr %}<h3>Standard error</h3><pre>{{ attempt.stderr }}</pre>{% endif %}
+{% for attempt in result.attempts %}{% include "broker/attempt_diagnostics.html" with diagnostics=attempt.diagnostics %}
 {% for output in attempt.outputs %}<h3>{{ output.path }}</h3><p>SHA-256: <code>{{ output.sha256 }}</code></p><pre>{{ output.text }}</pre>{% endfor %}
 {% endfor %}</section>{% endif %}{% endfor %}{% endif %}
 {% endblock %}

@@ -333,8 +333,13 @@ def review(request, job_id):
             except BrokerError as exc:
                 error = exc.message
         import uuid
+        from .job_diagnostics import build_attempt_diagnostics
         detail = services.serialize_job(job, package=True)
-        return render(request, "broker/review.html", {"job": job, "detail": detail, "manifest_text": json.dumps(job.manifest, indent=2),
+        response = render(request, "broker/review.html", {"job": job, "detail": detail, "manifest_text": json.dumps(job.manifest, indent=2),
+                                                      "attempt_diagnostics": [build_attempt_diagnostics(a) for a in job.attempts.select_related("connection").order_by("-created_at")],
                                                       "allowance": services.allowance(job.project), "error": error, "idempotency_key": str(uuid.uuid4())})
+        response["Cache-Control"] = "no-store, private"
+        response["Pragma"] = "no-cache"
+        return response
     except (BrokerError, ObjectDoesNotExist):
         return HttpResponse("Review is unavailable for this account.", status=403, content_type="text/plain")

@@ -181,7 +181,8 @@ class EnvironmentForm(forms.Form):
         label="Modules from this cluster", help_text="Saved discovery catalog; selected entries load first. No modules run while creating a recipe.")
     modules = forms.CharField(required=False, widget=forms.Textarea, label="Additional modules (advanced)",
         help_text="One exact module/version per line, appended after the selected catalog entries. For a specific load order, leave catalog entries unchecked and list all modules here in order.")
-    module_init = forms.ChoiceField(required=False, choices=[("", "No module initialization"), ("/etc/profile.d/modules.sh", "/etc/profile.d/modules.sh"), ("/usr/share/Modules/init/bash", "/usr/share/Modules/init/bash"), ("/usr/share/lmod/lmod/init/bash", "/usr/share/lmod/lmod/init/bash"), ("/etc/profile.d/lmod.sh", "/etc/profile.d/lmod.sh")])
+    module_init = forms.ChoiceField(required=False, choices=[], label="Module initialization (advanced)",
+        help_text="Leave empty to use the cluster's module command in a login batch shell. An explicit file is used only if that command is missing.")
     module_paths = forms.CharField(required=False, max_length=4096, widget=forms.Textarea,
         label="Module search paths", help_text="Optional: one approved absolute directory per line. Prefilled from cluster discovery when available.")
     prefix = forms.CharField(required=False, max_length=240, label="Environment prefix")
@@ -191,7 +192,7 @@ class EnvironmentForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.fields["connection"].queryset = owned_connections(user)
         from compute_broker.backends.environments import MODULE_INIT_PATHS, module_init_path
-        self.fields["module_init"].choices = [("", "No module initialization")] + [(p, p) for p in MODULE_INIT_PATHS]
+        self.fields["module_init"].choices = [("", "Use the cluster-provided module command")] + [(p, p) for p in MODULE_INIT_PATHS]
         selected = self.data.get("connection") if self.is_bound else self.initial.get("connection")
         self.catalog_connection = None
         try:
@@ -228,8 +229,8 @@ class EnvironmentForm(forms.Form):
         modules = list(dict.fromkeys(data.get("discovered_modules", []) + manual_modules))
         if len(modules) > 32 or any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+@:-]{0,159}", m) or ".." in m.split("/") for m in modules):
             self.add_error("modules", "Use up to 32 exact module/version names.")
-        if kind == "modules" and (not modules or not data.get("module_init")):
-            self.add_error("modules", "Select module initialization and at least one module.")
+        if kind == "modules" and not modules:
+            self.add_error("modules", "Select at least one module.")
         if kind != "modules" and modules:
             self.add_error("modules", "Module loads belong to a module environment.")
         paths = [line.strip() for line in data.get("module_paths", "").splitlines() if line.strip()]

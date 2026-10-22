@@ -88,9 +88,21 @@ Projects display recipe permissions grouped by their allowed clusters. New jobs 
 | Kind | Reviewed job behavior |
 | --- | --- |
 | Existing Python/Bash | Execute the selected existing absolute interpreter |
-| Modules/Lmod | Initialize the selected system module mechanism, set optional approved `MODULEPATH`, purge and load exact modules, then run the chosen interpreter |
+| Modules/Lmod | Use the cluster-provided module command in a login batch shell, set optional approved `MODULEPATH`, purge and load exact modules, then run the chosen interpreter |
 | Python virtual environment | Use its existing interpreter directly; set `VIRTUAL_ENV` and `PATH` without sourcing activation hooks |
 | Conda | Run the explicitly selected Conda executable/prefix inside the approved compute job; activation hooks can run there |
 | Poetry virtual environment | Use the existing venv interpreter directly; no Poetry CLI or project hooks in the broker/login worker |
 
 Discovered module paths and environment locations prefill suggestions only for an owned cluster. A human chooses a recipe and grants it to projects. Edits require a new recipe/revision, so reviewed packages retain their original binding. These recipes reference existing mutable installations; their digest is not an attestation of every installed package. The optional, default-disabled [environment-build extension](environment-builds.md) provides the separately authorized scheduled venv builder.
+
+Module recipes default to **Use the cluster-provided module command**. Their
+batch script uses `#!/bin/bash -l`, so the compute node's normal site/account
+startup supplies the command. It restores the Slurm submission directory after
+startup before opening the package. No explicit Modules/Lmod initialization
+file is sourced by the default wrapper. An advanced explicit initializer remains
+an optional fallback, used only if the command is missing. If the command is
+still unavailable, the wrapper exits with a fixed `MODULE_COMMAND_UNAVAILABLE`
+message rather than running the program in the wrong environment. Login startup
+runs inside the approved compute job; catalog discovery does not source personal
+startup files. Existing reviewed packages remain immutable and need a new job
+revision to adopt this batch-shell behavior.

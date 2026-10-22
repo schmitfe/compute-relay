@@ -201,7 +201,8 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
             wrapper, execution_prefix = render_environment(environment, interpreter)
         except EnvironmentProfileError as exc:
             raise BackendError(str(exc)) from exc
-        lines = ["#!/bin/bash", f"#SBATCH --job-name={request['name']}", "#SBATCH --nodes=1", "#SBATCH --ntasks=1",
+        module_environment = environment.get("kind") == "modules" or bool(environment.get("modules"))
+        lines = ["#!/bin/bash -l" if module_environment else "#!/bin/bash", f"#SBATCH --job-name={request['name']}", "#SBATCH --nodes=1", "#SBATCH --ntasks=1",
                  f"#SBATCH --cpus-per-task={cpus}", f"#SBATCH --mem={memory}M", f"#SBATCH --time={duration // 60}",
                  "#SBATCH --no-requeue", "#SBATCH --output=stdout.log", "#SBATCH --error=stderr.log"]
         for key, value in slurm.items():
@@ -210,7 +211,11 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
             lines.append(f"#SBATCH --gres=gpu:{resources['gpu_type']}:{gpus}")
         lines += ["", "# The helper sets cwd to this immutable attempt's staged directory.",
                   "# It adds only --comment=broker-attempt:<attempt UUID> for reconciliation.",
-                  "set -euo pipefail", ". ./_broker/environment.sh",
+                  "set -euo pipefail"]
+        if module_environment:
+            lines += ["# Use normal cluster login setup for its module command; restore cwd after site/user startup.",
+                      'cd -- "${SLURM_SUBMIT_DIR:?Broker submission directory is unavailable}"']
+        lines += [". ./_broker/environment.sh",
                   "exec " + shlex.join([*execution_prefix, "./" + script, *arguments]), ""]
         generated = {"_broker/batch.sh": "\n".join(lines), "_broker/environment.sh": wrapper}
         manifest = {"schema_version": "1.0", "job_revision_id": job_revision_id, "backend": "slurm",
