@@ -49,7 +49,7 @@ def publish_profiles(worker, document):
 def lease_discovery(worker):
     now = timezone.now()
     with transaction.atomic():
-        connection = Connection.objects.select_for_update().filter(worker=worker, enabled=True, discovery_state__in=["queued", "discovering"]).filter(
+        connection = Connection.objects.select_for_update().filter(worker=worker, enabled=True, archived=False, discovery_state__in=["queued", "discovering"]).filter(
             Q(discovery_lease_expires_at__isnull=True) | Q(discovery_lease_expires_at__lte=now)).order_by("id").first()
         if connection is None:
             return None
@@ -70,7 +70,7 @@ def report_discovery(worker, connection_id, document):
         worker = WorkerIdentity.objects.select_for_update().filter(id=worker.id, revoked=False).first()
         if worker is None:
             raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
-        connection = Connection.objects.select_for_update().filter(id=connection_id, worker=worker).first()
+        connection = Connection.objects.select_for_update().filter(id=connection_id, worker=worker, archived=False).first()
         if connection is None:
             raise BrokerError("NOT_FOUND", "Connection not found.", 404)
         if (str(connection.discovery_lease_id) != document.get("lease_id") or connection.discovery_generation != document.get("generation")

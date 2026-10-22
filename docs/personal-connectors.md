@@ -25,7 +25,9 @@ sharing a project's allowance does not delegate another user's HPC account.
    by the cluster.
 5. Save, then select **Download personal connector setup**. Keep the downloaded
    JSON private; it authorizes connector enrollment for your account. Do not
-   give it to an agent or commit it to a repository.
+   give it to an agent or commit it to a repository. Its pairing code expires
+   after ten minutes and can be exchanged only once. A new download invalidates
+   older unused setup files for that cluster.
 
 Saving or downloading setup does not contact SSH, create a remote directory or
 submit a compute job. The setup is tied to the current saved cluster revision.
@@ -43,12 +45,15 @@ Use an installed, reviewed broker client with the worker dependencies. In a
 terminal on the device that should hold the SSH connection, run:
 
 ```sh
+chmod 600 /absolute/private/personal-connector.json
 compute-broker connector \
   --setup /absolute/private/personal-connector.json \
   --state-directory /absolute/private/connector-state
 ```
 
-Choose a private state directory dedicated to this connector. Treat it as
+Choose a short absolute path for a private state directory dedicated to this
+connector: the directory plus `/s` must fit within 100 bytes. Avoid whitespace
+or `%` in SSH paths. Treat the state directory as
 credential storage: its configuration, enrollment/worker state and SSH session
 capability are not agent inputs. Preserve it across restarts so the existing
 worker identity and submission journal can be reused.
@@ -118,6 +123,20 @@ Institutional MFA/session policy still needs explicit acceptance on each site;
 routine automated tests use synthetic credentials and no institutional cluster.
 See [runtime limitations](runtime.md), [SSH/security boundaries](security.md),
 [hosted architecture](hosted-architecture.md) and [async-worker compatibility](async-workers.md).
+
+This first personal connector runs core Slurm jobs through the async worker.
+Environment-build, workflow and storage extension workers still use the advanced
+manual path. Re-pairing an existing connection preserves its ID and known site
+bounds but requires it to have no unsettled executions; do not move an active
+connection to a new state directory. A failed enrollment response can leave its
+one-use code consumed. Obtain a fresh download and use a fresh state directory
+for that initial-pairing recovery. Ordinary restarts reuse the saved directory.
+
+Ctrl-C, SIGTERM, broker revocation and the configured session deadline close the
+connector-owned SSH master. SIGKILL, host crashes and power loss cannot run that
+cleanup. Inspect any stale socket or master through a trusted local operator
+channel before removing files; the connector refuses an unknown pre-existing
+socket. A local journal with a submission intent must be preserved for recovery.
 
 Advanced operators can still register and bind workers manually from the setup
 page's **Advanced** section. That path retains its explicit profile/target/root

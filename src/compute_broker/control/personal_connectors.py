@@ -24,6 +24,8 @@ def require_owner(user):
 
 
 def target(registration):
+    if registration.archived:
+        raise BrokerError("CLUSTER_REMOVED", "This cluster configuration was removed.", 409)
     if registration.backend != "slurm" or not registration.remote_user or not registration.requested_root:
         raise BrokerError("SETUP_INCOMPLETE", "Set a Slurm hostname, username and job directory first.", 409)
     from .cluster_setup import canonical_root
@@ -51,7 +53,7 @@ def setup_document(request, registration, *, revision_required=True):
         # Same owner-first fence as execution and directory suspension.
         owner = User.objects.select_for_update(no_key=True).get(pk=request.user.pk)
         require_owner(owner)
-        registration = get_object_or_404(ClusterRegistration.objects.select_for_update(), pk=registration.pk, owner=owner)
+        registration = get_object_or_404(ClusterRegistration.objects.select_for_update(), pk=registration.pk, owner=owner, archived=False)
         if revision_required and request.POST.get("setup_revision") != str(registration.revision):
             raise BrokerError("SETUP_CHANGED", "Reload the cluster before downloading its connector setup.", 409)
         ssh = target(registration)
@@ -77,7 +79,7 @@ def setup_document(request, registration, *, revision_required=True):
 def download(request, registration_id):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
-    registration = get_object_or_404(ClusterRegistration, id=registration_id, owner=request.user)
+    registration = get_object_or_404(ClusterRegistration, id=registration_id, owner=request.user, archived=False)
     return setup_document(request, registration)
 
 
@@ -86,7 +88,7 @@ def download_connection(request, connection_id):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     require_owner(request.user)
-    connection = get_object_or_404(Connection, id=connection_id, owner=request.user, backend="slurm")
+    connection = get_object_or_404(Connection, id=connection_id, owner=request.user, backend="slurm", archived=False)
     ssh = connection.configuration.get("ssh", {})
     registration, created = ClusterRegistration.objects.get_or_create(connection=connection, defaults={
         "owner": request.user, "name": connection.name, "backend": "slurm", "host": ssh.get("host", ""),

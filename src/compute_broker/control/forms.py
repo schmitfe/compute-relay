@@ -19,7 +19,8 @@ ALL_SCOPES = [key for key, _ in SCOPES]
 
 
 def owned_connections(user):
-    return Connection.objects.all() if user.is_superuser else Connection.objects.filter(owner=user)
+    rows = Connection.objects.filter(archived=False)
+    return rows if user.is_superuser else rows.filter(owner=user)
 
 
 def owned_environments(user):

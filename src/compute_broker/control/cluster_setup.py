@@ -20,7 +20,7 @@ from .services import audit, digest
 def owned_registrations(user):
     # Personal setup can enroll credentials for its owner, including when the
     # caller has administrator privileges elsewhere in the portal.
-    return ClusterRegistration.objects.filter(owner=user)
+    return ClusterRegistration.objects.filter(owner=user, archived=False)
 
 
 def canonical_root(value):

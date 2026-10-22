@@ -38,6 +38,18 @@ both the core and enabled extensions.
 
 ## Database and human identity configuration
 
+The ordinary Slurm setup also supports a [personal connector](personal-connectors.md).
+Save the user's own cluster and local key/known-hosts path hints, download its
+ten-minute one-use pairing file and start `compute-broker connector` on that
+user's device. OpenSSH handles interactive host-key/passphrase/MFA prompts;
+after successful login, pairing creates the internal worker identity and
+discovery binding automatically. The database retains only pairing/worker
+token hashes. Local private state preserves the worker credential and journal
+for resume. Background operations reuse the private master socket without
+starting a new login. Normal termination and the configured deadline close the
+owned master. This core Slurm connector does not enable optional extension
+workers or establish same-user OS isolation.
+
 SQLite is selected by default or by `BROKER_DB_ENGINE=sqlite`, using the existing
 `BROKER_DB_PATH`. PostgreSQL is selected explicitly with
 `BROKER_DB_ENGINE=postgresql` and the `postgres` dependency extra. Configure

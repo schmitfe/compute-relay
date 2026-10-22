@@ -6,6 +6,11 @@ Compute Broker lets AI clients prepare, submit, and inspect compute jobs on conf
 
 Projects share compute and submission limits across keys; each key can require human review. Disposable native and Docker workflows exercise management, approval, rejection, revision, execution, collection, and accounting. See [runtime scope and limitations](docs/runtime.md) and [container acceptance results](docs/container-testing.md) for the evidence and its limits. Protected personal/server deployment, institutional MFA acceptance, membership-management screens and hosted production acceptance remain unfinished. The working name is provisional.
 
+The [personal connector](docs/personal-connectors.md) enrolls its worker
+automatically from a one-use cluster setup download. OpenSSH performs local
+interactive key/MFA authentication at startup; the async worker reuses that
+session. Private keys and MFA answers stay on the user's device.
+
 Optional [extensions](docs/extensions.md) add advisory storage planning, scheduled
 reusable Python environment builds, and artifact-dependent workflows. They have
 separate apps, tables, routes and tests, and are disabled by default. Ordinary

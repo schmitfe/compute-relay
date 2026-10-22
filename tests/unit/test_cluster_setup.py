@@ -56,7 +56,7 @@ def test_new_cluster_needs_no_worker_or_profile_and_creates_no_connection(manage
     assert draft.connection_id is None and draft.remote_user == draft.requested_root == ""
     assert Connection.objects.count() == before
     page = client.get(result.url)
-    assert page.status_code == 200 and b"Worker connection still required" in page.content
+    assert page.status_code == 200 and b"Start your personal connector" in page.content
     assert client.get("/clusters/").status_code == 200
 
 

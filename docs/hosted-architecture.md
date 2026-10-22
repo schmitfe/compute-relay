@@ -12,7 +12,7 @@ user; authentication to that person's HPC account remains a separate SSH step.
 | --- | --- | --- |
 | Database | SQLite default, explicit PostgreSQL configuration, real concurrency regressions, offline transfer and copied-data rehearsal | Production database operations, full disaster recovery and hosted cutover acceptance |
 | Human identity | Explicit local/LDAP routing, stable directory identities, bounded cached authority, synthetic TLS fixture | Institutional policy acceptance, membership UI, directory-derived project roles, login rate limiting and OIDC |
-| Execution authority | Issuing-user-bound project keys; matching connection/worker ownership; current eligibility and role checks | Verified remote-principal/session records, isolated connector supervision and expiring connector enrollment |
+| Execution authority | Issuing-user-bound project keys; matching connection/worker ownership; current eligibility and role checks; one-use expiring personal connector pairing | Verified remote-principal/session records, isolated connector supervision and expiring worker credentials |
 | Concurrency | Opt-in bounded asynchronous core Slurm worker | Async extension hooks, broader scheduler fairness/batching and hosted performance acceptance |
 | Deployment | Native and disposable container fixtures | Protected installer, independent approval channel and a site-approved keyless server-session bootstrap |
 
@@ -156,12 +156,19 @@ screen is future work.
 
 | Mode | Authentication capability | Status |
 | --- | --- | --- |
-| Protected personal outbound worker | User's separately protected device/service identity | Deployment target; same-user development does not protect secrets from that user |
+| Personal outbound connector | Local key and terminal-authenticated SSH master | Automatic pairing and interactive startup implemented; protected OS installation still requires acceptance |
 | Isolated server session | Per-user connector's live SSH transport/control socket | Needs keyless activation, supervisor/isolation and real site acceptance |
 | Delegated HPC API | Site-issued scoped credential in its own boundary | Future backend |
 | Central private-key vault/shared `.ssh` | User private keys on the hosted broker/runner | Rejected for this shared-service design |
 
-The existing MFA transport reuses a protected OpenSSH master and fails closed if
+The [personal connector](personal-connectors.md) establishes its local master
+through an interactive OpenSSH login, then pairs automatically using the human's
+one-use setup download. Normal termination, revocation response and its absolute
+session deadline close the owned master. Resume uses the saved worker identity
+and journal; it does not mint another worker. SIGKILL and host failure still need
+trusted local recovery. Keys and MFA responses never pass through control.
+
+The MFA transport reuses a protected OpenSSH master and fails closed if
 it is missing or dead, rather than initiating a fresh interactive login. It pins
 host keys and disables ambient agents, forwarding and default key/config
 fallbacks. This provides transport groundwork; it does not implement the proposed
