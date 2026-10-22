@@ -333,3 +333,60 @@ def test_availability_refuses_incomplete_path_validation(monkeypatch):
          "module_path_validation_truncated": True, "init_path": "/etc/profile.d/modules.sh", "partial": True}
     helper.augment_module_availability(m)
     assert m["availability"]["reason"] == "full_modulepath_validation_incomplete"
+
+
+def test_initializer_reference_reports_site_canonical_bash_without_reading_it(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    init = root / "lmod/9.0/init";init.mkdir(parents=True)
+    (init / "profile").write_text("must-not-read-or-source")
+    (init / "bash").write_text("must-not-read-or-source")
+    observed = root.parent / "z00_lmod.sh";observed.symlink_to(init / "profile")
+    real_lstat, real_fstat = helper.os.lstat, helper.os.fstat
+    def protected_reference(path, *args, **kwargs):
+        info = real_lstat(path, *args, **kwargs)
+        fields = list(info);fields[4] = 0
+        if not helper.stat.S_ISLNK(info.st_mode):
+            fields[0] &= ~0o022
+        return os.stat_result(fields)
+    def site_metadata(fd):
+        info = real_fstat(fd);fields = list(info)
+        if helper.stat.S_ISREG(info.st_mode): fields[4] = 1000004
+        return os.stat_result(fields)
+    monkeypatch.setattr(helper.os, "lstat", protected_reference)
+    monkeypatch.setattr(helper.os, "fstat", site_metadata)
+    def site_untrusted(*_args, **_kwargs): raise ValueError("site-owned target")
+    monkeypatch.setattr(helper, "trusted_system_path", site_untrusted)
+    monkeypatch.setattr(helper, "read_file", lambda *_args, **_kwargs: pytest.fail("initializer contents read"))
+    monkeypatch.setattr(helper, "software_command", lambda *_args, **_kwargs: pytest.fail("initializer executed"))
+    candidate = helper.module_initializer_candidate(str(observed))
+    assert candidate["observed_path"] == str(observed)
+    assert candidate["observed_canonical_path"] == str(init / "profile")
+    assert candidate["canonical_path"] == str(init / "bash")
+    assert candidate["owner_uid"] == 1000004 and not candidate["root_trusted"]
+    assert candidate["verified_on_compute"] is False
+
+
+def test_initializer_candidate_requires_system_owned_reference(tmp_path):
+    observed = tmp_path / "z00_lmod.sh";observed.write_text("must-not-source")
+    # A path beneath writable /tmp is not a protected system reference, even
+    # if the test process happens to own its final file as UID0.
+    with pytest.raises(ValueError): helper.module_initializer_candidate(str(observed))
+
+
+def test_site_initializer_candidate_keeps_strict_availability_initializer(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog;(root / "tool.lua").touch()
+    system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + str(root)})
+    candidate = {"observed_path": "/etc/profile.d/z00_lmod.sh", "observed_canonical_path": "/site/lmod/9/init/profile",
+        "canonical_path": "/site/lmod/9/init/bash", "source": "known_system_initializer_reference",
+        "owner_uid": 1000004, "group_gid": 517, "mode": "0o755", "root_trusted": False, "verified_on_compute": False}
+    monkeypatch.setattr(helper, "module_initializer_candidate", lambda _path: candidate)
+    calls = []
+    def command(argv, **_kwargs):
+        calls.append(argv[4]);return {"returncode": 0, "stdout": "tool\n", "stderr": "", "truncated": False}
+    monkeypatch.setattr(helper, "software_command", command)
+    m = helper.software_discovery({"environment_discovery": {"module_inventory_mode": "auto",
+        "module_availability_enabled": True, "python_executables": []}})["modules"]
+    assert m["init_path"] == "/site/lmod/9/init/bash" and m["initializer_status"] == "site_metadata_candidate"
+    assert m["observed_init_path"] == "/etc/profile.d/z00_lmod.sh" and not m["initializer_verified_on_compute"]
+    assert m["availability_init_path"] == "/usr/share/lmod/lmod/init/bash"
+    assert ". /usr/share/lmod/lmod/init/bash " in calls[0] and "/site/lmod/9/init/bash" not in calls[0]

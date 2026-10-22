@@ -458,6 +458,58 @@ def module_configuration_reference(path):
             or (path.startswith("/etc/profile.d/") and basename.endswith(".sh")))
 
 
+def module_initializer_candidate(observed):
+    """Inspect a known system reference and its canonical initializer metadata.
+
+    Root-owned references may point into a site-admin software installation.
+    That makes a useful human recipe candidate, never permission to source it.
+    No initializer contents are read and no installed interpreter is executed.
+    """
+    observed = discovery_path(observed)
+    current = "/"
+    for component in observed.lstrip("/").split("/"):
+        current = os.path.join(current, component)
+        info = os.lstat(current)
+        if info.st_uid != 0 or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o022):
+            raise ValueError("Known initializer reference must be system-owned and protected")
+    reference = os.lstat(observed)
+    if not (stat.S_ISREG(reference.st_mode) or stat.S_ISLNK(reference.st_mode)):
+        raise ValueError("Initializer reference is not a regular file or system link")
+    original_target = discovery_path(os.path.realpath(observed))
+    targets = [original_target]
+    # Lmod's system profile is often the site's root-owned link. The adjacent
+    # shell-specific initializer is the explicit Bash recipe candidate.
+    if original_target.endswith("/init/profile"):
+        targets.insert(0, os.path.dirname(original_target) + "/bash")
+    for target in targets:
+        directory = descriptor = None
+        try:
+            directory = open_metadata_module_root(os.path.dirname(target), allow_group_writable=True)
+            descriptor = os.open(os.path.basename(target), getattr(os, "O_PATH", os.O_RDONLY) | NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o002:
+                raise ValueError("Initializer candidate is not a protected regular file")
+            try:
+                trusted_system_path(target, directory=False)
+                root_trusted = True
+            except (OSError, ValueError):
+                root_trusted = False
+            return {"observed_path": observed, "observed_canonical_path": original_target,
+                    "canonical_path": target, "source": "known_system_initializer_reference",
+                    "owner_uid": info.st_uid, "group_gid": info.st_gid,
+                    "mode": oct(stat.S_IMODE(info.st_mode)), "root_trusted": root_trusted,
+                    "verified_on_compute": False}
+        except (OSError, ValueError):
+            continue
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if directory is not None:
+                os.close(directory)
+    raise ValueError("Initializer target metadata is unsafe or unavailable")
+
+
 def literal_module_paths(text, *, path_file=False):
     """Extract literal path data only; shell syntax/expansions are never run.
 
@@ -539,11 +591,16 @@ def automatic_module_inventory(options):
     deadline = time.monotonic() + 2
     initializers = [options["module_init"]] if options.get("module_init") else list(MODULE_INITIALIZERS)
     chosen_initializer = None
+    initializer_candidates = []
     for initializer in initializers:
         try:
+            initializer_candidates.append(module_initializer_candidate(initializer))
+        except (OSError, ValueError):
+            pass
+        try:
             trusted_system_path(initializer, directory=False)
-            chosen_initializer = initializer
-            break
+            if chosen_initializer is None:
+                chosen_initializer = initializer
         except (OSError, ValueError):
             pass
     if "module_paths" in options:
@@ -658,6 +715,18 @@ def automatic_module_inventory(options):
     if chosen_initializer:
         scan_options["module_init"] = chosen_initializer
     result = metadata_module_inventory(scan_options)
+    if chosen_initializer:
+        # Command execution keeps the pre-existing strict root trust policy,
+        # independent of the provisional recipe candidate selected below.
+        result["availability_init_path"] = chosen_initializer
+    if initializer_candidates:
+        preferred = initializer_candidates[0]
+        result.update(init_path=preferred["canonical_path"],
+            observed_init_path=preferred["observed_path"], canonical_init_path=preferred["canonical_path"],
+            initializer_status="metadata_verified" if preferred["root_trusted"] else "site_metadata_candidate",
+            initializer_candidates=initializer_candidates, initializer_verified_on_compute=False)
+        if not preferred["root_trusted"]:
+            warnings.append("Canonical site initializer is a metadata-only recipe candidate requiring human review; it was not executed or verified on compute nodes.")
     result.update(requested_inventory_mode="auto", path_source="configured" if "module_paths" in options else "trusted_system_configuration",
         source="automatic_system_modulepath_metadata", path_provenance=provenance,
         intended_module_paths=candidates, validated_module_paths=validated_paths,
@@ -921,7 +990,7 @@ def augment_module_availability(modules):
                    "module_code_evaluation_authorized": True}
     modules["availability"] = observation
     modules["metadata_available"] = list(modules["available"])
-    initializer = modules.get("init_path")
+    initializer = modules.get("availability_init_path", modules.get("init_path"))
     paths = modules.get("validated_module_paths", modules.get("module_paths", []))
     observation["module_paths"] = list(paths)
     if modules.get("module_path_validation_truncated"):

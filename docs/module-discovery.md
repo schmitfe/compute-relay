@@ -47,8 +47,30 @@ remain excluded, and directory traversal remains descriptor-relative without
 following links. Direct explicit metadata mode retains its stricter write
 policy, and the availability execution policy is unchanged. The scanner skips
 links, special files and housekeeping names. Personal home directories are not
-searched automatically. A valid system initializer may be reported for recipe
-prefill, but it is not executed during this inventory.
+searched automatically. Initializer paths are optional advanced metadata,
+not a requirement to initialize the module system in every job. The normal
+recipe can use the module command supplied by the cluster. Discovery must not
+make a login-node initializer a mandatory recipe default.
+
+Automatic discovery distinguishes the observed system reference from its
+canonical target. `initializer_candidates` records `observed_path`,
+`observed_canonical_path`, `canonical_path`, source, owner UID, group GID,
+mode, `root_trusted`, and `verified_on_compute=false`. For a system Lmod
+`init/profile` link, an existing protected sibling `init/bash` can be reported
+as the explicit Bash candidate without reading either file. A site-owned
+target is labeled `initializer_status=site_metadata_candidate`; it remains
+subject to human review before optional recipe use. The selected optional
+candidate is also reported as `init_path`/`canonical_init_path`, together with
+`observed_init_path` and `initializer_verified_on_compute=false`.
+
+The lab demonstrates why the distinction matters. Its login node has a local
+root-owned `/usr/share/lmod/8.6.19/init/bash` installation, while the known
+system `z00_lmod.sh` link resolves into the shared site Lmod installation.
+The earlier strict inventory skipped the site-owned target and exposed the
+login-local fallback; a compute job then failed because that local path did
+not exist there. A canonical shared candidate avoids that misleading alias,
+but login-node metadata still cannot establish compute-node availability.
+Historical job recipes and manifests are never changed by discovery.
 
 The snapshot includes `requested_inventory_mode=auto`, `inventory_mode=metadata`,
 `provisional=true`, canonical `module_paths`, `path_provenance`, bounded
@@ -111,7 +133,7 @@ An owner can also enable a complementary login-node availability probe:
 
 The option defaults to `false` and is valid only with automatic mode. When
 enabled, a fixed noninteractive Bash command sources the known, separately
-audited root-owned module initializer, sets `MODULEPATH` to the discovered
+audited root-owned `availability_init_path`, sets `MODULEPATH` to the discovered
 catalog roots, and runs `module --terse avail`. It has an eight-second deadline,
 256 KiB output limit per stream and 8192-name limit, with no personal shell
 startup, interactive input, arbitrary command field, installation or job.
@@ -119,6 +141,8 @@ Unlike metadata discovery, this explicitly authorized operation can evaluate
 site module/rc code under the SSH user's authority, including software-group
 managed code reached by the module system. This is why it requires a distinct
 owner-controlled option; it does not relax the existing `availability` mode.
+The metadata-only optional initializer candidate does not replace that
+separately selected trusted command initializer or authorize its execution.
 
 The snapshot retains filename candidates as `metadata_available` and reports
 the command result separately under `availability`, including status, names,
