@@ -106,6 +106,14 @@ optional environment, workflow and storage extensions. See
 [personal connectors](personal-connectors.md) for the local setup and trust
 boundaries.
 
+The running development portal was backed up and migrated through `0012`.
+At the user's request, its earlier lab configurations and disposable job
+history were then purged, test compute balances reset, and the old lab worker
+removed from startup. Accounts, projects, API keys and the synthetic demo
+connection were retained. Authenticated HTTP checks confirmed the local-key
+picker guidance, removal control and confirmation page. This development-data
+cleanup made no SSH requests and did not delete HPC files.
+
 ### PostgreSQL, LDAP and async Slurm acceptance, 22 October 2026
 
 A full PostgreSQL regression run passed **780 tests and 65 subtests**, with one
