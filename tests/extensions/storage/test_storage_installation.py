@@ -12,8 +12,13 @@ import pytest
 
 def test_disabled_storage_needs_no_plugin_tables_routes_or_model_imports(tmp_path):
     source = Path(__file__).resolve().parents[3] / "src"
-    env = {**os.environ, "BROKER_EXTENSIONS": "", "DJANGO_SETTINGS_MODULE": "compute_broker.control.settings",
-           "PYTHONPATH": str(source), "BROKER_DATA_DIR": str(tmp_path / "disabled")}
+    # This fresh installation must never inherit a running broker's database,
+    # identity configuration or secrets from the parent test environment.
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("BROKER_") and key != "DJANGO_SETTINGS_MODULE"}
+    env.update(BROKER_EXTENSIONS="", DJANGO_SETTINGS_MODULE="compute_broker.control.settings",
+               PYTHONPATH=str(source), BROKER_DATA_DIR=str(tmp_path / "disabled"),
+               BROKER_DB_PATH=str(tmp_path / "disabled.sqlite3"))
     program = """
 import sys
 import django

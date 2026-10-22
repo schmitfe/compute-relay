@@ -36,9 +36,9 @@ def store_blob(project, data, *, maximum=None):
     if shutil.disk_usage(settings.ARTIFACT_ROOT).free < len(data) + 8 * 1024 * 1024:
         raise BrokerError("STORAGE_UNAVAILABLE", "Storage headroom is exhausted.", 503)
     with transaction.atomic():
+        current = Project.objects.select_for_update().get(id=project.id)
         StoragePool.objects.get_or_create(id=1)
         pool = StoragePool.objects.select_for_update().get(id=1)
-        current = Project.objects.select_for_update().get(id=project.id)
         existing = Blob.objects.filter(project=current, sha256=digest).first()
         if existing:
             read_blob(existing)
@@ -74,8 +74,8 @@ def store_blob(project, data, *, maximum=None):
         finally:
             os.close(directory_fd)
         with transaction.atomic():
-            pool = StoragePool.objects.select_for_update().get(id=1)
             current = Project.objects.select_for_update().get(id=project.id)
+            pool = StoragePool.objects.select_for_update().get(id=1)
             upload = UploadReservation.objects.select_for_update().get(id=reservation.id)
             blob, created = Blob.objects.get_or_create(project=current, sha256=digest, defaults={"size_bytes": len(data)})
             read_blob(blob)
@@ -94,8 +94,8 @@ def store_blob(project, data, *, maximum=None):
         if temporary:
             Path(temporary).unlink(missing_ok=True)
         with transaction.atomic():
-            pool = StoragePool.objects.select_for_update().get(id=1)
             current = Project.objects.select_for_update().get(id=project.id)
+            pool = StoragePool.objects.select_for_update().get(id=1)
             upload = UploadReservation.objects.select_for_update().get(id=reservation.id)
             if upload.state == "reserved":
                 current.storage_reserved -= len(data)

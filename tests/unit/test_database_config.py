@@ -22,6 +22,12 @@ def test_sqlite_remains_explicit_personal_default(tmp_path):
     assert database_config(tmp_path, {"BROKER_DB_PATH": "/tmp/synthetic.sqlite3"})["NAME"] == "/tmp/synthetic.sqlite3"
 
 
+def test_completed_migration_fences_accidental_sqlite_restart(tmp_path):
+    (tmp_path / "control.sqlite3.migrated").write_text("synthetic cutover marker")
+    with pytest.raises(ImproperlyConfigured, match="migrated"):
+        database_config(tmp_path, {})
+
+
 def test_postgres_uses_private_secret_and_separate_options(tmp_path):
     config = database_config(tmp_path, postgres(tmp_path))
     assert config["PASSWORD"] == "synthetic-only-password"

@@ -42,8 +42,12 @@ def database_config(data_dir, environ=None):
     environ = os.environ if environ is None else environ
     engine = environ.get("BROKER_DB_ENGINE", "sqlite")
     if engine == "sqlite":
+        name = environ.get("BROKER_DB_PATH", str(Path(data_dir) / "control.sqlite3"))
+        fence = Path(name + ".migrated")
+        if fence.exists() or fence.is_symlink():
+            raise ImproperlyConfigured("This SQLite installation was migrated; use its PostgreSQL configuration. Rollback requires reconciliation.")
         return {"ENGINE": "django.db.backends.sqlite3",
-            "NAME": environ.get("BROKER_DB_PATH", str(Path(data_dir) / "control.sqlite3")),
+            "NAME": name,
             "OPTIONS": {"timeout": 15, "transaction_mode": "IMMEDIATE"}}
     if engine != "postgresql":
         raise ImproperlyConfigured("BROKER_DB_ENGINE must be sqlite or postgresql")

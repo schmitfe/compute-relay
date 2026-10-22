@@ -36,6 +36,9 @@ def require_credential_actor(credential, scope="jobs:execute"):
     user = User.objects.filter(id=credential.issued_by_id, is_active=True).first()
     if user is None:
         raise BrokerError("AUTH_REQUIRED", "The issuing user is disabled or this key has no verified owner.", 403)
+    from .identity.authority import cached_user_active
+    if not cached_user_active(user):
+        raise BrokerError("AUTH_REQUIRED", "The issuing user's account verification has expired or access was withdrawn.", 403)
     role = "viewer" if scope in {"jobs:read", "artifacts:read"} else "submitter"
     human_permission(user, credential.project, role)
     return user
@@ -65,6 +68,9 @@ def require_connection(credential, connection_id):
 def human_permission(user, project, role):
     if not user.is_authenticated or not user.is_active:
         raise BrokerError("AUTH_REQUIRED", "Sign in with a human account.", 401)
+    from .identity.authority import cached_user_active
+    if not cached_user_active(user):
+        raise BrokerError("AUTH_REQUIRED", "Account verification is required.", 403)
     if project.owner_id == user.id or user.is_superuser:
         return
     membership = Membership.objects.filter(project=project, user=user).first()

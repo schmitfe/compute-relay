@@ -30,6 +30,7 @@ ROOT_URLCONF = "compute_broker.control.urls"
 AUTH_USER_MODEL = "broker.User"
 from .identity.providers import load_provider_configuration
 BROKER_IDENTITY_PROVIDERS = load_provider_configuration(os.environ.get("BROKER_IDENTITY_CONFIG_FILE"))
+AUTHENTICATION_BACKENDS = ["compute_broker.control.identity.backends.IdentityRoutingBackend"]
 from compute_broker.extensions import configured_names, application_configs
 try:
     BROKER_EXTENSIONS = configured_names()
