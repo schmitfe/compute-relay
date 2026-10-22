@@ -164,3 +164,26 @@ def test_active_job_upgrade_deferral_keeps_old_fingerprint(runtime):
     runtime.client.deferred = True
     asyncio.run(runtime.worker.hello())
     assert runtime_profile(runtime.state, runtime.session)[1] == before
+
+
+def test_new_folder_retries_use_receipt_and_do_not_repeat_mutation(runtime, monkeypatch):
+    operations = []
+    async def remote(_session, operation, **arguments):
+        operations.append(operation)
+        result = {"ok": True, "path": "/home/researcher/new-project", "parent": "/home/researcher",
+            "home": "/home/researcher", "entries": [], "writable": True, "truncated": False, "scanned_entries": 0}
+        return {**result, "created": True} if operation == "mkdir" else result
+    monkeypatch.setattr(personal_setup, "remote_setup", remote)
+    current = task("mkdir", request={"path": "/home/researcher", "name": "new-project"})
+    runtime.client.queue = [current];runtime.client.fail_report = True
+    original_root = runtime.state["connection"]["remote_root"]
+    with pytest.raises(ControlError):
+        asyncio.run(runtime.worker.setup_once())
+    stored = read_private(runtime.directory / "state.json")
+    assert stored["last_folder_receipt"] == {"path": "/home/researcher/new-project", "created": True}
+    assert "entries" not in stored["last_folder_receipt"]
+    runtime.client.queue = [{**current, "lease_id": str(uuid4()), "generation": 2}]
+    asyncio.run(runtime.worker.setup_once())
+    assert operations == ["mkdir", "browse"]
+    assert runtime.state["connection"]["remote_root"] == original_root
+    assert runtime.client.calls[-1][1]["result"]["created"] is True

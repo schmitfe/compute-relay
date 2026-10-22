@@ -50,9 +50,27 @@ def finish_configuration(human, demo, directory):
         time.sleep(0.25)
     else:
         raise SmokeFailure("Remote directory listing timed out")
-    # Select a baseline outside the original fixture profile. This demonstrates
-    # owner-approved scope changes and no-write preflight before real execution.
+    # Create one folder through the narrow owner operation, then explicitly
+    # select it as the baseline. Creation alone must not change worker scope.
     chosen = home + "/personal-broker-jobs"
+    original_root = json.loads((directory / "state.json").read_bytes())["connection"]["remote_root"]
+    human.request("POST", f"/clusters/{connection_id}/directories/", {
+        "action": "mkdir", "path": home, "name": "personal-broker-jobs",
+        "connection_revision": fields.values["connection_revision"]}, form=True, binary=True)
+    pending = redirected_path(human)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        page = human.request("GET", pending, binary=True)
+        match = re.search(rb'id="remote-directory" data-path="([^"]+)"', page)
+        if match:
+            require(unescape(match.group(1).decode()) == chosen, "New folder did not open for selection")
+            require(b"Folder created." in page, "Folder creation was not acknowledged")
+            break
+        time.sleep(0.25)
+    else:
+        raise SmokeFailure("Remote folder creation timed out")
+    require(json.loads((directory / "state.json").read_bytes())["connection"]["remote_root"] == original_root,
+            "Creating a folder changed the selected baseline")
     page = human.request("GET", f"/clusters/{connection_id}/configuration/", binary=True)
     fields = ConfigurationFields();fields.feed(page.decode())
     fields.values["remote_root"] = chosen
@@ -153,7 +171,8 @@ def run():
             "native_ssh_master": True, "nested_private_state": True, "discovery": True, "reviewed_slurm_execution": True,
             "same_worker_on_resume": True, "master_closed_on_shutdown": True,
             "removed_configuration": True, "master_closed_on_revocation": True,
-            "post_login_directory_browser": True, "owner_configuration_persisted": True}))
+            "post_login_directory_browser": True, "created_selected_folder": True,
+            "owner_configuration_persisted": True}))
 
 
 if __name__ == "__main__":

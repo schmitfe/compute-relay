@@ -123,7 +123,15 @@ provisional filename catalog; it does not evaluate modulefiles or load modules.
 Select **Browse directories on this cluster** to navigate folders through the
 running worker. Only bounded directory metadata returns to your human session;
 there is no general remote command or file-content browser for agents. Select
-a baseline directory or edit its path, then confirm resource limits and explicit
+a writable parent and use **New folder → Create and open folder** if the desired
+directory does not exist. This creates one private directory (0700), with a
+single name made of letters, digits, dots, underscores or hyphens. Existing
+directories are opened without changing their contents or permissions; files
+and symbolic links are refused. Creating a folder does not change the selected
+baseline: select **Use this working directory**, then save the configuration.
+An older running connector needs a restart before it offers folder creation.
+
+Select a baseline directory or edit its path, then confirm resource limits and explicit
 accounting bounds. The worker validates access without creating files, saves its
 new protected scope locally and acknowledges it before job access is enabled.
 Changes are refused while execution or accounting is unsettled. Project/key

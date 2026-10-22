@@ -74,6 +74,8 @@ def enqueue(user, connection_id, kind, payload, revision):
             raise BrokerError("REVISION_CHANGED", "The cluster changed. Reload this page before continuing.", 409)
         if "personal_setup_v1" not in worker.connector_features:
             raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector with the updated broker environment to enable interactive configuration.", 409)
+        if kind == "mkdir" and "personal_folders_v1" not in worker.connector_features:
+            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable the New folder action.", 409)
         expire_tasks(current)
         pending = ConnectorTask.objects.filter(connection=current, state__in=["queued", "running"])
         if pending.filter(kind="configure").exists() or pending.count() >= 4:
@@ -98,7 +100,18 @@ def directories(request, connection_id):
         path = request.POST.get("path", "")
         if path and not canonical_root(path) and path != "/":
             raise BrokerError("INVALID_DIRECTORY", "Use a canonical absolute directory path without shell syntax.")
-        task = enqueue(request.user, connection_id, "browse", {"path": path}, request.POST.get("connection_revision"))
+        action = request.POST.get("action", "browse")
+        if action == "mkdir":
+            name = request.POST.get("name", "")
+            if (not path or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name) or name in {".", ".."}
+                    or len(path.rstrip("/") + "/" + name) > 240):
+                raise BrokerError("INVALID_FOLDER_NAME", "Enter one folder name using letters, numbers, dots, underscores or hyphens, up to 80 characters.")
+            payload = {"path": path, "name": name}
+        elif action == "browse":
+            payload = {"path": path}
+        else:
+            raise BrokerError("INVALID_ACTION", "Choose a supported directory action.")
+        task = enqueue(request.user, connection_id, action, payload, request.POST.get("connection_revision"))
         return redirect(f"/clusters/{connection_id}/directories/?" + urlencode({"task": str(task.id)}))
     task = None
     if request.GET.get("task"):
@@ -106,14 +119,15 @@ def directories(request, connection_id):
             task_id = UUID(request.GET["task"])
         except ValueError:
             raise BrokerError("INVALID_TASK", "Choose a valid directory request.") from None
-        task = get_object_or_404(ConnectorTask, id=task_id, connection=connection, owner=request.user, kind="browse")
+        task = get_object_or_404(ConnectorTask, id=task_id, connection=connection, owner=request.user, kind__in=["browse", "mkdir"])
         if task.expires_at <= timezone.now() and task.state in {"queued", "running"}:
             # Expiry is displayed without making a GET mutate the task.
             task.state, task.error_code = "failed", "CONNECTOR_TASK_EXPIRED"
     result = task.result if task and task.state == "succeeded" else {}
     return render(request, "broker/cluster_directories.html", {"cluster": connection, "task": task,
         "result": result, "waiting": bool(task and task.state in {"queued", "running"}),
-        "connector_ready": "personal_setup_v1" in connection.worker.connector_features})
+        "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
+        "folders_ready": "personal_folders_v1" in connection.worker.connector_features})
 
 
 @human_view
@@ -165,7 +179,10 @@ def tasks(request):
         connection, worker, _registration = locked_connection(reference, worker)
         defaults_deferred = False
         if document.get("hello") is True:
-            worker.connector_features = ["personal_setup_v1"]
+            features = document.get("features", ["personal_setup_v1"])
+            if not isinstance(features, list) or any(item not in {"personal_setup_v1", "personal_folders_v1"} for item in features):
+                raise BrokerError("INVALID_FEATURES", "Unsupported connector setup capabilities.")
+            worker.connector_features = list(dict.fromkeys(features))
             worker.save(update_fields=["connector_features"])
             if document.get("needs_discovery") is True:
                 if Attempt.objects.filter(connection=connection).exclude(accounting_state__in=["settled", "released"]).exists():
@@ -222,8 +239,11 @@ def report(request, task_id):
         if document.get("outcome") != "succeeded":
             code = document.get("error_code", "CONNECTOR_OPERATION_FAILED")
             task.state, task.error_code = "failed", code if re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", str(code)) else "CONNECTOR_OPERATION_FAILED"
-        elif task.kind == "browse":
-            if (set(result) - {"ok", "path", "parent", "home", "entries", "writable", "truncated", "scanned_entries"}
+        elif task.kind in {"browse", "mkdir"}:
+            allowed = {"ok", "path", "parent", "home", "entries", "writable", "truncated", "scanned_entries"}
+            if task.kind == "mkdir":
+                allowed.add("created")
+            if (set(result) - allowed or (task.kind == "mkdir" and type(result.get("created")) is not bool)
                     or not isinstance(result.get("entries"), list) or len(result["entries"]) > 200
                     or not isinstance(result.get("path"), str)):
                 raise BrokerError("INVALID_RESULT", "Invalid directory listing.")

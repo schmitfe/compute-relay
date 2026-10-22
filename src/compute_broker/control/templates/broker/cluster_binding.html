@@ -7,7 +7,7 @@
 {% if selected_worker %}<section><h2>{{ selected_worker.name }}: advertised profiles</h2>
 {% for profile in profiles %}<article><strong>{{ profile.alias }}</strong><p>Hosts: {{ profile.allowed_hosts|join:", " }}<br>Users: {{ profile.allowed_users|join:", " }}<br>Ports: {{ profile.allowed_ports|join:", " }}<br>Approved directory prefixes: {{ profile.remote_root_prefixes|join:", " }}</p></article>
 {% empty %}<p>This worker has not advertised a {{ setup.backend }} profile. Configure it using the setup template, restart it, and reload this page.</p>{% endfor %}
-{% if profiles %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>Connect worker and identify cluster</button></form>{% endif %}
+{% if profiles %}<form method="post">{% csrf_token %}{% include "broker/configuration_form.html" %}<button>Connect worker and identify cluster</button></form>{% endif %}
 <p>If the proposed directory is outside the listed prefixes, approve its mapping in the worker configuration first. A profile change requires reloading this page.</p></section>
 {% else %}<p class="notice">You can keep the cluster saved while a worker is being registered or configured.</p>{% endif %}
 {% endblock %}

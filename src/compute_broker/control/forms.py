@@ -61,6 +61,8 @@ class ProjectForm(forms.Form):
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["connections"].queryset = owned_connections(user).filter(setup_complete=True)
+        self.pending_connections = owned_connections(user).filter(setup_complete=False).order_by("name", "id")
+        self.fields["connections"].help_text = "Only clusters with completed setup can be granted to a project."
         if self.is_bound:
             values = self.data.getlist("connections") if hasattr(self.data, "getlist") else self.data.get("connections", [])
         else:

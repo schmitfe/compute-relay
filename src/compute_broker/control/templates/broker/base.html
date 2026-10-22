@@ -23,4 +23,14 @@
 .key-actions button,.key-actions .button{display:block;box-sizing:border-box;width:100%;margin:0;text-align:center;white-space:normal;overflow-wrap:normal;line-height:1.4}
 .button.secondary{background:#edf4f6;color:#155e75;border:1px solid #adc3cc}
 </style>
+<style>
+.form-field{margin:1.3rem 0;max-width:42rem}
+.form-field>label{margin:0 0 .35rem;font-weight:600}
+.form-field>input:not([type=checkbox]),.form-field>select,.form-field>textarea{display:block;width:100%;box-sizing:border-box}
+.form-field .errorlist{list-style:none;padding:0;margin:.35rem 0;color:#943d33;font-weight:500}
+.form-field .helptext{margin:.35rem 0 0}
+.form-field [aria-invalid=true]{border:2px solid #943d33}
+.validation-summary{border-left:4px solid #943d33;padding:.8rem 1rem;background:#fff4f2}
+.validation-summary a{color:#943d33}
+</style>
 {% block content %}{% endblock %}</body></html>

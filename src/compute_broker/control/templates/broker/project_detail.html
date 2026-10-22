@@ -17,5 +17,5 @@
 </div>{% else %}<small>Audit record retained</small>{% endif %}</td>
 </tr>{% empty %}<tr><td colspan="4">No keys yet. Create one for each agent or client.</td></tr>{% endfor %}
 </tbody></table></div></section>
-<section><h2>Limits and cluster access</h2><p>These are total allowances, including compute already spent or reserved. The form uses hours; the ledger stores integer seconds.</p>{% if error %}<p class="error">{{ error }}</p>{% endif %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>Save project settings</button></form></section>
+<section><h2>Limits and cluster access</h2><p>These are total allowances, including compute already spent or reserved. The form uses hours; the ledger stores integer seconds.</p>{% if error %}<p class="error">{{ error }}</p>{% endif %}<form method="post">{% csrf_token %}{% include "broker/configuration_form.html" %}<button>Save project settings</button></form></section>
 {% endblock %}

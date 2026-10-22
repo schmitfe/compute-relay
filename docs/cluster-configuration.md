@@ -9,6 +9,20 @@ the configuration before new jobs are allowed. No remote files are created by
 selection or validation. Existing execution and accounting must finish before
 the configuration can change. Project keys cannot access these setup routes.
 
+The directory browser also offers **New folder** inside a writable parent. It
+creates one private directory and opens it for selection. This explicit action
+is separate from selecting or validating a baseline; it never recursively
+creates parents, overwrites a file or follows a child symbolic link. A retry
+opens an already existing ordinary directory without altering it. Choose
+**Use this working directory** and save the configuration to adopt the folder.
+
+Invalid configuration fields display their messages directly below the input.
+The summary at the top links each message to its field, including the baseline
+directory. No worker configuration request is queued until validation succeeds.
+Project settings list unfinished clusters beneath **Allowed clusters**, with a
+link to the remaining setup step. They cannot be granted access until setup is
+complete; saved discovery alone does not confirm their accounting assumptions.
+
 **Cluster configuration** is the human-facing name. The internal configuration
 object remains `site_profile`, so existing packages and worker profiles retain
 their versioned field names. This guide describes the derivation/form contract;

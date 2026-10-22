@@ -31,7 +31,7 @@ def personal():
         "profile_revision": 1, "ssh": {"mode": "mfa", "control_path": "/private/s", "known_hosts": "/private/known_hosts"}}
     metadata = profile_metadata("personal-test", protected)
     worker = WorkerIdentity.objects.create(owner=owner, name="Personal", token_hash=token_hash(token),
-        profiles=[metadata], connector_features=["personal_setup_v1"])
+        profiles=[metadata], connector_features=["personal_setup_v1", "personal_folders_v1"])
     public = resolve_connection({"backend": "slurm", "credential_profile": "personal-test",
         "ssh": {"host": "cluster.example", "user": "researcher", "port": 22}, "remote_root": "/home/researcher/jobs"},
         {"personal-test": protected})[1]
@@ -262,3 +262,69 @@ def test_discovery_during_configuration_cannot_reopen_admission(personal):
         "connection_revision_sha256": context.connection.revision_sha256, "discovery_snapshot": context.connection.discovery_snapshot})
     context.connection.refresh_from_db()
     assert not context.connection.setup_complete and not context.connection.configuration_confirmed
+
+
+def test_new_folder_queues_one_owned_operation_and_opens_result(personal):
+    context = personal
+    response = context.human.post(f"/clusters/{context.connection.id}/directories/", {
+        "action": "mkdir", "path": "/home/researcher", "name": "new-project",
+        "connection_revision": context.connection.revision_sha256})
+    assert response.status_code == 302
+    work = lease(context)
+    assert work["kind"] == "mkdir" and work["request"] == {"path": "/home/researcher", "name": "new-project"}
+    result = {"ok": True, "path": "/home/researcher/new-project", "parent": "/home/researcher", "home": "/home/researcher",
+        "entries": [], "writable": True, "truncated": False, "scanned_entries": 0, "created": True}
+    assert reply(context, work, result=result).status_code == 200
+    page = context.human.get(response.url)
+    assert b"Folder created." in page.content and b"Use this working directory" in page.content
+    context.connection.refresh_from_db()
+    assert context.connection.configuration["remote_root"] == "/home/researcher/jobs"
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "../escape", "nested/folder", "/absolute", "space here", "x;touch", "x" * 81])
+def test_new_folder_names_are_single_safe_components(personal, name):
+    response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {
+        "action": "mkdir", "path": "/home/researcher", "name": name,
+        "connection_revision": personal.connection.revision_sha256})
+    assert response.status_code == 400 and not ConnectorTask.objects.exists()
+
+
+def test_new_folder_requires_worker_capability(personal):
+    personal.worker.connector_features = ["personal_setup_v1"];personal.worker.save()
+    response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {
+        "action": "mkdir", "path": "/home/researcher", "name": "new-project",
+        "connection_revision": personal.connection.revision_sha256})
+    assert response.status_code == 409 and b"Restart" in response.content and not ConnectorTask.objects.exists()
+
+
+def test_existing_folder_result_is_not_described_as_new(personal):
+    context = personal
+    response = context.human.post(f"/clusters/{context.connection.id}/directories/", {
+        "action": "mkdir", "path": "/home/researcher", "name": "existing",
+        "connection_revision": context.connection.revision_sha256})
+    work = lease(context)
+    result = {"ok": True, "path": "/home/researcher/existing", "parent": "/home/researcher", "home": "/home/researcher",
+        "entries": [], "writable": True, "truncated": False, "scanned_entries": 0, "created": False}
+    assert reply(context, work, result=result).status_code == 200
+    page = context.human.get(response.url)
+    assert b"already existed" in page.content and b"Folder created." not in page.content
+
+
+def test_hello_advertises_new_folder_support_explicitly(personal):
+    response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
+        "hello": True, "features": ["personal_setup_v1", "personal_folders_v1"]})
+    assert response.status_code == 200
+    personal.worker.refresh_from_db()
+    assert personal.worker.connector_features == ["personal_setup_v1", "personal_folders_v1"]
+
+
+def test_invalid_configuration_errors_follow_their_field_and_link_from_summary(personal):
+    response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal,
+        maximum_cpus=0, cleanup_margin_seconds=-1, remote_root="relative"))
+    assert response.status_code == 200 and not ConnectorTask.objects.exists()
+    body = response.content.decode()
+    for name in ("maximum_cpus", "cleanup_margin_seconds", "remote_root"):
+        assert f'href="#id_{name}"' in body
+        assert f'id="id_{name}_error"' in body
+        assert body.index(f'name="{name}"') < body.index(f'id="id_{name}_error"')
+    assert 'aria-invalid="true"' in body and 'aria-describedby="id_remote_root_error"' in body

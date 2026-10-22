@@ -11,21 +11,27 @@
 {% elif task %}<p class="error">The configuration was not completed: {{ task.error_code|default:"The request expired" }}. Check the directory and connector, then retry.</p>{% endif %}
 {% if derived.warnings %}<ul>{% for item in derived.warnings %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
 {% if derived.unknowns %}<p>Not established by discovery: {{ derived.unknowns|join:", " }}. Set explicit limits where required.</p>{% endif %}
+{% if form.errors or root_error %}<div class="validation-summary" role="alert">
+<strong>Check these configuration fields:</strong><ul>
+{% if root_error %}<li><a href="#id_remote_root">Baseline working directory: {{ root_error }}</a></li>{% endif %}
+{% for field in form %}{% for error in field.errors %}<li><a href="#{{ field.id_for_label }}">{{ field.label }}: {{ error }}</a></li>{% endfor %}{% endfor %}
+</ul>{{ form.non_field_errors }}</div>{% endif %}
 <form method="post">
 {% csrf_token %}<input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}">
 <section><h2>Working directory</h2>
-<label>Baseline working directory <input name="remote_root" value="{{ remote_root }}" maxlength="240" required></label>
-{% if root_error %}<p class="error">{{ root_error }}</p>{% endif %}
+<div class="form-field"><label for="id_remote_root">Baseline working directory</label>
+<input id="id_remote_root" name="remote_root" value="{{ remote_root }}" maxlength="240" required{% if root_error %} aria-invalid="true" aria-describedby="id_remote_root_error"{% endif %}>
+{% if root_error %}<ul class="errorlist" id="id_remote_root_error"><li>{{ root_error }}</li></ul>{% endif %}</div>
 <p>The connector checks this path using your HPC account. Choosing it does not create files; private job directories are created only when an execution is accepted.</p>
 <a class="button secondary" href="/clusters/{{ cluster.id }}/directories/">Browse directories on this cluster</a></section>
-<section><h2>Resource limits and scheduler access</h2>{{ form.non_field_errors }}
-{% for field in form.resource_fields %}<p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</p>{% endfor %}
+<section><h2>Resource limits and scheduler access</h2>
+{% for field in form.resource_fields %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}
 <p>CPU, GPU and memory limits are per job. Project and API-key limits still apply. Discovery does not verify termination, overtime or cleanup bounds and does not enable automatic spending.</p></section>
 <section><h2>Accounting bounds for reviewed jobs</h2>
 <p>Enter explicit site assumptions. Scheduler suggestions need your confirmation; cleanup cannot be inferred from discovery. Changing these bounds keeps automatic execution disabled.</p>
 {% if form.timing_suggestions.termination_margin_seconds %}<p>Saved scheduler termination suggestion: {{ form.timing_suggestions.termination_margin_seconds.value }} seconds across {{ form.timing_suggestions.termination_margin_seconds.partitions|join:", " }}.</p>{% endif %}
 {% if form.timing_suggestions.overtime_margin_seconds %}<p>Saved scheduler overtime suggestion: {{ form.timing_suggestions.overtime_margin_seconds.value }} seconds across {{ form.timing_suggestions.overtime_margin_seconds.partitions|join:", " }}.</p>{% endif %}
-{% for field in form.timing_fields %}<p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</p>{% endfor %}</section>
+{% for field in form.timing_fields %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}</section>
 <button type="submit"{% if waiting or not connector_ready %} disabled{% endif %}>Validate and save cluster configuration</button>
 </form>
 {% endblock %}

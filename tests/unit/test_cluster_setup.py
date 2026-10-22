@@ -69,6 +69,22 @@ def test_new_directory_is_saved_as_unapproved_intent(management):
     assert not form.fields["connections"].queryset.filter(id=draft.id).exists()
 
 
+def test_project_form_explains_owned_clusters_waiting_for_confirmation(management):
+    pending = Connection.objects.create(owner=management.owner, worker=management.worker,
+        name="Pending university cluster", backend="slurm", configuration={}, revision_sha256="a" * 64,
+        discovery_state="ready", setup_complete=False, configuration_confirmed=False)
+    foreign = Connection.objects.create(owner=management.outsider, worker=management.worker,
+        name="Private foreign setup", backend="slurm", configuration={}, revision_sha256="b" * 64,
+        discovery_state="ready", setup_complete=False, configuration_confirmed=False)
+    client = human(management.owner)
+    page = client.get("/projects/new/")
+    assert pending.name.encode() in page.content and foreign.name.encode() not in page.content
+    assert f'/clusters/{pending.id}/configuration/'.encode() in page.content
+    assert not page.context["form"].fields["connections"].queryset.filter(id=pending.id).exists()
+    forged = ProjectForm({"connections": [str(pending.id)]}, user=management.owner)
+    assert not forged.is_valid() and "connections" in forged.errors
+
+
 def test_setup_links_use_registered_human_worker_routes(management):
     draft = register(management)
     client = human(management.owner)

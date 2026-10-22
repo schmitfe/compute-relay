@@ -70,7 +70,8 @@ class PersonalWorker(AsyncWorker):
     async def setup_request(self, *, hello=False):
         document = {"connection_id": self.state["connection_id"]}
         if hello:
-            document.update(hello=True, needs_discovery=not self.state.get("defaults_initialized", False))
+            document.update(hello=True, needs_discovery=not self.state.get("defaults_initialized", False),
+                features=["personal_setup_v1", "personal_folders_v1"])
         if self.state.get("pending_configuration_task"):
             document["pending_task_id"] = self.state["pending_configuration_task"]
         try:
@@ -147,6 +148,18 @@ class PersonalWorker(AsyncWorker):
         try:
             if task["kind"] == "browse":
                 result = await remote_setup(self.session, "browse", path=task["request"]["path"])
+            elif task["kind"] == "mkdir":
+                if self.state.get("last_folder_task") == task["id"] and self.state.get("last_folder_receipt"):
+                    receipt = self.state["last_folder_receipt"]
+                    result = await remote_setup(self.session, "browse", path=receipt["path"])
+                    result["created"] = receipt["created"]
+                else:
+                    result = await remote_setup(self.session, "mkdir", path=task["request"]["path"], name=task["request"]["name"])
+                    if result.get("ok") is True:
+                        updated = deepcopy(self.state)
+                        updated["last_folder_task"] = task["id"]
+                        updated["last_folder_receipt"] = {"path": result["path"], "created": result["created"]}
+                        self.persist(updated)
             elif task["kind"] == "configure":
                 from compute_broker.domain.cluster_configuration import validate_cluster_configuration
                 validate_cluster_configuration(task["request"]["site_profile"], require_limits=True)
