@@ -20,6 +20,7 @@ def system_configuration(monkeypatch, documents):
     monkeypatch.setattr(helper, "read_trusted_module_configuration", read)
     monkeypatch.setattr(helper, "trusted_system_path", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(helper, "SYSTEM_MODULE_PATHS", ())
+    monkeypatch.setattr(helper, "MODULE_PROFILE_DIRECTORIES", ())
     monkeypatch.setattr(helper, "MODULE_INITIALIZERS", ("/usr/share/lmod/lmod/init/bash",))
     monkeypatch.setattr(helper, "software_command", lambda *_args, **_kwargs: pytest.fail("automatic catalog executed a command"))
     return reads
@@ -72,6 +73,86 @@ def test_standard_modulespath_file_supports_bounded_final_directory_wildcard(met
     assert all(not path.endswith("/alias") for path in result["modules"]["module_paths"])
 
 
+def test_auto_catalog_reads_site_profile_snippet_without_shell_execution(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    (root / "Python").mkdir();(root / "Python/3.13.lua").write_text("os.execute('must-not-run')")
+    snippets = root.parent / "profile.d";snippets.mkdir()
+    (snippets / "site-software.sh").touch()
+    (snippets / "site-software.csh").touch()
+    (snippets / ".personal.sh").touch()
+    filename = str(snippets / "site-software.sh")
+    reads = system_configuration(monkeypatch, {filename: "export MODULEPATH=" + str(root)})
+    monkeypatch.setattr(helper, "MODULE_PROFILE_DIRECTORIES", (str(snippets),))
+    result = helper.automatic_module_inventory({})
+    assert result["available"] == ["Python/3.13"]
+    assert filename in reads and str(snippets / "site-software.csh") not in reads
+    assert result["configuration_directories"] == [{"path": str(snippets), "status": "listed"}]
+    assert result["path_provenance"][0]["source"] == filename
+
+
+def test_auto_catalog_follows_literal_system_module_init_references(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    (root / "Python").mkdir();(root / "Python/3.12.lua").touch()
+    reads = system_configuration(monkeypatch, {
+        "/etc/profile": ". /opt/site/lmod/init/profile\nsource /home/user/init/bash\nsource $(touch /tmp/nope)",
+        "/opt/site/lmod/init/profile": "LMOD_MODULEPATH_INIT=/opt/site/etc/modulespath",
+        "/opt/site/etc/modulespath": str(root),
+    })
+    result = helper.automatic_module_inventory({})
+    assert result["available"] == ["Python/3.12"]
+    assert "/opt/site/lmod/init/profile" in reads and "/opt/site/etc/modulespath" in reads
+    assert "/home/user/init/bash" not in reads
+
+
+def test_auto_catalog_reads_only_literal_initrc_module_use_paths(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    (root / "tool.lua").touch()
+    reads = system_configuration(monkeypatch, {
+        "/etc/environment-modules/initrc": "module use --append " + str(root) + "\nmodule load hostile-default\nmodule use [exec touch /tmp/nope]"
+    })
+    result = helper.automatic_module_inventory({})
+    assert result["available"] == ["tool"] and "/etc/environment-modules/initrc" in reads
+    assert result["partial"] and result["unsupported_configuration_lines"]
+
+
+def test_site_module_use_union_keeps_conditional_paths_without_evaluating_unuse(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    ramses = root / "ramses/modules";ramses.mkdir(parents=True)
+    noeb = root / "noeb/arch/zen4/modules";noeb.mkdir(parents=True)
+    easybuild = root / "eb/arch/zen4/modules"
+    for path, name in ((ramses, "Python/3.12.lua"), (noeb, "custom/1.0"),
+                       (easybuild / "all", "NumPy/2.0.lua"), (easybuild / "bio", "BioPython/1.0.lua")):
+        (path / name).parent.mkdir(parents=True, exist_ok=True);(path / name).touch()
+    snippets = root.parent / "profile.d";snippets.mkdir()
+    for name in ("ramsesmods.sh", "zeasybuild.sh"):
+        (snippets / name).touch()
+    system_configuration(monkeypatch, {
+        str(snippets / "ramsesmods.sh"): "module use " + str(ramses) + "\nmodule use " + str(noeb),
+        str(snippets / "zeasybuild.sh"): "export MODULES_SEARCH_MATCH=contains\nif [ -n \"$HOSTTYPE\" ]; then\n module use " + str(easybuild) + "/*\n module unuse " + str(easybuild / "all") + "\nfi\n# module use /not/active/old-stack",
+    })
+    monkeypatch.setattr(helper, "MODULE_PROFILE_DIRECTORIES", (str(snippets),))
+    result = helper.automatic_module_inventory({})
+    assert result["available"] == ["BioPython/1.0", "NumPy/2.0", "Python/3.12", "custom/1.0"]
+    assert result["path_semantics"] == "literal_candidate_union" and result["partial"]
+    assert result["unsupported_configuration_lines"] == 1
+    assert "module unuse are not interpreted" in result["explanation"]
+    assert all("old-stack" not in entry["path"] for entry in result["path_provenance"])
+
+
+def test_system_profile_listing_is_bounded_and_rejects_untrusted_directory(tmp_path, monkeypatch):
+    snippets = tmp_path / "profile.d";snippets.mkdir()
+    for index in range(60):
+        (snippets / ("site%02d.sh" % index)).touch()
+    monkeypatch.setattr(helper, "MODULE_PROFILE_DIRECTORIES", (str(snippets),))
+    monkeypatch.setattr(helper, "trusted_system_path", lambda *_args, **_kwargs: None)
+    paths, directories, truncated = helper.module_profile_configuration(helper.time.monotonic() + 2)
+    assert len(paths) == 48 and truncated and directories[0]["status"] == "listed"
+    def untrusted(*_args, **_kwargs): raise ValueError("untrusted")
+    monkeypatch.setattr(helper, "trusted_system_path", untrusted)
+    paths, directories, truncated = helper.module_profile_configuration(helper.time.monotonic() + 2)
+    assert paths == [] and directories[0]["status"] == "unsafe_or_unavailable"
+
+
 def test_auto_mode_ignores_shell_constructs_and_never_scans_personal_homes(metadata_module_catalog, monkeypatch):
     marker = metadata_module_catalog / "executed"
     system_configuration(monkeypatch, {"/etc/profile": 'export MODULEPATH="$(touch ' + str(marker) + ')"\nexport MODULEPATH=/home/other/*'})
@@ -96,11 +177,53 @@ def test_auto_path_configuration_budget_stops_following_new_references(monkeypat
 def test_auto_mode_caps_candidate_roots_and_reports_truncation(metadata_module_catalog, monkeypatch):
     root = metadata_module_catalog
     paths = []
-    for index in range(20):
+    for index in range(70):
         directory = root / str(index);directory.mkdir();(directory / "tool.lua").touch();paths.append(str(directory))
     system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + ":".join(paths)})
     result = helper.automatic_module_inventory({})
-    assert len(result["path_provenance"]) == 16 and result["truncated"] and result["partial"]
+    assert len(result["path_provenance"]) == 64 and result["truncated"] and result["partial"]
+
+
+def test_auto_root_declared_group_managed_tree_is_names_only(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    root.chmod(0o2775)
+    (root / "Python").mkdir(mode=0o2775)
+    module = root / "Python/3.13.lua";module.write_text("os.execute('must-not-run')");module.chmod(0o664)
+    (root / "unsafe.lua").touch();(root / "unsafe.lua").chmod(0o666)
+    (root / "alias.lua").symlink_to(module)
+    system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + str(root)})
+    result = helper.automatic_module_inventory({})
+    assert result["available"] == ["Python/3.13"]
+    assert result["group_writable_entries"] >= 2 and result["provisional"]
+    assert result["write_policy"] == "root_declared_group_managed_metadata"
+    assert result["skipped"]["unsafe_permissions"] == 1 and result["skipped"]["symlinks"] == 1
+    assert any(w["reason"] == "group_managed_metadata_only" for w in result["ancestor_warnings"])
+    # Neither direct metadata nor protected explicit auto paths silently gain
+    # the exception reserved for system-root-declared software trees.
+    assert helper.metadata_module_inventory({"module_paths": [str(root)]})["available"] == []
+    assert helper.automatic_module_inventory({"module_paths": [str(root)]})["available"] == []
+
+
+def test_auto_catalog_larger_than_512_names_has_explicit_fixed_bounds(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    for index in range(600):
+        (root / ("tool%04d.lua" % index)).touch()
+    system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + str(root)})
+    result = helper.automatic_module_inventory({})
+    assert len(result["available"]) == 600 and not result["truncated"]
+    assert result["limits"]["names"] == 8192 and result["limits"]["entries"] == 32768
+
+
+def test_auto_never_reads_non_root_site_configuration(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    root.chmod(0o2775);(root / "hostile.lua").touch()
+    system_configuration(monkeypatch, {})
+    def untrusted(_filename, _maximum):
+        raise ValueError("not root-owned")
+    monkeypatch.setattr(helper, "read_trusted_module_configuration", untrusted)
+    result = helper.automatic_module_inventory({})
+    assert result["available"] == []
+    assert all(source["status"] == "unsafe_unavailable_or_size_limited" for source in result["configuration_sources"])
 
 
 def test_explicit_availability_mode_does_not_enable_automatic_metadata(monkeypatch):
