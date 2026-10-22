@@ -78,6 +78,49 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### Post-login cluster configuration, 22 October 2026
+
+The final PostgreSQL suite passed **1,084 tests and 65 subtests**, with one
+optional NumPy test skipped and two upstream LDAP dependency deprecation
+warnings. Migration drift checks passed. New coverage includes complete
+provisional module catalogs from trusted system path data, maximum single-node
+resource defaults, explicit reviewed-job timing inputs, read-only bounded
+directory metadata, human/worker ownership and CSRF, pending-configuration
+admission fencing, suspension under authority locks, durable canonical receipts,
+lost acknowledgements and account-freshness deferral without stopping core
+accounting. Imports of the resource derivation helper are also tested with
+Django/controller imports unavailable.
+
+The separate `cb-post-connect-20261022` Docker fixture used the personal
+connector overlay. The acceptance client paired without a manually started
+worker, completed discovery, confirmed that agents could not use an unconfirmed
+connection, browsed the remote account home, and saved a baseline directory
+outside the original worker scope. The connector persisted the revised profile
+before acknowledgement. A reviewed Python package then ran as native Slurm job
+`1`, with expected stdout/artifact hash and final accounting of 1 CPU
+core-second, zero GPUs and zero reservations. Restart reused the same identity
+and selected directory; removal revoked the connector and closed its SSH master.
+
+The first native run found a startup-revocation exit-status race after its job
+had completed and settled. Startup revocation now ends gracefully and closes
+the session, with a dedicated regression; the complete final native run passed.
+These runs used synthetic credentials only, and the disposable services,
+volumes and keys were removed. Existing portal PostgreSQL and mock LDAP were
+retained. After backing up and migrating the running portal through `0014`, the
+user restarted the existing connector with its saved state. Actual read-only
+lab discovery then returned all **21 expected modules**, including eight Python
+entries, from the site's canonical module directories. The catalog explicitly
+remains provisional filename metadata. Maximum resource defaults appeared in
+the saved cluster configuration, with automatic execution disabled.
+
+A real authenticated LDAP-owner HTTP session opened the configuration page and
+queued one directory request through that running lab connector. It returned
+29 folders, writable access and no truncation. The configured working directory
+remained unchanged and no compute job was submitted. This confirms live module
+cataloging and folder browsing, not arbitrary module combinations or a submitted
+job on that institutional cluster. No private key, pairing token, password or
+directory-entry names were printed in acceptance output.
+
 ### Personal connector and configuration removal, 22 October 2026
 
 The PostgreSQL suite passed **932 tests and 65 subtests**, with one optional
