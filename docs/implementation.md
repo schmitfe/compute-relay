@@ -243,7 +243,20 @@ Gate: hostile dependency/build input cannot access broker keys/runtime sockets; 
 
 ## Milestone M5 hosted multi-user and remote clients
 
-Implement PostgreSQL operations/migrations, organizational OIDC with stable identity linking, group mapping/deprovisioning, per-user cluster connections and optionally outbound personal connectors. Keep one authoritative ledger. Add standard HTTP MCP OAuth discovery/audience/scopes using a supported identity provider and test each intended hosted client. Configure server TLS, backup/restore, retention, metrics and request limits.
+Follow [the shared-service specification](hosted-architecture.md) and
+[ADR 0005](adr/0005-hosted-identity-and-connectors.md), accepted as implementation
+direction on 22 October 2026. Work packages MU-01 through MU-06 cover PostgreSQL
+and real locking tests; local and optional LDAP identity routing/deprovisioning;
+verified HPC principals and delegation; bounded async workers/transports;
+isolated session activation; and rehearsed server cutover. No central user SSH
+private-key storage is permitted. A central authenticated session needs a real
+keyless bootstrap mechanism and site acceptance; a protected outbound personal
+connector is the fallback. This is still pending implementation.
+
+Keep one authoritative ledger. Standard HTTP MCP OAuth and a future OIDC login
+provider remain separate follow-on contracts. LDAP browser login does not
+implement either. Configure server TLS, backup/restore, retention, metrics and
+request limits before shared access.
 
 Gate: cross-user/project/job/artifact isolation and revoked membership tests; no LDAP-to-SSH impersonation; personal-to-server migration fences old admissions and reconciles native jobs; no offline connector spending. The service UI's account model alone does not create hostile isolation for users sharing a remote Unix UID.
 
@@ -268,7 +281,8 @@ Protected main is the target branch. Require review and relevant CI before merge
 | Trusted human approval device/session | Independent channel for strict mode | Protected bootstrap |
 | Exact Slurm versions/accounting fields and margins | Discovered privately, unsupported until verified | M2 fixtures and M3 admission |
 | Shared remote UID acceptance | Documented API-only isolation; no hostile tenant claim | Before multi-user deployment |
-| Organizational IdP and LDAP mapping | Existing OIDC provider preferred | M5 |
+| LDAP provider mapping | Verified TLS, immutable directory subject, explicit groups and no local fallback; OIDC remains optional later | MU-02 |
+| Central keyless session activation | Require an actual site-approved mechanism and per-principal isolation; use protected personal connectors until accepted | MU-05 |
 | Protected OS support beyond Linux | Deferred | Before advertising additional platforms |
 
 These decisions do not block architecture or fake-backend development. They are gates for the specific capabilities they affect.

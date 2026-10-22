@@ -2,6 +2,11 @@
 
 This is the target architecture. See [implemented runtime scope](runtime.md) for the development alpha and remaining acceptance gates.
 
+The [shared-service specification](hosted-architecture.md) and
+[ADR 0005](adr/0005-hosted-identity-and-connectors.md) refine hosted accounts,
+PostgreSQL, async I/O and per-user SSH session custody. They are implementation
+direction, not a claim that the development deployment is ready for shared use.
+
 ## Scope and deployment assumptions
 
 The broker provides compute access to existing AI clients; it does not run a language-model orchestration loop. A request can survive the originating chat and be inspected by another authorized client. The control service owns authorization, approvals, reservations, and durable history. Execution workers own cluster credentials and perform bounded operations on approved targets.
@@ -43,13 +48,22 @@ Django is selected for its users, sessions, migrations and transaction support. 
 
 ## Identity and project permissions
 
-Every object has an internal UUID. External human identities are linked by `(issuer, subject)`, never by an email match alone. A local installation creates one owner but uses the same user/membership tables as a shared installation. A hosted installation uses an existing OIDC provider, optionally backed by LDAP. Directory groups may grant configured project membership; they do not automatically grant cluster access or service administration.
+Every object has an internal UUID. External human identities are linked by `(provider, immutable subject)`, never by an email or username match alone. A local installation creates one owner but uses the same user/membership tables as a shared installation. The hosted target supports explicitly routed local passwords or direct LDAP authentication; OIDC may be added as another provider later. LDAP-only identities have no usable local password, and directory failure cannot fall back to local login. Directory groups may grant configured project membership; they do not automatically grant cluster access or service administration.
 
 Roles are project-scoped `viewer`, `submitter`, `approver`, and `project_admin`, plus installation-level `service_admin`. Project administrators can manage project members, budgets and issued credentials within installation policy; they cannot edit protected SSH settings. Approval and administration must use human credentials, never project agent keys. A user may hold multiple roles. Enforcing separation between requester and approver is a configurable hosted policy, not a requirement for a single owner.
 
 An agent key belongs to one project and an actor label, with a hash, independent display identifier, expiry, revocation timestamp, explicit scopes and optional tighter limits. Its full value is shown only at creation/rotation and never stored by normal key management. Several keys share one authoritative project ledger and lifetime submission count. A key may require human confirmation while automatic execution stays within project policy. Keys cannot select another project or another user's cluster connection. Revoking a key stops new agent operations and undispatched execution; observation/accounting of dispatched jobs continues. A separate target stop-project action pauses admissions and requests cancellation of outstanding managed attempts.
 
 Cluster definitions describe capabilities. Cluster connections bind a user, worker, remote username, allowed Slurm accounts and a credential reference. The API must not let a project key override the binding's host, user, key path or Slurm account allowlist. Multiple projects using one remote Unix UID do not receive cluster-side filesystem isolation.
+
+Hosted control and runner storage must not retain user private SSH keys, including
+encrypted copies. Use a verified HPC principal with explicit delegation and an
+isolated per-principal connector. Server-side connectors consume approved live
+sessions only after keyless activation and isolation pass site acceptance;
+outbound personal connectors keep credentials on the user's protected device.
+An authenticated SSH control socket is a sensitive access capability even though
+it does not contain the private key. Cluster I/O becomes async while short ledger
+transactions remain synchronous and never wait for network operations.
 
 ## Persisted entities
 

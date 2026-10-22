@@ -2,6 +2,10 @@
 
 This document describes the implemented code. The architecture, API, deployment, and testing documents describe the broader target; their unimplemented endpoints and acceptance gates are not promises of current functionality.
 
+The [shared-service specification](hosted-architecture.md) records the next
+local/LDAP, PostgreSQL and async per-user connector work. Those features and its
+keyless central-session activation are not implemented by the current runtime.
+
 ## Components and startup
 
 Python 3.12/3.13, Django 5.2, SQLite, system OpenSSH, the official MCP Python SDK, JSON Schema, and RFC 8785 canonical manifests form the runtime. `requirements.lock` pins the versions resolved for the current development/test/MCP environment. Docker installs each selected extra under these constraints; base-image digests, artifact hashes, license inventories, and release provenance remain release work. No upstream HPC-MCP source has been copied or executed.

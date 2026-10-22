@@ -45,6 +45,7 @@ The service governs jobs submitted through it. Arbitrary code running under a cl
 | Document | Contents |
 | --- | --- |
 | [Architecture](docs/architecture.md) | Components, trust boundaries, data model, state machine, budget transactions |
+| [Shared-service design](docs/hosted-architecture.md) | Local/LDAP accounts, PostgreSQL migration, async per-user connectors and SSH key custody |
 | [Implemented runtime](docs/runtime.md) | Entrypoints, configuration, API, modes, current restrictions |
 | [Portal and worker profiles](docs/management.md) | Projects, one-time API keys, cluster enrollment, software discovery and environment recipes |
 | [API and contracts](docs/api.md) | REST and MCP operations, worker protocol, errors, examples |

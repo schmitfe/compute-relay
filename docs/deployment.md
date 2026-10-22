@@ -2,13 +2,19 @@
 
 Only the development alpha and synthetic container fixtures are currently implemented. See [runtime configuration](runtime.md) and [container testing](container-testing.md). Protected profiles in this plan are refused by the current settings until their installation tests are complete.
 
+The [shared-service specification](hosted-architecture.md) now defines the
+local/LDAP identity model, PostgreSQL cutover, async connector implementation and
+prohibition on central user SSH private-key storage. Its isolated session mode
+needs a tested keyless activation mechanism; ordinary Compose packaging alone
+does not establish that capability or tenant isolation.
+
 ## Supported profiles
 
 | Profile | Intended use | Credential isolation |
 | --- | --- | --- |
 | `development` | Same-user source checkout, fake backend, synthetic data | No claim of protection from an agent under that user; real SSH credentials disabled |
 | `personal_protected` | One owner on a supported Linux device | Administrator-managed service identities, protected runtime/configuration, private worker sockets |
-| `server` | Shared Linux server and organizational users | PostgreSQL, HTTPS, OIDC, explicit project roles and per-user connections |
+| `server` | Shared Linux server and organizational users | PostgreSQL, HTTPS, explicit local/LDAP providers, project roles and isolated per-principal connectors |
 
 Docker Compose is the packaging target for the protected profiles. An administrator installs a reviewed image/configuration outside the agent-writable checkout and manages runtime access. A dedicated service-owned rootless runtime is also possible if its control socket is inaccessible to the agent. Do not expose an installation as protected merely because a container runs as non-root. No container runtime runs on Slurm login/compute nodes as a broker prerequisite; remote Python 3 and the existing Slurm CLI are the initial helper prerequisites.
 
@@ -19,7 +25,7 @@ The first protected host target is Linux with OpenSSH. Windows/macOS support is 
 | Service | Mounts | Connectivity |
 | --- | --- | --- |
 | `control` | SQL data locally, immutable package/artifact store, protected Django secret and worker trust configuration | Public application listener behind reverse proxy; private worker listener; SQL when configured |
-| `worker` | Assigned connection secrets, pinned SSH configuration, private sockets and bounded staging/cache volumes | Outbound control API and allowlisted cluster login nodes; no database connection |
+| `worker` | Assigned connector token, pinned configuration, private session sockets and bounded staging/cache; user private keys allowed only on protected personal devices, never central hosted runner storage | Outbound control API and allowlisted cluster login nodes; no database connection |
 | `postgres` | Dedicated server database volume and secret file | Private control network only; omitted for local SQLite profile |
 | `proxy` | Public TLS configuration and certificates | Published application/admin endpoints according to policy; no cluster keys |
 

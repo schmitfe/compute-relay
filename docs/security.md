@@ -99,11 +99,28 @@ endpoint or unauthenticated setup route after initialization.
 
 ### Shared server deployment
 
+The implementation contract is [the shared-service specification](hosted-architecture.md)
+and [ADR 0005](adr/0005-hosted-identity-and-connectors.md). These are pending
+runtime work, not properties established by the current development portal.
+
 Use the same domain logic with PostgreSQL, HTTPS, organizational identity
 authentication, project roles, and per-user cluster connections. Organizational
 login identifies a user; the broker separately authorizes project membership,
 approval, budgets, and use of each connection. An LDAP group must not implicitly
 grant use of another user's SSH identity.
+
+Support explicitly selected local or LDAP login, with stable provider/subject
+mapping and no LDAP-to-local fallback. LDAP-only users have unusable local
+passwords. Bounded directory freshness and revocation checks apply to human
+sessions, issuing users' project keys and dispatch, not only the login screen.
+
+Do not centrally store user SSH private keys in a database, encrypted vault or
+runner home. Control has no user SSH-agent/control-socket mounts. A server
+connector uses a separately isolated, expiring authenticated session only after
+a concrete keyless activation flow passes site acceptance. Treat its socket as
+an access capability and acknowledge privileged host compromise. Otherwise use
+an outbound personal connector. Default/shared-UID containers do not isolate
+unrelated users' active SSH sessions.
 
 A protected personal connector may remain on a user's device. It initiates an
 authenticated outbound connection to the server, has its own revocable identity,
