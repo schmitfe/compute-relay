@@ -213,6 +213,7 @@ def test_reading_run_does_not_admit_and_foreign_project_cannot_read(workflow_bro
     other = deepcopy(context.credential)
     other.pk = None
     other.project = Project.objects.create(owner=context.outsider, name="foreign")
+    other.issued_by = context.outsider
     from compute_broker.control.auth import token_hash
     other.token_hash = token_hash("synthetic-foreign-workflow-key")
     other.save()

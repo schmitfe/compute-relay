@@ -211,7 +211,7 @@ def worker_config(request, registration_id):
             "known_hosts": "/REPLACE_WITH_PINNED_KNOWN_HOSTS_PATH"}, python_path="/usr/bin/python3")
     else:
         profile["state_directory"] = "/REPLACE_WITH_PRIVATE_SIMULATOR_STATE_DIRECTORY"
-    configuration = {"connections": {}, "credential_profiles": {"cluster-" + registration.id.hex[:16]: profile}, "extensions": []}
+    configuration = {"owner_id": str(registration.owner_id), "connections": {}, "credential_profiles": {"cluster-" + registration.id.hex[:16]: profile}, "extensions": []}
     response = HttpResponse(json.dumps(configuration, indent=2) + "\n", content_type="application/json")
     response["Content-Disposition"] = 'attachment; filename="worker-template.json"'
     return response

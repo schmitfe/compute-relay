@@ -4,7 +4,7 @@ import secrets
 from django.utils import timezone
 
 from .errors import BrokerError
-from .models import Membership, ProjectCredential, WorkerIdentity
+from .models import Membership, ProjectCredential, User, WorkerIdentity
 
 
 def token_hash(token):
@@ -28,7 +28,17 @@ def project_credential(request, scope):
         raise BrokerError("AUTH_REQUIRED", "Credential is invalid, revoked or expired.", 401)
     if scope not in credential.scopes:
         raise BrokerError("SCOPE_DENIED", "Credential does not permit this operation.", 403)
+    require_credential_actor(credential, scope)
     return credential
+
+
+def require_credential_actor(credential, scope="jobs:execute"):
+    user = User.objects.filter(id=credential.issued_by_id, is_active=True).first()
+    if user is None:
+        raise BrokerError("AUTH_REQUIRED", "The issuing user is disabled or this key has no verified owner.", 403)
+    role = "viewer" if scope in {"jobs:read", "artifacts:read"} else "submitter"
+    human_permission(user, credential.project, role)
+    return user
 
 
 def worker_identity(request):
@@ -41,7 +51,9 @@ def worker_identity(request):
 def connection_allowed(credential, connection_id):
     """A key can narrow its project authority; it can never widen it."""
     restricted = credential.allowed_connection_ids
-    return credential.project.connections.filter(id=connection_id, enabled=True, setup_complete=True).exists() and (
+    return credential.issued_by_id is not None and credential.project.connections.filter(
+        id=connection_id, enabled=True, setup_complete=True, owner_id=credential.issued_by_id,
+        worker__owner_id=credential.issued_by_id, worker__revoked=False).exists() and (
         restricted is None or str(connection_id) in restricted)
 
 
@@ -51,11 +63,12 @@ def require_connection(credential, connection_id):
 
 
 def human_permission(user, project, role):
-    if not user.is_authenticated:
+    if not user.is_authenticated or not user.is_active:
         raise BrokerError("AUTH_REQUIRED", "Sign in with a human account.", 401)
     if project.owner_id == user.id or user.is_superuser:
         return
     membership = Membership.objects.filter(project=project, user=user).first()
-    if membership and (role in membership.roles or "project_admin" in membership.roles):
+    implied_viewer = role == "viewer" and membership and bool(set(membership.roles) & {"submitter", "approver"})
+    if membership and (role in membership.roles or "project_admin" in membership.roles or implied_viewer):
         return
     raise BrokerError("SCOPE_DENIED", "Project role does not permit this action.", 403)

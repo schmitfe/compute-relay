@@ -256,7 +256,7 @@ def _verify_finalization(build, attempt, finalization):
 def sync_attempt(attempt, finalization=None):
     """No remote I/O. Safe after core settlement; failure never rolls accounting back."""
     with transaction.atomic():
-        build = EnvironmentBuild.objects.select_for_update().select_related("spec__project", "spec__connection", "policy").filter(job=attempt.job).first()
+        build = EnvironmentBuild.objects.select_for_update(of=("self",)).select_related("spec__project", "spec__connection", "policy").filter(job=attempt.job).first()
         if build is None:
             return
         if build.environment_id:

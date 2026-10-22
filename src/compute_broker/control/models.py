@@ -8,6 +8,7 @@ from django.utils import timezone
 
 class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    local_login_allowed = models.BooleanField(default=True)
 
 
 class WorkerIdentity(models.Model):
@@ -99,6 +100,8 @@ class Membership(models.Model):
 class ProjectCredential(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    issued_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.PROTECT,
+                                  related_name="issued_project_credentials")
     name = models.CharField(max_length=80)
     token_hash = models.CharField(max_length=64, unique=True)
     prefix = models.CharField(max_length=16)
@@ -300,3 +303,8 @@ class WorkerReport(models.Model):
     payload_sha256 = models.CharField(max_length=64)
     response = models.JSONField()
     extension_data = models.JSONField(default=dict)
+
+
+# Identity models are part of the core app's migration graph, while their
+# provider and directory code remains an optional module.
+from .identity.models import AuthenticationIdentity  # noqa: E402,F401

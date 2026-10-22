@@ -59,7 +59,7 @@ def register_target(user, connection, root_alias, name, *, pool=None, enable_pro
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
         raise BrokerError("INVALID_STORAGE", "Choose a storage target name.")
     with transaction.atomic():
-        connection = Connection.objects.select_for_update().select_related("worker").get(id=connection.id)
+        connection = Connection.objects.select_for_update(of=("self",)).select_related("worker").get(id=connection.id)
         root = next((item for item in protected_roots(connection) if item["alias"] == root_alias), None)
         if root is None:
             raise BrokerError("STORAGE_ROOT_DENIED", "Choose a current root published by the protected worker.", 403)
@@ -198,7 +198,7 @@ def record_observation(worker, pool_id, document):
     except StoragePlanningError as error:
         raise BrokerError(error.code, error.message) from None
     with transaction.atomic():
-        pool = StorageCapacityPool.objects.select_for_update().select_related("connection__worker").filter(
+        pool = StorageCapacityPool.objects.select_for_update(of=("self",)).select_related("connection__worker").filter(
             id=pool_id, connection__worker=worker, enabled=True).first()
         if pool is None:
             raise BrokerError("NOT_FOUND", "Storage pool not found.", 404)
@@ -294,7 +294,7 @@ def lease_work(worker):
         # A completed maintenance call yields the worker lane to core jobs.
         if leases.filter(reported_at__gt=now - timedelta(seconds=15)).exists():
             return None
-        pools = StorageCapacityPool.objects.select_for_update().select_related("connection__worker").filter(
+        pools = StorageCapacityPool.objects.select_for_update(of=("self",)).select_related("connection__worker").filter(
             connection__worker=worker, connection__enabled=True, enabled=True, probe_enabled=True,
             next_probe_at__lte=now).order_by("next_probe_at", "id")
         for pool in pools[:30]:
@@ -332,7 +332,7 @@ def report_probe(worker, pool_id, document):
         pool = StorageCapacityPool.objects.select_for_update().filter(id=pool_id, connection__worker=worker).first()
         if pool is None:
             raise BrokerError("NOT_FOUND", "Storage pool not found.", 404)
-        lease = StorageObservationLease.objects.select_for_update().select_related("pool__connection__worker", "target__connection__worker", "target__pool").filter(
+        lease = StorageObservationLease.objects.select_for_update(of=("self",)).select_related("pool__connection__worker", "target__connection__worker", "target__pool").filter(
             id=document["lease_id"], pool_id=pool_id, pool__connection__worker=worker).first()
         if lease is None:
             raise BrokerError("NOT_FOUND", "Capacity lease not found.", 404)

@@ -28,6 +28,8 @@ DEBUG = False
 ALLOWED_HOSTS = os.environ.get("BROKER_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],testserver,control").split(",")
 ROOT_URLCONF = "compute_broker.control.urls"
 AUTH_USER_MODEL = "broker.User"
+from .identity.providers import load_provider_configuration
+BROKER_IDENTITY_PROVIDERS = load_provider_configuration(os.environ.get("BROKER_IDENTITY_CONFIG_FILE"))
 from compute_broker.extensions import configured_names, application_configs
 try:
     BROKER_EXTENSIONS = configured_names()
@@ -43,7 +45,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 TEMPLATES = [{"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": [], "APP_DIRS": True, "OPTIONS": {"context_processors": ["django.template.context_processors.request", "django.contrib.auth.context_processors.auth"]}}]
-DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": os.environ.get("BROKER_DB_PATH", str(DATA_DIR / "control.sqlite3")), "OPTIONS": {"timeout": 15, "transaction_mode": "IMMEDIATE"}}}
+from .database import database_config
+DATABASES = {"default": database_config(DATA_DIR)}
 USE_TZ = True
 TIME_ZONE = os.environ.get("BROKER_TIME_ZONE", "Europe/Berlin")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
