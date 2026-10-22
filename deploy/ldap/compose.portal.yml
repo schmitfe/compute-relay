@@ -1,0 +1,8 @@
+{
+  "services": {
+    "ldap": {
+      "ports": ["127.0.0.1:1636:1636"],
+      "restart": "unless-stopped"
+    }
+  }
+}
