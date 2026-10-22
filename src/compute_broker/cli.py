@@ -150,6 +150,16 @@ def main():
     disc.add_argument("--known-hosts")
     disc.add_argument("--output", help="New private JSON file for the discovery snapshot")
     disc.set_defaults(run=discover)
+    from compute_broker.worker.personal_connector import main as connector_main
+    connector = sub.add_parser("connector", help="Start your personal cluster connector and complete SSH/MFA login locally")
+    connector.add_argument("--setup", help="Private one-time setup JSON downloaded from your cluster page")
+    connector.add_argument("--state-directory", required=True, help="Private 0700 local directory; keep the socket path under 100 bytes")
+    connector.add_argument("--identity-file", help="Explicit local key path override for first pairing")
+    connector.add_argument("--known-hosts", help="Local known-hosts file override for first pairing")
+    connector.add_argument("--non-interactive", action="store_true", help="Fail if SSH requires a prompt")
+    connector.add_argument("--allow-insecure-http", action="store_true", help="Allow an explicitly selected isolated HTTP test network")
+    connector.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
+    connector.set_defaults(run=connector_main)
     args = parser.parse_args()
     args.run(args)
 

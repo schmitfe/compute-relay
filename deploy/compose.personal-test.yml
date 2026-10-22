@@ -1,0 +1,19 @@
+services:
+  personal-smoke:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: worker
+    entrypoint: [python, /opt/personal_connector_smoke.py]
+    volumes:
+      - demo-metadata:/run/demo:ro
+      - fixture-ssh:/run/fixture-ssh:ro
+      - ../tools/personal_connector_smoke.py:/opt/personal_connector_smoke.py:ro
+    depends_on:
+      control: {condition: service_healthy}
+      slurm: {condition: service_healthy}
+    networks: [fixture]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

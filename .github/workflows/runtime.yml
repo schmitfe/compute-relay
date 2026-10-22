@@ -97,6 +97,25 @@ jobs:
       - name: Remove disposable services
         if: always()
         run: docker compose down --volumes --remove-orphans
+  personal-connector:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COMPOSE_FILE: deploy/compose.test.yml:deploy/compose.personal-test.yml
+      COMPOSE_PROJECT_NAME: cb-personal-ci
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build isolated cluster and connector
+        run: docker compose build control slurm personal-smoke
+      - name: Start broker and Slurm without a manually registered worker
+        run: docker compose up -d --wait control slurm
+      - name: Verify automatic pairing, native execution, shutdown and resume
+        run: docker compose run --rm --no-deps personal-smoke
+      - name: Remove disposable services and generated credentials
+        if: always()
+        run: docker compose down --volumes --remove-orphans
   ldap:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

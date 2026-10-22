@@ -4,6 +4,7 @@ from . import views
 from . import management
 from . import cluster_setup
 from . import worker_management
+from . import personal_connectors
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -19,6 +20,9 @@ urlpatterns = [
     path("clusters/setup/<uuid:registration_id>/edit/", cluster_setup.edit),
     path("clusters/setup/<uuid:registration_id>/bind/", cluster_setup.bind),
     path("clusters/setup/<uuid:registration_id>/worker-config/", cluster_setup.worker_config),
+    path("clusters/setup/<uuid:registration_id>/connect/", personal_connectors.download),
+    path("clusters/<uuid:connection_id>/connect/", personal_connectors.download_connection),
+    path("internal/v1/connectors/enroll", personal_connectors.enroll),
     path("workers/new/", worker_management.worker_new),
     path("workers/<uuid:worker_id>/", worker_management.worker_detail),
     path("clusters/<uuid:connection_id>/", management.cluster_detail),
