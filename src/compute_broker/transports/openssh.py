@@ -17,6 +17,10 @@ class TransportError(RuntimeError):
 
 
 class OpenSSHTransport:
+    PAYLOAD_LIMIT = 150 * 1024 * 1024
+    STDOUT_LIMIT = 20 * 1024 * 1024
+    STDERR_LIMIT = 65536
+
     def __init__(self, connection: dict):
         self.connection = connection
         self.ssh = connection["ssh"]
@@ -55,23 +59,29 @@ class OpenSSHTransport:
             # failing fallback remains active during the check/use race.
             options += ["ControlPath=" + s["control_path"], "ProxyJump=none", "ProxyCommand=/bin/false"]
         else:
-            options += ["ControlPath=none"]
+            options += ["ControlPath=none", "IdentitiesOnly=yes", "IdentityAgent=none"]
             if s.get("identity_file"):
                 argv += ["-i", s["identity_file"]]
-                options += ["IdentitiesOnly=yes", "IdentityAgent=none"]
+            else:
+                # Absence of an explicit credential must not enable default
+                # identity discovery from the service account's home.
+                options += ["IdentityFile=none"]
         for option in options:
             argv += ["-o", option]
         return [*argv, "--", s["user"] + "@" + s["host"]]
 
-    def call_helper(self, source: str, request: dict) -> dict:
+    def _helper_command(self, source: str, request: dict) -> tuple[list[str], bytes]:
         python = self.connection.get("python_path", "/usr/bin/python3")
         if not isinstance(python, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", python):
             raise TransportError("Invalid protected remote interpreter")
         payload = json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode()
-        if len(payload) > 150 * 1024 * 1024:
+        if len(payload) > self.PAYLOAD_LIMIT:
             raise TransportError("Remote operation payload exceeds limit")
         command = shlex.join([python, "-I", "-c", source])
-        stdout = self._run([*self.argv(), command], payload)
+        return [*self.argv(), command], payload
+
+    @staticmethod
+    def _helper_response(stdout: bytes) -> dict:
         try:
             response = json.loads(stdout)
         except (ValueError, UnicodeError) as exc:
@@ -79,6 +89,10 @@ class OpenSSHTransport:
         if not isinstance(response, dict):
             raise TransportError("SSH helper response is not an object")
         return response
+
+    def call_helper(self, source: str, request: dict) -> dict:
+        argv, payload = self._helper_command(source, request)
+        return self._helper_response(self._run(argv, payload))
 
     def _run(self, argv: list[str], payload: bytes) -> bytes:
         """Bound both pipes while streaming; neither RAM nor diagnostics grow forever."""
@@ -107,11 +121,11 @@ class OpenSSHTransport:
                             continue
                         if key.data == "stdout":
                             output.extend(chunk)
-                            if len(output) > 20 * 1024 * 1024:
+                            if len(output) > self.STDOUT_LIMIT:
                                 raise TransportError("SSH helper exceeded stdout limit")
                         else:
                             error_size += len(chunk)
-                            if error_size > 65536:
+                            if error_size > self.STDERR_LIMIT:
                                 raise TransportError("SSH helper exceeded diagnostic limit")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or process.wait(timeout=remaining) != 0:

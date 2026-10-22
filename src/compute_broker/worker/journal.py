@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import fcntl
+import asyncio
 import json
 import os
 import stat
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
@@ -32,6 +33,23 @@ class Journal:
         fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    @asynccontextmanager
+    async def async_locked(self, attempt_id, *, timeout=5):
+        """Honor the same process fence without blocking the event loop on flock."""
+        path = self._path(attempt_id).with_suffix(".lock")
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        await asyncio.sleep(0.05)
             yield
         finally:
             os.close(fd)

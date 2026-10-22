@@ -199,6 +199,11 @@ class Worker:
     def _collect(backend, native, manifest):
         permitted = manifest["request"].get("outputs", [])
         collected = backend.collect(native, outputs=permitted)
+        return Worker._serialized_collection(collected, manifest)
+
+    @staticmethod
+    def _serialized_collection(collected, manifest):
+        permitted = manifest["request"].get("outputs", [])
         artifacts = {}
         total = 0
         for path, data in collected.get("artifacts", {}).items():
@@ -220,6 +225,11 @@ class Worker:
 
 def main(*, once=False):
     """Entry point called by the installation CLI; secrets never appear in argv."""
+    if os.environ.get("BROKER_WORKER_ASYNC") == "1":
+        import asyncio
+        from .async_runner import main as async_main
+        asyncio.run(async_main(once=once))
+        return
     config = strict_json(Path(os.environ["BROKER_WORKER_CONFIG"]).read_bytes())
     client = JsonClient(
         os.environ.get("BROKER_CONTROL_URL", "http://127.0.0.1:8765"),
