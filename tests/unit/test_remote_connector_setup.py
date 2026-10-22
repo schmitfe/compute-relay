@@ -4,6 +4,7 @@ import builtins
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -227,3 +228,169 @@ def test_standalone_protocol_is_bounded_and_does_not_import_the_broker(fake_home
                                      {"operation": "validate_root"}, {"operation": "browse", "extra": "field"}])
 def test_request_schema_is_closed(document):
     assert setup.handle_request(document) == {"ok": False, "error_code": "INVALID_REQUEST"}
+
+
+@pytest.mark.parametrize("mask", [0o002, 0o077, 0o777])
+def test_mkdir_creates_exactly_private_directory_restores_umask_and_retries_idempotently(fake_home, mask):
+    previous = os.umask(mask)
+    try:
+        document = {"operation": "mkdir", "path": str(fake_home), "name": ".jobs"}
+        result = setup.handle_request(document)
+        assert result == {"ok": True, "path": str(fake_home / ".jobs"), "parent": str(fake_home), "home": str(fake_home),
+            "entries": [], "writable": True, "truncated": False, "scanned_entries": 0, "created": True}
+        assert stat.S_IMODE((fake_home / ".jobs").stat().st_mode) == 0o700
+        assert os.umask(mask) == mask
+        result = setup.handle_request(document)
+        assert result["created"] is False and result["path"] == str(fake_home / ".jobs")
+        assert stat.S_IMODE((fake_home / ".jobs").stat().st_mode) == 0o700
+    finally:
+        os.umask(previous)
+
+
+def test_mkdir_opens_existing_ordinary_directory_without_changing_it(fake_home, monkeypatch):
+    directory = fake_home / "existing"
+    directory.mkdir(mode=0o755)
+    (directory / "child").mkdir()
+    before = directory.stat()
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Existing object was mutated")
+
+    for name in ("mkdir", "chmod", "fchmod", "unlink", "rmdir", "rename"):
+        monkeypatch.setattr(setup.os, name, forbidden)
+    result = setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "existing"})
+    assert result["ok"] and result["created"] is False
+    assert result["entries"] == [{"name": "child", "path": str(directory / "child")}]
+    assert (directory.stat().st_ino, directory.stat().st_mode) == (before.st_ino, before.st_mode)
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "nested/jobs", "slash\\name", "a b", "a\n", "a\x00", "$(touch x)", "`id`",
+                                  "quoted'", 'quoted"', "name;id", "*", "\u00fc", "x" * 81])
+def test_mkdir_rejects_unsafe_or_multiple_name_components_without_mutation(fake_home, name):
+    result = setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": name})
+    assert result == {"ok": False, "error_code": "INVALID_DIRECTORY_NAME"}
+    assert list(fake_home.iterdir()) == []
+
+
+def test_mkdir_requires_complete_canonical_job_path_before_creating_anything(fake_home, tmp_path):
+    spaced = tmp_path / "directory with spaces"
+    spaced.mkdir()
+    oversized = fake_home / ("x" * (240 - len(str(fake_home))))
+    oversized.mkdir()
+    for parent in (str(spaced), str(oversized), str(fake_home) + "/../home"):
+        result = setup.handle_request({"operation": "mkdir", "path": parent, "name": "jobs"})
+        assert result["ok"] is False and result["error_code"] in {"INVALID_ROOT", "INVALID_PATH"}
+    assert not (spaced / "jobs").exists() and not (oversized / "jobs").exists()
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink", "dangling"])
+def test_mkdir_refuses_existing_file_or_symlink_without_overwriting(fake_home, kind):
+    target = fake_home / "target"
+    if kind == "file":
+        target.write_text("keep this content")
+    elif kind == "symlink":
+        (fake_home / "ordinary").mkdir()
+        target.symlink_to(fake_home / "ordinary", target_is_directory=True)
+    else:
+        target.symlink_to(fake_home / "missing")
+    before = target.lstat()
+    assert setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "target"}) == {
+        "ok": False, "error_code": "DIRECTORY_CONFLICT"}
+    assert (target.lstat().st_ino, target.lstat().st_mode) == (before.st_ino, before.st_mode)
+    if kind == "file":
+        assert target.read_text() == "keep this content"
+
+
+def test_mkdir_denies_nonwritable_parent_before_attempting_creation(fake_home, monkeypatch):
+    monkeypatch.setattr(setup, "_writable", lambda _fd: False)
+    monkeypatch.setattr(setup.os, "mkdir", lambda *_args, **_kwargs: pytest.fail("Readonly parent was mutated"))
+    assert setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "jobs"}) == {
+        "ok": False, "error_code": "ROOT_NOT_WRITABLE"}
+    assert not (fake_home / "jobs").exists()
+
+
+def test_mkdir_parent_alias_is_explicitly_canonical_in_child_result(fake_home, tmp_path):
+    alias = tmp_path / "home-alias"
+    alias.symlink_to(fake_home, target_is_directory=True)
+    result = setup.handle_request({"operation": "mkdir", "path": str(alias), "name": "jobs"})
+    assert result["ok"] and result["created"] and result["path"] == str(fake_home / "jobs")
+
+
+def test_mkdir_safe_file_exists_race_returns_existing_without_claiming_creation(fake_home, monkeypatch):
+    original = setup.os.mkdir
+
+    def concurrently_created(name, mode, *, dir_fd):
+        original(name, mode=0o700, dir_fd=dir_fd)
+        raise FileExistsError
+
+    monkeypatch.setattr(setup.os, "mkdir", concurrently_created)
+    result = setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "jobs"})
+    assert result["ok"] and result["created"] is False
+
+
+def test_mkdir_rejects_child_inode_replacement_between_stat_and_open(fake_home, monkeypatch):
+    directory, saved = fake_home / "jobs", fake_home / "saved"
+    directory.mkdir()
+    original = setup.os.open
+    replaced = False
+
+    def swap_on_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if path == "jobs" and not flags & getattr(os, "O_PATH", 0) and not replaced:
+            replaced = True
+            directory.rename(saved)
+            directory.mkdir()
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(setup.os, "open", swap_on_open)
+    assert setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "jobs"}) == {
+        "ok": False, "error_code": "DIRECTORY_CHANGED"}
+    assert replaced and directory.is_dir() and saved.is_dir()
+
+
+def test_mkdir_rejects_replacement_during_listing_without_returning_stale_metadata(fake_home, monkeypatch):
+    directory, saved = fake_home / "jobs", fake_home / "saved"
+    directory.mkdir()
+    (directory / "private-metadata").mkdir()
+    original = setup._browse_open_directory
+
+    def swap_after_listing(path, home, fd):
+        result = original(path, home, fd)
+        directory.rename(saved)
+        directory.symlink_to(saved, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(setup, "_browse_open_directory", swap_after_listing)
+    assert setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "jobs"}) == {
+        "ok": False, "error_code": "DIRECTORY_CHANGED"}
+
+
+def test_mkdir_parent_replacement_never_redirects_creation_to_symlink_destination(fake_home, monkeypatch):
+    parent, moved, outside = fake_home / "parent", fake_home / "moved", fake_home / "outside"
+    parent.mkdir()
+    outside.mkdir()
+    original = setup.os.mkdir
+
+    def swap_parent(name, mode, *, dir_fd):
+        parent.rename(moved)
+        parent.symlink_to(outside, target_is_directory=True)
+        original(name, mode=mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(setup.os, "mkdir", swap_parent)
+    assert setup.handle_request({"operation": "mkdir", "path": str(parent), "name": "jobs"}) == {
+        "ok": False, "error_code": "DIRECTORY_CHANGED"}
+    assert not (outside / "jobs").exists() and (moved / "jobs").is_dir()
+
+
+def test_standalone_mkdir_protocol_creates_only_one_directory_and_returns_retry_flag(fake_home):
+    source = Path(setup.__file__).read_text()
+    prefix = "import pwd,types\npwd.getpwuid=lambda _uid:types.SimpleNamespace(pw_dir=" + repr(str(fake_home)) + ")\n"
+    command = [sys.executable, "-I", "-c", prefix + "exec(" + repr(source) + ")"]
+    payload = json.dumps({"operation": "mkdir", "path": str(fake_home), "name": "jobs"}).encode()
+    for expected in (True, False):
+        process = subprocess.run(command, input=payload, capture_output=True, cwd=fake_home, timeout=3)
+        assert process.returncode == 0 and process.stderr == b""
+        result = json.loads(process.stdout)
+        assert result["ok"] and result["created"] is expected and result["path"] == str(fake_home / "jobs")
+        assert len(process.stdout) <= setup.MAX_RESPONSE_BYTES
+    assert [entry.name for entry in fake_home.iterdir()] == ["jobs"]

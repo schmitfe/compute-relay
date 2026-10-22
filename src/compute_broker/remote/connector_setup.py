@@ -1,7 +1,8 @@
-"""Standalone, read-only directory selection for a human's personal connector.
+"""Standalone directory setup for a human's personal connector.
 
 The complete source may be sent to the protected remote Python interpreter.
-There are no broker imports, shell commands, file-content reads or writes.
+There are no broker imports, shell commands, or file-content reads or writes.
+Only the explicitly requested mkdir operation creates one directory, mode 0700.
 Symlink resolution is explicit in returned canonical paths; directory handles
 subsequently refuse symlink substitutions while opening that canonical path.
 """
@@ -102,46 +103,124 @@ def identity():
 def browse(path=""):
     home = _home_path()
     path = _canonical_existing(home if path == "" else _path(path))
-    deadline = time.monotonic() + SCAN_SECONDS
     fd = _open_directory(path, listing=True)
     try:
-        result = {"ok": True, "path": path, "parent": posixpath.dirname(path), "home": home,
-                  "entries": [], "writable": _writable(fd), "truncated": False, "scanned_entries": 0}
-        used = len(_encoded(result))
-        with os.scandir(fd) as entries:
-            while True:
-                if result["scanned_entries"] >= MAX_SCAN_ENTRIES or time.monotonic() >= deadline:
-                    result["truncated"] = True
-                    break
-                try:
-                    entry = next(entries)
-                except StopIteration:
-                    break
-                result["scanned_entries"] += 1
-                try:
-                    # No recursion or following child symlinks. Re-stat without
-                    # following because DirEntry metadata may already be stale.
-                    if not entry.is_dir(follow_symlinks=False):
-                        continue
-                    entry.name.encode("utf-8", "strict")
-                    if not stat.S_ISDIR(os.stat(entry.name, dir_fd=fd, follow_symlinks=False).st_mode):
-                        continue
-                    child = {"name": entry.name, "path": _path(posixpath.join(path, entry.name))}
-                    if used + len(_encoded(child)) + 1 > MAX_RESPONSE_BYTES - 128:
-                        result["truncated"] = True
-                        break
-                except (OSError, UnicodeError, SetupError):
-                    result["truncated"] = True
-                    continue
-                result["entries"].append(child)
-                used += len(_encoded(child)) + 1
-                if len(result["entries"]) >= MAX_DIRECTORIES:
-                    result["truncated"] = True
-                    break
-        result["entries"].sort(key=lambda item: item["name"])
-        return result
+        return _browse_open_directory(path, home, fd)
     finally:
         os.close(fd)
+
+
+def _browse_open_directory(path, home, fd):
+    deadline = time.monotonic() + SCAN_SECONDS
+    result = {"ok": True, "path": path, "parent": posixpath.dirname(path), "home": home,
+              "entries": [], "writable": _writable(fd), "truncated": False, "scanned_entries": 0}
+    used = len(_encoded(result))
+    with os.scandir(fd) as entries:
+        while True:
+            if result["scanned_entries"] >= MAX_SCAN_ENTRIES or time.monotonic() >= deadline:
+                result["truncated"] = True
+                break
+            try:
+                entry = next(entries)
+            except StopIteration:
+                break
+            result["scanned_entries"] += 1
+            try:
+                # No recursion or following child symlinks. Re-stat without
+                # following because DirEntry metadata may already be stale.
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                entry.name.encode("utf-8", "strict")
+                if not stat.S_ISDIR(os.stat(entry.name, dir_fd=fd, follow_symlinks=False).st_mode):
+                    continue
+                child = {"name": entry.name, "path": _path(posixpath.join(path, entry.name))}
+                if used + len(_encoded(child)) + 1 > MAX_RESPONSE_BYTES - 128:
+                    result["truncated"] = True
+                    break
+            except (OSError, UnicodeError, SetupError):
+                result["truncated"] = True
+                continue
+            result["entries"].append(child)
+            used += len(_encoded(child)) + 1
+            if len(result["entries"]) >= MAX_DIRECTORIES:
+                result["truncated"] = True
+                break
+    result["entries"].sort(key=lambda item: item["name"])
+    return result
+
+
+def _same_directory(first, second):
+    return (stat.S_ISDIR(first.st_mode) and stat.S_ISDIR(second.st_mode)
+            and (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino))
+
+
+def _check_directory_path(fd, path):
+    """Ensure an advertised absolute path still identifies the held directory."""
+    try:
+        current = _open_directory(path)
+        try:
+            if not _same_directory(os.fstat(fd), os.fstat(current)):
+                raise SetupError("DIRECTORY_CHANGED")
+        finally:
+            os.close(current)
+    except OSError:
+        raise SetupError("DIRECTORY_CHANGED") from None
+
+
+def mkdir(path, name):
+    if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name)
+            or name in {".", ".."}):
+        raise SetupError("INVALID_DIRECTORY_NAME")
+    home = _home_path()
+    parent = _canonical_existing(_path(path))
+    child_path = _path(posixpath.join(parent, name), root_allowed=False, job_root=True)
+    parent_fd = _open_directory(parent)
+    child_fd = None
+    try:
+        _check_directory_path(parent_fd, parent)
+        created = False
+        try:
+            before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if not _writable(parent_fd):
+                raise SetupError("ROOT_NOT_WRITABLE")
+            # This standalone helper is single-threaded. A temporary private
+            # umask makes the new directory exactly 0700 even under umask 002.
+            # No mode changes are ever applied to an existing object.
+            previous_umask = os.umask(0o077)
+            try:
+                try:
+                    os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+                    created = True
+                except FileExistsError:
+                    pass  # Another request may have created the same directory.
+            finally:
+                os.umask(previous_umask)
+            try:
+                before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError:
+                raise SetupError("DIRECTORY_CHANGED") from None
+        if not stat.S_ISDIR(before.st_mode):
+            raise SetupError("DIRECTORY_CONFLICT")
+        try:
+            child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            held = os.fstat(child_fd)
+            if not _same_directory(before, held):
+                raise SetupError("DIRECTORY_CHANGED")
+            result = _browse_open_directory(child_path, home, child_fd)
+            after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not _same_directory(held, after):
+                raise SetupError("DIRECTORY_CHANGED")
+            _check_directory_path(parent_fd, parent)
+            _check_directory_path(child_fd, child_path)
+        except OSError:
+            raise SetupError("DIRECTORY_CHANGED") from None
+        result["created"] = created
+        return result
+    finally:
+        if child_fd is not None:
+            os.close(child_fd)
+        os.close(parent_fd)
 
 
 def validate_root(path):
@@ -186,6 +265,8 @@ def handle_request(request):
             return browse(request.get("path", ""))
         if operation == "validate_root" and set(request) == {"operation", "path"}:
             return validate_root(request["path"])
+        if operation == "mkdir" and set(request) == {"operation", "path", "name"}:
+            return mkdir(request["path"], request["name"])
         raise SetupError("INVALID_REQUEST")
     except SetupError as error:
         return {"ok": False, "error_code": error.code}
