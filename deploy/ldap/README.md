@@ -73,3 +73,12 @@ certificates expire after 90 days; reset the disposable fixture volumes to
 regenerate them and update the portal's trusted CA copy. A reset creates new
 directory entryUUIDs and therefore new application identities. For a real
 directory, use an operator-managed trust chain and lifecycle instead.
+
+For a fixture certificate-format upgrade, preserve both named volumes and
+stop the server first. Remove only `ca.pem` from the shared certificate volume
+using a controlled one-off container, then start the rebuilt server image.
+The certificate initializer creates a fresh CA and leaf chain when that file
+is absent; it leaves the LDAP database and generated password files intact.
+Export the replacement public CA to the portal before testing login again.
+This procedure preserves directory entryUUIDs and application identity links;
+it is different from resetting the disposable fixture volumes.

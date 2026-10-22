@@ -3,6 +3,8 @@
 import importlib.util
 import os
 from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -48,3 +50,20 @@ def test_fixture_rejects_unsafe_existing_password_files(tmp_path, case):
     else: path.write_text("synthetic");path.chmod(0o644)
     with pytest.raises(RuntimeError, match="Unsafe"):
         module.initialize(public, tmp_path / "private", other, owner=os.getuid())
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="OpenSSL CLI required for strict fixture chain validation")
+def test_fixture_tls_chain_satisfies_strict_certificate_validation(tmp_path):
+    directory = Path(__file__).resolve().parents[2] / "deploy" / "ldap"
+    spec = importlib.util.spec_from_file_location("ldap_fixture_tls", directory / "tls.py")
+    module = importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    public, private = tmp_path / "public", tmp_path / "private"
+    public.mkdir();private.mkdir()
+    module.initialize(public, private, directory / "cert.extensions")
+    checked = subprocess.run(["openssl", "verify", "-x509_strict", "-verify_hostname", "localhost",
+        "-CAfile", str(public / "ca.pem"), str(private / "server.crt")], capture_output=True, timeout=5)
+    assert checked.returncode == 0
+    wrong = subprocess.run(["openssl", "verify", "-x509_strict", "-CAfile", str(public / "wrong-ca.pem"),
+        str(private / "server.crt")], capture_output=True, timeout=5)
+    assert wrong.returncode != 0
+    assert (private / "ca.key").stat().st_mode & 0o777 == 0o600
