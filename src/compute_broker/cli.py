@@ -87,7 +87,7 @@ def bootstrap_demo(args):
                   "admission_expires_at": (timezone.now() + timedelta(days=7)).isoformat()}
         validate("project-policy.schema.json", policy)
         Grant.objects.create(project=project, policy=policy)
-        credential = ProjectCredential(project=project, name="demo agent", token_hash=token_hash(agent_token),
+        credential = ProjectCredential(project=project, issued_by=owner, name="demo agent", token_hash=token_hash(agent_token),
                                         scopes=["objects:write", "jobs:read", "jobs:write", "jobs:execute", "jobs:cancel", "artifacts:read"], expires_at=timezone.now() + timedelta(days=7))
         credential.prefix = str(credential.id)[:12]
         credential.save()
@@ -98,7 +98,7 @@ def bootstrap_demo(args):
                                      "user": target["user"], "port": target["port"], "remote_root": remote_root}}
         private_write(output / "agent-token", agent_token + "\n")
         private_write(output / "worker-token", worker_token + "\n")
-        private_write(output / "worker.json", json.dumps({"connections": {}, "credential_profiles": credential_profiles}, indent=2) + "\n")
+        private_write(output / "worker.json", json.dumps({"owner_id": str(owner.id), "connections": {}, "credential_profiles": credential_profiles}, indent=2) + "\n")
         private_write(output / "demo.json", json.dumps(document, indent=2) + "\n")
     print(f"Synthetic demo ready. Private owner/project metadata: {output / 'demo.json'}")
     print("This development demo does not isolate secrets from the desktop account.")

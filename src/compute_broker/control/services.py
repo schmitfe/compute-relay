@@ -12,7 +12,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from compute_broker.domain.validation import relative_path, validate
-from .auth import human_permission, require_connection, connection_allowed
+from .auth import human_permission, require_connection, connection_allowed, require_credential_actor
 from .errors import BrokerError
 from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Connection,
                      Environment, ExecutionRequest, Grant, IdempotencyRecord, Job,
@@ -159,6 +159,7 @@ def authorize(execution_request, *, decision=None):
     if credential and (credential.revoked or credential.expires_at <= timezone.now()):
         raise BrokerError("AUTH_REQUIRED", "The requesting credential is no longer valid.", 403)
     if credential:
+        require_credential_actor(credential)
         require_connection(credential, job.request["connection_id"])
         if credential.execution_mode == "approval_required" and decision is None:
             raise BrokerError("APPROVAL_REQUIRED", "This API key requires human confirmation for each execution.", 409)
@@ -204,6 +205,8 @@ def authorize(execution_request, *, decision=None):
 
 
 def request_execution(job, credential):
+    Project.objects.select_for_update().get(id=job.project_id)
+    require_credential_actor(credential)
     require_connection(credential, job.request["connection_id"])
     bound_environment(job.project, job.request)
     from compute_broker.extensions import job_hook
@@ -270,7 +273,7 @@ def serialize_job(job, *, package=False):
 def lease_work(worker):
     now = timezone.now()
     with transaction.atomic():
-        candidates = Attempt.objects.select_for_update().select_related("job__project", "connection").filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"]).filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now)).order_by("created_at")
+        candidates = Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection").filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"]).filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now)).order_by("created_at")
         for attempt in candidates[:30]:
             from compute_broker.extensions import control_names
             if not attempt.dispatch_started and attempt.job.extension_name and (
@@ -306,7 +309,7 @@ def lease_work(worker):
 
 
 def checked_lease(worker, attempt_id, data):
-    attempt = Attempt.objects.select_for_update().select_related("job__project", "connection", "execution_request__credential").filter(id=attempt_id, connection__worker=worker).first()
+    attempt = Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection", "execution_request__credential").filter(id=attempt_id, connection__worker=worker).first()
     if attempt is None:
         raise BrokerError("NOT_FOUND", "Attempt not found.", 404)
     if str(attempt.lease_id) != data.get("lease_id") or attempt.generation != data.get("generation") or not attempt.lease_expires_at or attempt.lease_expires_at <= timezone.now():
@@ -320,6 +323,8 @@ def dispatch(worker, attempt_id, data):
         if attempt.operation != "submit" or attempt.dispatch_started or attempt.state != "authorized" or attempt.accounting_state != "reserved":
             raise BrokerError("RECONCILIATION_REQUIRED", "Submission intent already exists; reconcile instead.", 409)
         credential = attempt.execution_request.credential
+        if credential:
+            require_credential_actor(credential)
         if attempt.job.project.paused or not attempt.connection.enabled or (credential and (credential.revoked or credential.expires_at <= timezone.now())):
             raise BrokerError("DISPATCH_REVOKED", "Dispatch authority is no longer active.", 403)
         if credential and ("jobs:execute" not in credential.scopes or not connection_allowed(credential, attempt.connection_id)):

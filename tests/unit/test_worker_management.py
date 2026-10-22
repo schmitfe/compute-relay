@@ -123,7 +123,7 @@ def test_csrf_and_agent_credentials_cannot_register_workers(enrollment):
     missing_csrf = enrollment.client.post("/workers/new/", payload)
     assert missing_csrf.status_code == 403
     project = Project.objects.create(owner=enrollment.owner, name="agent project")
-    ProjectCredential.objects.create(project=project, name="agent", prefix="public-id", token_hash=token_hash("synthetic-agent"),
+    ProjectCredential.objects.create(project=project, issued_by=project.owner, name="agent", prefix="public-id", token_hash=token_hash("synthetic-agent"),
         scopes=["jobs:write", "jobs:execute"], expires_at=timezone.now() + timedelta(days=1))
     agent = Client()
     denied = agent.post("/workers/new/", payload, HTTP_AUTHORIZATION="Bearer synthetic-agent")
@@ -198,7 +198,7 @@ print(json.dumps({'created':1,'blocked_replays':3}))
 '''
     environment = dict(os.environ, DJANGO_SETTINGS_MODULE="compute_broker.control.settings", BROKER_EXTENSIONS="",
         PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"), WORKER_TEST_DIFFERENT_OWNERS="1" if different_owners else "0",
-        BROKER_DATA_DIR=str(tmp_path / "service"), BROKER_DB_PATH=str(tmp_path / "race.sqlite3"),
+        BROKER_DB_ENGINE="sqlite", BROKER_DATA_DIR=str(tmp_path / "service"), BROKER_DB_PATH=str(tmp_path / "race.sqlite3"),
         BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"), BROKER_PROFILE="development")
     environment.pop("BROKER_SECRET_KEY_FILE", None)
     result = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True, text=True, timeout=45)

@@ -72,7 +72,7 @@ def management(db, settings, tmp_path):
               "admission_expires_at": (timezone.now() + timedelta(days=3)).isoformat()}
     grant = Grant.objects.create(project=project, policy=policy)
     token = new_token()
-    credential = ProjectCredential.objects.create(project=project, name="original agent", prefix=token[:12],
+    credential = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="original agent", prefix=token[:12],
                                                    token_hash=token_hash(token), scopes=SCOPES,
                                                    expires_at=timezone.now() + timedelta(days=1))
     return SimpleNamespace(owner=owner, outsider=outsider, worker=worker, connections=connections,

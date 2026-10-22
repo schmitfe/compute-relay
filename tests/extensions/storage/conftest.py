@@ -24,7 +24,7 @@ def resources(db):
     project = Project.objects.create(owner=owner, name="Storage project")
     project.connections.add(connection)
     secret = "storage-project-token"
-    credential = ProjectCredential.objects.create(project=project, name="planner", prefix="planner", token_hash=token_hash(secret),
+    credential = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="planner", prefix="planner", token_hash=token_hash(secret),
         scopes=["jobs:read"], expires_at=timezone.now() + timedelta(days=1))
     return SimpleNamespace(owner=owner, outsider=outsider, profile=profile, worker=worker, connection=connection,
                            project=project, credential=credential, token=secret)

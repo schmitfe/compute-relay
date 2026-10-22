@@ -85,7 +85,7 @@ def context(db, settings, tmp_path):
     settings.ARTIFACT_ROOT = tmp_path / "objects"
     owner = User.objects.create_user(username="environment-owner", password=None)
     outsider = User.objects.create_user(username="environment-outsider", password=None)
-    worker = WorkerIdentity.objects.create(name="environment-worker", token_hash=token_hash("environment-worker"),
+    worker = WorkerIdentity.objects.create(owner=owner, name="environment-worker", token_hash=token_hash("environment-worker"),
         supported_extensions=["environments"])
     connection = Connection.objects.create(owner=owner, worker=worker, name="synthetic-native", backend="slurm",
         configuration={"remote_root": "/managed/jobs", "site_profile": {"partitions": ["debug"], "accounts": ["broker"], "qos": [],
@@ -94,7 +94,7 @@ def context(db, settings, tmp_path):
     project = Project.objects.create(owner=owner, name="environment-project")
     project.connections.add(connection)
     project.environments.add(base)
-    key = ProjectCredential.objects.create(project=project, name="builder", prefix="builder", token_hash=token_hash("environment-agent"),
+    key = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="builder", prefix="builder", token_hash=token_hash("environment-agent"),
         scopes=["environments:build", "jobs:write", "jobs:execute", "jobs:read", "objects:write"],
         expires_at=timezone.now() + timedelta(days=1))
     grant = Grant.objects.create(project=project, policy={"schema_version": "1.0", "project_id": str(project.id), "revision": 1,

@@ -170,7 +170,7 @@ def advance(run, credential=None, *, maximum=2):
             core.prepare_job(current.job)
             with transaction.atomic():
                 Project.objects.select_for_update().get(id=credential.project_id)
-                locked = WorkflowNodeRun.objects.select_for_update().select_related("job").get(id=current.id)
+                locked = WorkflowNodeRun.objects.select_for_update(of=("self",)).select_related("job").get(id=current.id)
                 if WorkflowRun.objects.get(id=run.id).cancel_requested:
                     locked.state, locked.claim_expires_at = "cancelled", None
                     locked.save(update_fields=["state", "claim_expires_at"])

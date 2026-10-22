@@ -1,4 +1,6 @@
 annotated-types==0.8.0
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
 anyio==4.15.1
 asgiref==3.12.1
 attrs==26.1.0
@@ -16,9 +18,13 @@ idna==3.20
 iniconfig==2.3.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+ldap3==2.9.1
 mcp==1.30.0
 packaging==26.3
 pluggy==1.7.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+pyasn1==0.6.4
 pycparser==3.11
 pydantic==2.14.1
 pydantic-settings==2.16.1

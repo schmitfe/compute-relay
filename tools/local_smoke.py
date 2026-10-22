@@ -56,7 +56,7 @@ def main():
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        env = dict(os.environ, BROKER_DATA_DIR=str(root / "control"), BROKER_PORT=str(port),
+        env = dict(os.environ, BROKER_DB_ENGINE="sqlite", BROKER_DATA_DIR=str(root / "control"), BROKER_PORT=str(port),
                    BROKER_CONTROL_URL=f"http://127.0.0.1:{port}")
         # Do not let a developer's explicit data paths select a real installation.
         for key in ("BROKER_DB_PATH", "BROKER_ARTIFACT_ROOT", "BROKER_SECRET_KEY_FILE", "DJANGO_SETTINGS_MODULE"):

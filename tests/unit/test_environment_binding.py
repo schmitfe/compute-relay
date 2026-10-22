@@ -37,7 +37,7 @@ def catalog(db, settings, tmp_path):
     project.connections.add(*targets)
     project.environments.add(*environments)
     token = "synthetic-catalog-project"
-    credential = ProjectCredential.objects.create(project=project, name="catalog agent", prefix="catalog",
+    credential = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="catalog agent", prefix="catalog",
         token_hash=token_hash(token), scopes=["jobs:read", "jobs:write", "jobs:execute"],
         expires_at=timezone.now() + timedelta(days=1))
     policy = {"schema_version": "1.0", "project_id": str(project.id), "revision": 1, "mode": "budgeted",

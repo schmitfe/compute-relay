@@ -36,7 +36,7 @@ def review_site(db):
     environment = Environment.objects.create(owner=owner, connection=connection, name="synthetic site Python",
         configuration={"interpreter": "/usr/bin/python3"}, revision_sha256="e" * 64)
     project.environments.add(environment)
-    credential = ProjectCredential.objects.create(project=project, name="automatic-capable key", prefix="synthetic",
+    credential = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="automatic-capable key", prefix="synthetic",
         token_hash=token_hash("synthetic-site-review-key"), execution_mode="automatic",
         scopes=["jobs:write", "jobs:execute", "jobs:read"], expires_at=timezone.now() + timedelta(days=1))
     policy = {"schema_version": "1.0", "project_id": str(project.id), "revision": 1, "mode": "budgeted",

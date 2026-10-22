@@ -67,12 +67,14 @@ def _one_time_record(project, actor, operation, nonce, payload, credential_id):
 
 
 def issue_key(project, user, data):
-    human_permission(user, project, "project_admin")
+    human_permission(user, project, "viewer")
+    for scope in data["scopes"]:
+        human_permission(user, project, "viewer" if scope in {"jobs:read", "artifacts:read"} else "submitter")
     payload = _key_payload(data)
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
         secret = new_token()
-        credential = ProjectCredential(project=project, name=payload["name"], token_hash=token_hash(secret), scopes=payload["scopes"],
+        credential = ProjectCredential(project=project, issued_by=user, name=payload["name"], token_hash=token_hash(secret), scopes=payload["scopes"],
                                        expires_at=data["expires_at"], allowed_connection_ids=payload["allowed_connection_ids"], execution_mode=payload["execution_mode"])
         # The display identifier is independent of the secret. No plaintext prefix is stored.
         credential.prefix = str(credential.id)[:12]
@@ -83,16 +85,18 @@ def issue_key(project, user, data):
 
 
 def rotate_key(project, credential, user, nonce):
-    human_permission(user, project, "project_admin")
+    human_permission(user, project, "viewer")
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
         old = ProjectCredential.objects.select_for_update().get(id=credential.id, project=project)
+        if old.issued_by_id != user.id:
+            raise BrokerError("KEY_OWNER_REQUIRED", "Only the key's issuing user may rotate and receive its replacement.", 403)
         if old.revoked:
             raise BrokerError("KEY_REVOKED", "This key is already revoked. Create a new key instead.", 409)
         if old.expires_at <= timezone.now():
             raise BrokerError("KEY_EXPIRED", "This key has expired. Create a new key with a future expiry.", 409)
         secret = new_token()
-        replacement = ProjectCredential(project=project, name=old.name, token_hash=token_hash(secret), scopes=list(old.scopes),
+        replacement = ProjectCredential(project=project, issued_by=old.issued_by, name=old.name, token_hash=token_hash(secret), scopes=list(old.scopes),
                                          expires_at=old.expires_at, allowed_connection_ids=old.allowed_connection_ids, execution_mode=old.execution_mode)
         replacement.prefix = str(replacement.id)[:12]
         _one_time_record(project, user, f"key:rotate:{old.id}", nonce, {"old_id": str(old.id)}, replacement.id)
@@ -186,7 +190,8 @@ def project_detail(request, project_id):
 
 @human_view
 def key_new(request, project_id):
-    project = managed_project(request, project_id)
+    project = get_object_or_404(Project, id=project_id)
+    human_permission(request.user, project, "viewer")
     form = KeyForm(request.POST if request.method == "POST" else None, project=project)
     if request.method == "POST" and form.is_valid():
         credential, secret = issue_key(project, request.user, form.cleaned_data)
@@ -198,7 +203,8 @@ def key_new(request, project_id):
 def key_rotate(request, project_id, key_id):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
-    project = managed_project(request, project_id)
+    project = get_object_or_404(Project, id=project_id)
+    human_permission(request.user, project, "viewer")
     credential = get_object_or_404(ProjectCredential, id=key_id, project=project)
     credential, secret = rotate_key(project, credential, request.user, request.POST.get("submission_id"))
     return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project, "rotated": True}, status=201)
