@@ -43,7 +43,8 @@ def local_path(value):
     return str(Path(value).expanduser().absolute())
 
 
-def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, allow_insecure_http=False):
+def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, allow_insecure_http=False,
+            choose_identity=False, allow_picker=False):
     """Freeze local runtime before authentication; no private key bytes are read."""
     if (not isinstance(setup, dict) or setup.get("schema_version") != "1.0"
             or set(setup) != {"schema_version", "broker_url", "registration_id", "owner_id", "name", "pairing_token", "expires_at", "target", "remote_root", "local", "site_profile"}):
@@ -60,7 +61,11 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     ssh = setup["target"]
     if not isinstance(ssh, dict) or set(ssh) != {"host", "user", "port"}:
         raise ValueError("Invalid connector target.")
-    key = local_path(identity_file or hints.get("identity_file"))
+    selected = identity_file or hints.get("identity_file")
+    if choose_identity or (not selected and allow_picker):
+        from .file_picker import choose_identity_file
+        selected = choose_identity_file()
+    key = local_path(selected)
     hosts = local_path(known_hosts or hints.get("known_hosts") or str(state_directory / "known_hosts"))
     private = {"backend": "slurm", "remote_root": setup["remote_root"], "python_path": "/usr/bin/python3",
         "ssh": {**ssh, "mode": "key", "identity_file": key, "known_hosts": hosts}}
@@ -147,8 +152,12 @@ def run(args):
         if args.setup and path.exists():
             raise ValueError("This connector is already paired. Resume without --setup, or use a new state directory.")
         setup = read_private(args.setup) if args.setup else None
+        choose_identity = getattr(args, "choose_identity", False)
+        if choose_identity and (args.non_interactive or not setup):
+            raise ValueError("Choose a key during interactive first pairing only.")
         state = prepare(setup, directory, identity_file=args.identity_file, known_hosts=args.known_hosts,
-            allow_insecure_http=args.allow_insecure_http) if setup else read_private(path)
+            allow_insecure_http=args.allow_insecure_http, choose_identity=choose_identity,
+            allow_picker=not args.non_interactive) if setup else read_private(path)
         if not setup and (args.identity_file or args.known_hosts):
             raise ValueError("Changing a paired connector requires a fresh setup and a new state directory.")
         # A journal intent survives interruption; a consumed pairing response
@@ -174,6 +183,7 @@ def run(args):
 
 
 def main(args):
+    from .file_picker import FileSelectionCancelled, FileSelectionUnavailable
     previous = signal.getsignal(signal.SIGTERM)
     def stopped(signum, frame):
         raise KeyboardInterrupt
@@ -182,6 +192,11 @@ def main(args):
         run(args)
     except KeyboardInterrupt:
         print("Connector stopped; submitted Slurm jobs retain their recorded state.")
+    except FileSelectionCancelled as error:
+        print(str(error))
+    except FileSelectionUnavailable as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(1) from None
     except Exception:
         # Do not print exceptions that may include a setup token or SSH details.
         print("Connector could not start. Check private file permissions, the SSH login, setup expiry and whether this state directory is already in use.", file=sys.stderr)

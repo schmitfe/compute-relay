@@ -17,6 +17,36 @@ from compute_broker.worker.client import ControlError
 from compute_broker.worker.enrollment import profile_metadata
 
 
+def test_empty_key_hint_can_choose_locally_without_changing_download(setup, tmp_path, monkeypatch):
+    from compute_broker.worker import file_picker
+    setup["local"].pop("identity_file")
+    monkeypatch.setattr(file_picker, "choose_identity_file", lambda: "/local/picked-private-key")
+    state = connector.prepare(setup, tmp_path, allow_picker=True)
+    assert state["connection"]["ssh"]["identity_file"] == "/local/picked-private-key"
+    assert "identity_file" not in setup["local"]
+
+
+def test_cancelled_picker_exits_before_login_or_pairing(setup, tmp_path, monkeypatch, sessions, capsys):
+    from compute_broker.worker import file_picker
+    def cancel():
+        raise file_picker.FileSelectionCancelled()
+    monkeypatch.setattr(file_picker, "choose_identity_file", cancel)
+    args = arguments(tmp_path, setup, choose_identity=True)
+    args.non_interactive = False
+    connector.main(args)
+    assert not sessions and not (tmp_path / "state/state.json").exists()
+    output = capsys.readouterr()
+    assert "cancelled" in output.out and setup["pairing_token"] not in output.out + output.err
+
+
+def test_noninteractive_start_never_opens_requested_picker(setup, tmp_path, monkeypatch, sessions):
+    from compute_broker.worker import file_picker
+    monkeypatch.setattr(file_picker, "choose_identity_file", lambda: pytest.fail("Noninteractive startup opened a picker"))
+    with pytest.raises(SystemExit):
+        connector.main(arguments(tmp_path, setup, choose_identity=True))
+    assert not sessions
+
+
 @pytest.fixture
 def setup():
     return {"schema_version": "1.0", "broker_url": "https://broker.example.invalid",

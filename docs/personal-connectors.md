@@ -78,7 +78,7 @@ these answers in the web UI, and the background worker does not blindly repeat
 interactive MFA attempts.
 
 To select a different key locally even when a path was saved, add
-`--choose-identity` to the startup or resume command. Keep the terminal available
+`--choose-identity` to the first pairing command. Keep the terminal available
 for the subsequent SSH prompts. For a session without a graphical picker,
 supply a local override:
 
@@ -129,6 +129,19 @@ state directory to reconcile their native identities and accounting; creating a
 new job or deleting local state is not a recovery procedure. Uncertain
 submissions retain their reservations until reconciled. Use the broker's normal
 cancel operation if you want a submitted job cancelled.
+
+## Remove a cluster configuration
+
+The setup page and cluster overview offer **Remove cluster configuration**.
+Its confirmation page is available only to the owner. Removal hides the cluster
+from active configuration, blocks new submissions and discovery, invalidates
+unused pairing files and clears saved local-path hints. A dedicated personal
+connector loses its broker credential, causing its loop to exit and close its
+owned SSH session. A shared legacy worker is retained for its other clusters.
+
+Removal is refused while any execution has unsettled accounting. Recorded jobs,
+results and accounting are retained; no remote files or software environments
+are deleted. A stale confirmation must be reloaded before it can be submitted.
 
 ## Boundaries and remaining deployment work
 

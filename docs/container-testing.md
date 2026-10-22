@@ -78,6 +78,34 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### Personal connector and configuration removal, 22 October 2026
+
+The PostgreSQL suite passed **932 tests and 65 subtests**, with one optional
+NumPy test skipped and two upstream LDAP dependency deprecation warnings.
+Migration drift checks reported no changes. Coverage includes one-use hashed
+pairing credentials, ownership and CSRF, stale setup revisions, PostgreSQL
+discovery/re-pair locking, local session cleanup, key-picker cancellation and
+headless fallback, and owner-confirmed cluster archival. GUI tests use mocked
+dialogs; no actual desktop key-selection window or institutional key was used.
+
+The separately named disposable Docker Slurm stack used `compose.test.yml`
+and `compose.personal-test.yml`, with only the controller and Slurm fixture
+started before the acceptance client. The client enrolled its own personal
+worker, established a native OpenSSH master and completed discovery. A reviewed
+Python job ran as native Slurm job `2`, produced the expected stdout and artifact
+hash, and settled at 2 CPU core-seconds with zero outstanding reservations.
+SIGTERM closed the connector-owned master, and a restart reused the saved worker
+identity. Owner-confirmed removal then hid the connection from agent execution,
+revoked the dedicated connector and closed its resumed SSH master. No remote
+files were removed. The test containers, volumes and synthetic credentials were
+removed afterward; persistent portal PostgreSQL and mock LDAP were retained.
+
+CI defines the same personal connector acceptance job. These local results do
+not claim a remote CI run, actual Cisco MFA acceptance or async support for the
+optional environment, workflow and storage extensions. See
+[personal connectors](personal-connectors.md) for the local setup and trust
+boundaries.
+
 ### PostgreSQL, LDAP and async Slurm acceptance, 22 October 2026
 
 A full PostgreSQL regression run passed **780 tests and 65 subtests**, with one

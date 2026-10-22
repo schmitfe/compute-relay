@@ -24,7 +24,7 @@ def require_owner(user):
 
 
 def target(registration):
-    if registration.archived:
+    if registration.archived or (registration.connection_id and registration.connection.archived):
         raise BrokerError("CLUSTER_REMOVED", "This cluster configuration was removed.", 409)
     if registration.backend != "slurm" or not registration.remote_user or not registration.requested_root:
         raise BrokerError("SETUP_INCOMPLETE", "Set a Slurm hostname, username and job directory first.", 409)
@@ -88,13 +88,16 @@ def download_connection(request, connection_id):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     require_owner(request.user)
-    connection = get_object_or_404(Connection, id=connection_id, owner=request.user, backend="slurm", archived=False)
-    ssh = connection.configuration.get("ssh", {})
-    registration, created = ClusterRegistration.objects.get_or_create(connection=connection, defaults={
-        "owner": request.user, "name": connection.name, "backend": "slurm", "host": ssh.get("host", ""),
-        "remote_user": ssh.get("user", ""), "port": ssh.get("port", 22),
-        "requested_root": connection.configuration.get("remote_root", "")})
-    return setup_document(request, registration, revision_required=not created)
+    with transaction.atomic():
+        owner = User.objects.select_for_update(no_key=True).get(pk=request.user.pk)
+        require_owner(owner)
+        connection = get_object_or_404(Connection.objects.select_for_update(), id=connection_id, owner=owner, backend="slurm", archived=False)
+        ssh = connection.configuration.get("ssh", {})
+        registration, created = ClusterRegistration.objects.get_or_create(connection=connection, defaults={
+            "owner": owner, "name": connection.name, "backend": "slurm", "host": ssh.get("host", ""),
+            "remote_user": ssh.get("user", ""), "port": ssh.get("port", 22),
+            "requested_root": connection.configuration.get("remote_root", "")})
+        return setup_document(request, registration, revision_required=not created)
 
 
 @boundary("POST")

@@ -155,6 +155,7 @@ def main():
     connector.add_argument("--setup", help="Private one-time setup JSON downloaded from your cluster page")
     connector.add_argument("--state-directory", required=True, help="Private 0700 local directory; keep the socket path under 100 bytes")
     connector.add_argument("--identity-file", help="Explicit local key path override for first pairing")
+    connector.add_argument("--choose-identity", action="store_true", help="Browse for your local SSH key in a file-picker window")
     connector.add_argument("--known-hosts", help="Local known-hosts file override for first pairing")
     connector.add_argument("--non-interactive", action="store_true", help="Fail if SSH requires a prompt")
     connector.add_argument("--allow-insecure-http", action="store_true", help="Allow an explicitly selected isolated HTTP test network")
