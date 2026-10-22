@@ -23,6 +23,15 @@ Project settings list unfinished clusters beneath **Allowed clusters**, with a
 link to the remaining setup step. They cannot be granted access until setup is
 complete; saved discovery alone does not confirm their accounting assumptions.
 
+Under **Software discovery**, the owner may enable **Also run module avail during
+discovery**. After the worker confirms this setting, run discovery again. The
+fixed module listing runs under the connected HPC account with bounded time and
+output; it can evaluate the site's module configuration, without accepting an
+agent-supplied command. It complements the provisional filename inventory.
+The choice is saved for this cluster and in its local worker state. An older
+worker must restart before it can acknowledge this option. It defaults off and
+can be disabled through the same form.
+
 **Cluster configuration** is the human-facing name. The internal configuration
 object remains `site_profile`, so existing packages and worker profiles retain
 their versioned field names. This guide describes the derivation/form contract;

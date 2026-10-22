@@ -73,7 +73,8 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     if datetime.fromisoformat(setup["expires_at"]) <= datetime.now(timezone.utc):
         raise ConnectorStartupError("SETUP_EXPIRED")
     hints = setup["local"]
-    if not isinstance(hints, dict) or set(hints) - {"identity_file", "known_hosts", "session_seconds"}:
+    if (not isinstance(hints, dict) or set(hints) - {"identity_file", "known_hosts", "session_seconds", "module_availability_enabled"}
+            or type(hints.get("module_availability_enabled", False)) is not bool):
         raise ValueError("Invalid local connector hints.")
     ssh = setup["target"]
     if not isinstance(ssh, dict) or set(ssh) != {"host", "user", "port"}:
@@ -94,7 +95,7 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     return {"schema_version": "1.0", "owner_id": owner, "registration_id": identifier,
         "broker_url": setup["broker_url"], "connection": private, "session_seconds": lifetime,
         "allow_insecure_http": allow_insecure_http, "site_profile": setup["site_profile"],
-        "module_discovery_mode": "auto"}
+        "module_discovery_mode": "auto", "module_availability_enabled": hints.get("module_availability_enabled", False)}
 
 
 def runtime_profile(state, session):
@@ -109,6 +110,8 @@ def runtime_profile(state, session):
     profile["profile_revision"] = state.get("profile_generation", 1)
     if state.get("module_discovery_mode") == "auto":
         profile["environment_discovery"] = {"module_inventory_mode": "auto"}
+        if state.get("module_availability_enabled") is True:
+            profile["environment_discovery"]["module_availability_enabled"] = True
     return alias, profile
 
 

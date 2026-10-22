@@ -32,6 +32,8 @@
 {% if form.timing_suggestions.termination_margin_seconds %}<p>Saved scheduler termination suggestion: {{ form.timing_suggestions.termination_margin_seconds.value }} seconds across {{ form.timing_suggestions.termination_margin_seconds.partitions|join:", " }}.</p>{% endif %}
 {% if form.timing_suggestions.overtime_margin_seconds %}<p>Saved scheduler overtime suggestion: {{ form.timing_suggestions.overtime_margin_seconds.value }} seconds across {{ form.timing_suggestions.overtime_margin_seconds.partitions|join:", " }}.</p>{% endif %}
 {% for field in form.timing_fields %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}</section>
+<section><h2>Software discovery</h2>{% include "broker/configuration_field.html" with field=form.module_availability_enabled %}
+<p>After saving, run discovery again to refresh the module catalog using this setting.</p></section>
 <button type="submit"{% if waiting or not connector_ready %} disabled{% endif %}>Validate and save cluster configuration</button>
 </form>
 {% endblock %}

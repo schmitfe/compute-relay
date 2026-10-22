@@ -115,6 +115,14 @@ def arguments(tmp_path, setup=None, **changes):
         identity_file=None, known_hosts=None, allow_insecure_http=False, non_interactive=True, once=True, **changes)
 
 
+def test_downloaded_module_avail_preference_is_explicit_boolean(tmp_path, setup):
+    setup["local"]["module_availability_enabled"] = True
+    assert connector.prepare(setup, tmp_path)["module_availability_enabled"] is True
+    setup["local"]["module_availability_enabled"] = "true"
+    with pytest.raises(ValueError, match="Invalid local connector hints"):
+        connector.prepare(setup, tmp_path)
+
+
 @pytest.fixture
 def sessions(monkeypatch):
     created = []

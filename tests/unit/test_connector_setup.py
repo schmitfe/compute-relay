@@ -187,6 +187,31 @@ def test_human_configuration_requires_worker_ack_and_pins_profile(personal):
     assert reply(context, task, result=result, configuration=config).status_code == 200
 
 
+def test_module_avail_is_opt_in_capability_gated_and_acknowledged(personal):
+    context = personal
+    path = f"/clusters/{context.connection.id}/configuration/"
+    data = configuration_fields(context, module_availability_enabled="on")
+    assert context.human.post(path, data).status_code == 409
+    assert not ConnectorTask.objects.exists()
+    context.worker.connector_features.append("personal_module_availability_v1");context.worker.save()
+    assert context.human.post(path, data).status_code == 302
+    task = lease(context)
+    assert task["request"]["module_availability_enabled"] is True
+    protected = {**context.protected, "remote_root_prefixes": [task["request"]["remote_root"]],
+        "site_profile": task["request"]["site_profile"], "profile_revision": 2,
+        "environment_discovery": {"module_inventory_mode": "auto", "module_availability_enabled": True}}
+    context.worker.profiles = [profile_metadata("personal-test", protected)];context.worker.save()
+    config = resolve_connection({**context.connection.configuration, "remote_root": task["request"]["remote_root"]},
+        {"personal-test": protected}, refresh=True)[1]
+    result = {"ok": True, "path": task["request"]["remote_root"], "writable": True}
+    assert reply(context, task, result=result, configuration=config).status_code == 409
+    assert reply(context, task, result={**result, "module_availability_enabled": True}, configuration=config).status_code == 200
+    context.registration.refresh_from_db()
+    assert context.registration.connector_settings["module_availability_enabled"] is True
+    page = context.human.get(path)
+    assert b'name="module_availability_enabled"' in page.content and b"checked" in page.content
+
+
 def test_unconfirmed_discovery_does_not_enable_agent_execution(personal):
     context = personal
     context.connection.configuration_confirmed = False;context.connection.setup_complete = False;context.connection.save()

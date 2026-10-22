@@ -252,7 +252,7 @@ def _results(jobs):
                 if artifact.blob.size_bytes <= 65536:
                     try:
                         text = read_blob(artifact.blob).decode("utf-8", errors="replace")
-                    except BrokerError:
+                    except (BrokerError, OSError):
                         text = "Stored output could not be verified."
                 outputs.append({"path": artifact.path, "sha256": artifact.blob.sha256, "text": text})
             attempts.append({"id": attempt.id, "state": attempt.state, "accounting_state": attempt.accounting_state,

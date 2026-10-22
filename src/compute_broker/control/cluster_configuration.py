@@ -11,6 +11,8 @@ from compute_broker.domain.cluster_configuration import (
 
 
 class ClusterConfigurationForm(forms.Form):
+    module_availability_enabled = forms.BooleanField(required=False, label="Also run module avail during discovery",
+        help_text="Run the site's module listing through your worker, using system initialization and discovered search paths. This may evaluate site module configuration under your HPC account. No module is loaded and no compute job is submitted.")
     partitions = forms.CharField(max_length=81000, help_text="Comma-separated partition names. Discovery is visibility, not permission.")
     accounts = forms.CharField(max_length=81000, required=False, help_text="Comma-separated account names. Confirm access with your site.")
     qos = forms.CharField(max_length=81000, required=False, label="QoS", help_text="Optional comma-separated job QoS names; partition QoS is separate.")

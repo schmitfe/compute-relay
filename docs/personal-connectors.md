@@ -136,6 +136,10 @@ accounting bounds. The worker validates access without creating files, saves its
 new protected scope locally and acknowledges it before job access is enabled.
 Changes are refused while execution or accounting is unsettled. Project/key
 permissions, environment recipes and execution review still apply afterward.
+The cluster configuration also offers an explicit **module avail** discovery
+option. Its fixed listing runs as your HPC user and may evaluate site module
+configuration. It is disabled by default, persists through restart and does not
+expose a general command interface. Save the option, then run discovery again.
 See [cluster configuration](cluster-configuration.md) and
 [module discovery](module-discovery.md).
 

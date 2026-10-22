@@ -122,6 +122,25 @@ def test_rejected_remote_path_does_not_change_local_profile(runtime, monkeypatch
     assert runtime.client.calls[-1][1]["error_code"] == "ROOT_NOT_WRITABLE"
 
 
+def test_module_avail_setting_is_persisted_published_and_replayable(runtime):
+    current = task();current["request"]["module_availability_enabled"] = True
+    runtime.client.queue = [current];runtime.client.fail_report = True
+    with pytest.raises(ControlError):
+        asyncio.run(runtime.worker.setup_once())
+    stored = read_private(runtime.directory / "state.json")
+    assert stored["module_availability_enabled"] is True
+    assert runtime_profile(stored, runtime.session)[1]["environment_discovery"]["module_availability_enabled"] is True
+    assert stored["last_configuration_result"]["module_availability_enabled"] is True
+    runtime.client.queue = [{**current, "lease_id": str(uuid4()), "generation": 2}]
+    asyncio.run(runtime.worker.setup_once())
+    assert runtime.client.calls[-1][1]["result"]["module_availability_enabled"] is True
+    disable = task();disable["request"]["module_availability_enabled"] = False
+    runtime.client.queue = [disable]
+    asyncio.run(runtime.worker.setup_once())
+    assert not runtime.state["module_availability_enabled"]
+    assert "module_availability_enabled" not in runtime_profile(runtime.state, runtime.session)[1]["environment_discovery"]
+
+
 def test_default_root_is_identified_after_login_without_creating_it(runtime):
     assert asyncio.run(personal_setup.default_work_root(runtime.session)) == "/home/researcher/.compute-broker/jobs"
 

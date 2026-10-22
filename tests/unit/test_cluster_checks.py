@@ -321,6 +321,21 @@ def test_results_are_bounded_escaped_owner_only_and_need_no_revealed_token(diagn
     assert human(diagnostic.outsider).get(diagnostic.path).status_code == 404
 
 
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+def test_missing_or_unreadable_result_does_not_break_test_page(diagnostic, error):
+    config, job = prepared(diagnostic)
+    with transaction.atomic():
+        services.decide(job, diagnostic.owner, {"execution_request_id": str(job.execution_requests.get().id),
+            "manifest_sha256": job.manifest_sha256, "approved": True})
+    blob = store_blob(config.project, b'{"marker":"compute-broker-cluster-check-v1"}\n')
+    Artifact.objects.create(attempt=Attempt.objects.get(job=job), path="cluster-check.json", blob=blob)
+    with patch.object(cluster_checks, "read_blob", side_effect=error("private-path-not-disclosed")):
+        page = human(diagnostic.owner).get(diagnostic.path)
+    assert page.status_code == 200
+    assert b"Stored output could not be verified." in page.content
+    assert b"private-path-not-disclosed" not in page.content
+
+
 def test_account_expiry_recheck_and_forged_resource_fields_cannot_bypass_review(diagnostic, monkeypatch):
     response = form_post(human(diagnostic.owner), diagnostic.path, data(diagnostic, gpus=1, cpus=128,
         approved=True, source="malicious", mode="budgeted"))

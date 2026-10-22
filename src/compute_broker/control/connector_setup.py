@@ -76,6 +76,9 @@ def enqueue(user, connection_id, kind, payload, revision):
             raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector with the updated broker environment to enable interactive configuration.", 409)
         if kind == "mkdir" and "personal_folders_v1" not in worker.connector_features:
             raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable the New folder action.", 409)
+        if (kind == "configure" and payload.get("module_availability_enabled") is True
+                and "personal_module_availability_v1" not in worker.connector_features):
+            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable module avail discovery.", 409)
         expire_tasks(current)
         pending = ConnectorTask.objects.filter(connection=current, state__in=["queued", "running"])
         if pending.filter(kind="configure").exists() or pending.count() >= 4:
@@ -136,7 +139,8 @@ def configure(request, connection_id):
     connection = own_connection(request.user, connection_id)
     initial_root = request.GET.get("remote_root", connection.configuration.get("remote_root", ""))
     form = ClusterConfigurationForm(request.POST if request.method == "POST" else None,
-        snapshot=connection.discovery_snapshot, current_profile=connection.configuration.get("site_profile", {}))
+        snapshot=connection.discovery_snapshot, current_profile=connection.configuration.get("site_profile", {}),
+        initial={"module_availability_enabled": connection.registration.connector_settings.get("module_availability_enabled", False)})
     root_error = None
     if request.method == "POST":
         initial_root = request.POST.get("remote_root", "")
@@ -144,7 +148,8 @@ def configure(request, connection_id):
             root_error = "Choose a canonical absolute working directory. Use Browse directories to select it on the cluster."
         if form.is_valid() and not root_error:
             task = enqueue(request.user, connection_id, "configure", {"remote_root": initial_root,
-                "site_profile": form.site_profile()}, request.POST.get("connection_revision"))
+                "site_profile": form.site_profile(), "module_availability_enabled": form.cleaned_data["module_availability_enabled"]},
+                request.POST.get("connection_revision"))
             return redirect(f"/clusters/{connection_id}/configuration/?" + urlencode({"task": str(task.id)}))
     task = None
     if request.GET.get("task"):
@@ -155,7 +160,8 @@ def configure(request, connection_id):
         task = get_object_or_404(ConnectorTask, id=task_id, owner=request.user, connection=connection, kind="configure")
         if request.method == "GET":
             initial_root = task.request["remote_root"]
-            form = ClusterConfigurationForm(snapshot=connection.discovery_snapshot, current_profile=task.request["site_profile"])
+            form = ClusterConfigurationForm(snapshot=connection.discovery_snapshot, current_profile=task.request["site_profile"],
+                initial={"module_availability_enabled": task.request.get("module_availability_enabled", False)})
     return render(request, "broker/cluster_configuration.html", {"cluster": connection, "form": form,
         "remote_root": initial_root, "root_error": root_error, "task": task,
         "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
@@ -180,7 +186,7 @@ def tasks(request):
         defaults_deferred = False
         if document.get("hello") is True:
             features = document.get("features", ["personal_setup_v1"])
-            if not isinstance(features, list) or any(item not in {"personal_setup_v1", "personal_folders_v1"} for item in features):
+            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1"} for item in features):
                 raise BrokerError("INVALID_FEATURES", "Unsupported connector setup capabilities.")
             worker.connector_features = list(dict.fromkeys(features))
             worker.save(update_fields=["connector_features"])
@@ -256,6 +262,7 @@ def report(request, task_id):
                     or not isinstance(config, dict) or set(config) != PUBLIC_CONFIG_FIELDS or not profile
                     or any(config.get(key) != connection.configuration.get(key) for key in ("backend", "ssh", "credential_profile"))
                     or config.get("site_profile") != task.request["site_profile"]
+                    or result.get("module_availability_enabled", False) is not task.request.get("module_availability_enabled", False)
                     or not canonical_root(config.get("remote_root")) or config.get("remote_root") != result.get("path")
                     or config.get("remote_root") not in profile["remote_root_prefixes"]
                     or config.get("site_profile") != profile["site_profile"]
@@ -266,8 +273,10 @@ def report(request, task_id):
             connection.setup_complete = connection.discovery_state == "ready"
             connection.save(update_fields=["configuration", "revision_sha256", "configuration_confirmed", "setup_complete"])
             registration.requested_root = config["remote_root"]
+            registration.connector_settings = {**registration.connector_settings,
+                "module_availability_enabled": task.request.get("module_availability_enabled", False)}
             registration.revision += 1
-            registration.save(update_fields=["requested_root", "revision"])
+            registration.save(update_fields=["requested_root", "revision", "connector_settings"])
             task.state, task.result = "succeeded", {"path": config["remote_root"]}
             audit(None, task.owner_id, "cluster.configuration_updated", connection.id)
         else:

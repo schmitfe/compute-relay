@@ -3,7 +3,7 @@
 <h1>Add an environment recipe</h1>
 <nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></nav>
 <p>Creating a recipe for <strong>{{ cluster.name }}</strong>, using its saved software catalog. This page never logs in, loads modules or installs software.</p>
-{% if selected_cluster.discovery_snapshot.software.modules.provisional %}<p class="notice">This cluster's module names were discovered from file metadata. Aliases, dependencies and compatibility have not been checked. Review the selected modules and initialization in the job package before execution.</p>{% endif %}
+{% if selected_cluster.discovery_snapshot.software.modules.provisional %}<p class="notice">This cluster's catalog includes module filename candidates{% if selected_cluster.discovery_snapshot.software.modules.availability.enabled %} and the site's module listing{% endif %}. Aliases, dependencies and compatibility have not been validated together. Review the selected modules and initialization in the job package before execution.</p>{% endif %}
 <section><form method="post">{% csrf_token %}{{ form.non_field_errors }}
 {% for field in form %}
 {% if field.is_hidden %}{{ field }}{{ field.errors }}
