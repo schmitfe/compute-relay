@@ -177,12 +177,14 @@ def scheduler(config, command, args, *, cwd=None, timeout=30):
             "stderr": result.stderr.decode("utf-8", "replace")}
 
 
-def software_command(argv, *, extra_env=None, timeout=8):
+def software_command(argv, *, extra_env=None, timeout=8, max_output_bytes=65536):
     """Bound both live output and time for fixed, operator-enabled probes.
 
     HOME/config/plugin isolation avoids personal shell startup and Conda registry
     writes. This never invokes a discovered Python or a project/Poetry command.
     """
+    if type(max_output_bytes) is not int or not 1 <= max_output_bytes <= 262144:
+        raise ValueError("Software probe output limit is invalid")
     env = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C",
            "PYTHONNOUSERSITE": "1", "CONDA_NO_PLUGINS": "true", "CONDARC": "/dev/null"}
     env.update(extra_env or {})
@@ -207,9 +209,9 @@ def software_command(argv, *, extra_env=None, timeout=8):
                     selector.unregister(key.fileobj)
                     continue
                 target = streams[key.fileobj]
-                available = 65536 - len(target)
+                available = max_output_bytes - len(target)
                 target.extend(chunk[:available])
-                if len(target) >= 65536:
+                if len(target) >= max_output_bytes:
                     truncated = True
                     break
             if truncated:
@@ -243,13 +245,17 @@ def discovery_path(value):
 
 def discovery_config(config):
     value = config.get("environment_discovery", {})
-    if not isinstance(value, dict) or set(value) - {"module_init", "module_paths", "module_inventory_mode", "conda_executable", "python_executables", "search_roots"}:
+    if not isinstance(value, dict) or set(value) - {"module_init", "module_paths", "module_inventory_mode", "module_availability_enabled", "conda_executable", "python_executables", "search_roots"}:
         raise ValueError("Invalid software discovery configuration")
     result = dict(value)
     mode = value.get("module_inventory_mode", "availability")
     if not isinstance(mode, str) or mode not in {"availability", "metadata", "auto"}:
         raise ValueError("Unsupported module inventory mode")
     result["module_inventory_mode"] = mode
+    availability = value.get("module_availability_enabled", False)
+    if type(availability) is not bool or (availability and mode != "auto"):
+        raise ValueError("Optional module availability requires automatic mode and a boolean opt-in")
+    result["module_availability_enabled"] = availability
     if value.get("module_init") is not None:
         initializer = discovery_path(value["module_init"])
         if initializer not in MODULE_INITIALIZERS and not re.fullmatch(r"/usr/share/lmod/[0-9][A-Za-z0-9_.-]*/init/bash", initializer):
@@ -871,6 +877,55 @@ def metadata_module_inventory(options):
     return result
 
 
+def augment_module_availability(modules):
+    """Owner-authorized fixed avail; it may evaluate site module/rc code.
+
+    This permission is separate from root-owned declaration metadata. Neither
+    arbitrary commands nor personal shell startup are accepted. Results retain
+    their provenance instead of turning filename candidates into tested names.
+    """
+    observation = {"enabled": True, "status": "unavailable", "available": [],
+                   "source": "module_terse_avail", "scope": "login_node", "truncated": False,
+                   "module_code_evaluation_authorized": True}
+    modules["availability"] = observation
+    modules["metadata_available"] = list(modules["available"])
+    initializer = modules.get("init_path")
+    paths = modules.get("module_paths", [])
+    if not initializer or not paths:
+        observation["reason"] = "trusted_initializer_or_module_paths_unavailable"
+        modules["partial"] = True
+        return
+    try:
+        trusted_system_path(initializer, directory=False)
+        import shlex
+        probe = software_command(["/bin/bash", "--noprofile", "--norc", "-c",
+            ". " + shlex.quote(initializer) + " >/dev/null 2>&1 && export MODULEPATH=" +
+            shlex.quote(":".join(paths)) + " && module --terse avail"],
+            extra_env={"MODULEPATH": ":".join(paths), "LMOD_TERSE_DECORATIONS": "no"},
+            timeout=8, max_output_bytes=262144)
+        names = available_modules(probe["stdout"] + "\n" + probe["stderr"])
+        observation.update(status="available" if probe["returncode"] == 0 else "unavailable",
+                           available=names[:8192], truncated=probe["truncated"] or len(names) > 8192,
+                           returncode=probe["returncode"])
+        if probe["returncode"] == 0:
+            union = sorted(set(modules["available"]) | set(observation["available"]))
+            modules["available"] = union[:8192]
+            if union:
+                modules["status"] = "available"
+            if len(union) > 8192:
+                modules["truncated"] = modules["partial"] = True
+        else:
+            observation["reason"] = "fixed_availability_command_failed"
+            modules["partial"] = True
+        if observation["truncated"]:
+            modules["partial"] = modules["truncated"] = True
+            modules["warnings"].append("Authorized module availability reached its eight-second, output-byte or name bound.")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        observation["reason"] = "fixed_availability_command_unavailable"
+        modules["partial"] = True
+    modules["warnings"].append("Owner-authorized module availability may evaluate site module/rc code under the remote user; no personal shell startup is sourced.")
+
+
 def software_discovery(config):
     """Login-node observations only; no installations or compute-node probes.
 
@@ -896,6 +951,8 @@ def software_discovery(config):
         return snapshot
     if options["module_inventory_mode"] == "auto":
         snapshot["modules"] = automatic_module_inventory(options)
+        if options["module_availability_enabled"]:
+            augment_module_availability(snapshot["modules"])
     elif options["module_inventory_mode"] == "metadata":
         snapshot["modules"] = metadata_module_inventory(options)
     else:

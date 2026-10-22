@@ -241,3 +241,61 @@ def test_trusted_module_configuration_rejects_untrusted_or_oversized_file(tmp_pa
     if os.getuid() != 0:
         with pytest.raises(ValueError): helper.read_trusted_module_configuration(str(path), 65536)
     with pytest.raises(ValueError): helper.read_trusted_module_configuration(str(path), 1)
+
+
+def test_optional_availability_requires_boolean_owner_opt_in_for_auto_mode():
+    assert helper.discovery_config({})["module_availability_enabled"] is False
+    for value in ("yes", 1, None):
+        with pytest.raises(ValueError):
+            helper.discovery_config({"environment_discovery": {"module_inventory_mode": "auto", "module_availability_enabled": value}})
+    with pytest.raises(ValueError):
+        helper.discovery_config({"environment_discovery": {"module_availability_enabled": True}})
+    assert helper.discovery_config({"environment_discovery": {"module_inventory_mode": "auto", "module_availability_enabled": True}})["module_availability_enabled"]
+
+
+def test_opt_in_availability_uses_fixed_command_and_separate_provenance(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    (root / "metadata-only.lua").touch()
+    system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + str(root)})
+    calls = []
+    def command(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return {"returncode": 0, "stdout": "Python/3.13\n", "stderr": "CUDA/12.4(default)\n", "truncated": False}
+    monkeypatch.setattr(helper, "software_command", command)
+    m = helper.software_discovery({"environment_discovery": {"module_inventory_mode": "auto", "module_availability_enabled": True, "python_executables": []}})["modules"]
+    assert len(calls) == 1 and calls[0][0][:4] == ["/bin/bash", "--noprofile", "--norc", "-c"]
+    assert calls[0][0][4].endswith(" && module --terse avail")
+    assert calls[0][1]["extra_env"]["MODULEPATH"] == str(root)
+    assert calls[0][1]["max_output_bytes"] == 262144 and calls[0][1]["timeout"] == 8
+    assert m["metadata_available"] == ["metadata-only"]
+    assert m["availability"]["available"] == ["CUDA/12.4", "Python/3.13"]
+    assert m["available"] == ["CUDA/12.4", "Python/3.13", "metadata-only"]
+    assert m["availability"]["module_code_evaluation_authorized"] is True and m["provisional"]
+
+
+def test_availability_failure_and_truncation_preserve_metadata_catalog(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog;(root / "metadata-only.lua").touch()
+    system_configuration(monkeypatch, {"/etc/profile": "MODULEPATH=" + str(root)})
+    monkeypatch.setattr(helper, "software_command", lambda *_args, **_kwargs: {
+        "returncode": -9, "stdout": "partial-name\n", "stderr": "", "truncated": True})
+    m = helper.software_discovery({"environment_discovery": {"module_inventory_mode": "auto", "module_availability_enabled": True, "python_executables": []}})["modules"]
+    assert m["available"] == ["metadata-only"] and m["partial"] and m["truncated"]
+    assert m["availability"]["status"] == "unavailable" and m["availability"]["truncated"]
+
+
+def test_availability_requires_trusted_initializer_even_after_metadata_discovery(monkeypatch):
+    def unavailable(*_args, **_kwargs): raise ValueError("untrusted initializer")
+    monkeypatch.setattr(helper, "trusted_system_path", unavailable)
+    monkeypatch.setattr(helper, "software_command", lambda *_args, **_kwargs: pytest.fail("untrusted initializer ran"))
+    modules = {"init_path": "/etc/profile.d/modules.sh", "module_paths": ["/software/modules"],
+               "available": ["metadata-only"], "warnings": [], "partial": False}
+    helper.augment_module_availability(modules)
+    assert modules["availability"]["status"] == "unavailable" and modules["partial"]
+
+
+def test_fixed_probe_larger_output_bound_remains_bounded():
+    result = helper.software_command(["/bin/sh", "-c", "while :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; done"],
+                                     timeout=1, max_output_bytes=131072)
+    assert result["truncated"] and len(result["stdout"]) <= 131072
+    with pytest.raises(ValueError):
+        helper.software_command(["/bin/true"], max_output_bytes=262145)

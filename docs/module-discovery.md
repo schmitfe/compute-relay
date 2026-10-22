@@ -99,6 +99,35 @@ The other modes retain their meaning:
   `module --terse avail` probe. It does not silently evaluate a non-root tree
   or become an automatic metadata inventory.
 
+An owner can also enable a complementary login-node availability probe:
+
+```json
+{"environment_discovery": {
+  "module_inventory_mode": "auto",
+  "module_availability_enabled": true
+}}
+```
+
+The option defaults to `false` and is valid only with automatic mode. When
+enabled, a fixed noninteractive Bash command sources the known, separately
+audited root-owned module initializer, sets `MODULEPATH` to the discovered
+catalog roots, and runs `module --terse avail`. It has an eight-second deadline,
+256 KiB output limit per stream and 8192-name limit, with no personal shell
+startup, interactive input, arbitrary command field, installation or job.
+Unlike metadata discovery, this explicitly authorized operation can evaluate
+site module/rc code under the SSH user's authority, including software-group
+managed code reached by the module system. This is why it requires a distinct
+owner-controlled option; it does not relax the existing `availability` mode.
+
+The snapshot retains filename candidates as `metadata_available` and reports
+the command result separately under `availability`, including status, names,
+return code, truncation and `module_code_evaluation_authorized=true`. The
+existing selector's `available` field is the bounded union. Failed or truncated
+probes preserve the metadata catalog and report partial results. A successful
+availability query establishes neither a loaded environment nor compute-node
+compatibility. No `module load`, `module spider` or personal initialization is
+requested by the broker.
+
 The distinction matters because Modules availability commands can evaluate
 module rc files, and initialization can itself load defaults. Automatic mode
 therefore extracts path data without invoking either.
