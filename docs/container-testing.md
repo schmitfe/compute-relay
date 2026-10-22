@@ -78,6 +78,41 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### Folder creation, reviewed diagnostics and module catalogs, 22 October 2026
+
+The integrated PostgreSQL suite passed **1,198 tests and 65 subtests**, with one
+optional test skipped and two upstream LDAP dependency deprecation warnings.
+The subsequent missing/unreadable artifact-preview fix passed its two new GET
+regressions within a 70-test diagnostics/environment suite. Migration drift
+checks reported no changes.
+
+The separate disposable `cb-folders-checks-20261022` Slurm fixture passed the
+personal connector acceptance. Through ordinary authenticated HTTP forms, the
+client created one private remote folder, opened it, verified creation alone did
+not change the selected baseline, and explicitly saved it as the working root.
+It then completed the existing native reviewed Python job and the new cluster
+check's prepare → human approval → native execution → hash-verified JSON result
+and settled accounting flow. Shutdown, same-worker resume, configuration removal
+and SSH-master revocation also passed. The fixture and its synthetic volumes
+were removed afterward; persistent development PostgreSQL/LDAP were retained.
+
+Read-only site verification used the already authenticated university connector.
+The saved generic inventory contained five utility names. Corrected protected
+site-snippet and group-managed directory discovery returned **2,076** filename
+candidates. Explicitly authorized fixed `module --terse avail` returned **2,086**
+names; their union contained **2,087**, without traversal or command-output
+truncation. Missing legacy paths, skipped symbolic links and unevaluated shell
+conditions remain provisional/partial warnings. This check neither submitted a
+compute job nor modified cluster files. A connector restart and fresh discovery
+are required to persist the new inventory through the normal worker protocol.
+
+Authenticated checks on the refreshed local portal confirmed collapsed groups
+for both configured Slurm sites, the owner-only test preview, module-availability
+option, directory browser and unfinished-cluster guidance in project settings.
+The diagnostic preview created no project, key, job or reservation on either site.
+These observations do not certify site timing bounds or module combinations on
+compute nodes.
+
 ### Post-login cluster configuration, 22 October 2026
 
 The final PostgreSQL suite passed **1,084 tests and 65 subtests**, with one
