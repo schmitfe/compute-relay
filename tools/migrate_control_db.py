@@ -95,6 +95,16 @@ def private_write(path, data):
         raise
 
 
+def write_committed_report(path, result):
+    """A report I/O failure must never imply that a committed import rolled back."""
+    try:
+        private_write(path, canonical({"ok": True, **result}) + b"\n")
+        return True
+    except Exception:
+        print(json.dumps({"warning": "REPORT_NOT_WRITTEN", "message": "Database operation succeeded, but its private report could not be written. Do not repeat an import or owner assignment; inspect the destination and use a new verification report path."}), file=sys.stderr)
+        return False
+
+
 def file_digest(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as stream:
@@ -223,6 +233,7 @@ def quiescent_and_balanced():
     require(not Connection.objects.filter(discovery_state__in=["queued", "discovering"]).exists(), "Finish or safely resolve queued/in-flight discovery before migration.")
     require(not UploadReservation.objects.exclude(state__in=["finalized", "aborted"]).exists(), "Finish or safely repair pending upload reservations before migration.")
     require(not LedgerEntry.objects.exclude(action__in=["reserve", "settle", "release"]).exists(), "Unknown ledger actions require an explicit migration implementation.")
+    require(Grant.objects.count() == Project.objects.count(), "Every project must have its own allowance ledger before migration.")
     for attempt in Attempt.objects.all():
         entries = list(attempt.ledgerentry_set.all())
         reserve = [item for item in entries if item.action == "reserve"]
@@ -470,7 +481,7 @@ def main(argv=None):
                 result = {"operation": "verify", "tables": len(bundle["tables"]), "records": len(bundle["records"]), "bundle_sha256": bundle["bundle_sha256"]}
             else:
                 result = import_database(bundle, args, rehearsal=args.command == "rehearse-sqlite")
-            private_write(args.report, canonical({"ok": True, **result}) + b"\n")
+            result["report_written"] = write_committed_report(args.report, result)
         print(json.dumps({"ok": True, **result}))
         return 0
     except MigrationRefused as exc:

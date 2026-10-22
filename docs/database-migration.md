@@ -52,6 +52,54 @@ commit, upload to an issue, or paste the export into an agent conversation.
 override any unsafe-state check. Reconcile uncertain native submissions on the
 source first; changing databases must never become permission to resubmit them.
 
+## Verify quarantined legacy key owners explicitly
+
+Migration `0009` binds historical keys only when a recorded creation or rotation
+event identifies their issuing user. An unknown issuer is quarantined with
+`issued_by=NULL`, `revoked=True` and a `credential.owner_unresolved` audit event
+that retains the previous revocation flag. Current project ownership or the
+absence of current memberships cannot establish who originally received a key.
+
+If the operator can establish a key's historical issuing account independently,
+write a private mapping file with explicit UUIDs. Do not include token bytes,
+passwords, SSH identities or other credentials:
+
+```json
+{
+  "schema_version": "1.0",
+  "owners": {
+    "11111111-1111-4111-8111-111111111111": "22222222-2222-4222-8222-222222222222"
+  }
+}
+```
+
+Against the explicitly selected offline database, after applying the provenance
+migration and while all projects/processes remain paused:
+
+```bash
+python tools/verify_legacy_key_owners.py \
+  --mapping local/migration-20261022/verified-owners.json \
+  --report local/migration-20261022/verified-owners-report.json \
+  --settings compute_broker.control.settings \
+  --offline-confirmed
+```
+
+The tool supports configured SQLite and PostgreSQL databases. It changes only
+quarantined unknown keys, requires an active user with explicit current project
+ownership/membership and roles matching every existing scope, and refuses known
+creation/rotation provenance, repeated verification, conflicting records, missing
+users, or an explicit revocation after quarantine. The entire batch commits
+atomically; one invalid assignment rejects every assignment.
+
+An accepted mapping restores the quarantine record's original revocation flag.
+A previously revoked key stays revoked. Scopes, restrictions, expiry and token
+hashes remain unchanged, and no token is revealed. Each assignment creates a
+`credential.legacy_owner_verified` audit record containing the verified account
+and mapping fingerprint. This is an explicit operator attestation, not automated
+identity discovery. Create a new export after this operation and verify the same
+mapping during the final stopped-source cutover; never assume a rehearsal updated
+the live installation.
+
 ## Export and rehearse a private database copy
 
 Create a private directory, then export from the immutable backup. The paths below
@@ -146,6 +194,11 @@ omit SQL, connection parameters, row contents and tracebacks. Reports contain
 aggregate counts and checksums; the private export carries the full table
 manifests and balances. A SHA-256 checksum detects corruption, not malicious
 rewriting by somebody who can alter the protected export.
+
+A report-write failure after a successful database commit is reported separately
+as `ok: true`, `report_written: false` and `REPORT_NOT_WRITTEN`. Do not repeat an
+import or owner assignment in that situation; inspect the destination and use a
+new report path for verification. The database commit is already durable.
 
 If acceptance fails **before** the target admits any work, stop all target
 processes and restore the preserved source service configuration and private
