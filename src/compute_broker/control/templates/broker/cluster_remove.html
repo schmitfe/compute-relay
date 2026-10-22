@@ -1,0 +1,16 @@
+{% extends "broker/base.html" %}
+{% block content %}
+<h1>Remove {{ cluster_name }}?</h1>
+<p>This removes the cluster from your active configurations. Your recorded jobs, results and accounting history stay available.</p>
+<p>No files, software environments or jobs on the cluster will be deleted. A personal connector used only by this configuration will lose access to the service. Shared service connectors stay available.</p>
+{% if busy %}
+<p class="error">This cluster still has executions or accounting to finish. Finish or reconcile them before removing its configuration.</p>
+{% endif %}
+<form method="post">
+  {% csrf_token %}
+  {% if setup_revision %}<input type="hidden" name="setup_revision" value="{{ setup_revision }}">{% endif %}
+  {% if connection_revision_sha256 %}<input type="hidden" name="connection_revision_sha256" value="{{ connection_revision_sha256 }}">{% endif %}
+  <button type="submit"{% if busy %} disabled{% endif %}>Remove cluster configuration</button>
+  <a href="/clusters/">Cancel</a>
+</form>
+{% endblock %}
