@@ -103,8 +103,17 @@ candidates. Explicitly authorized fixed `module --terse avail` returned **2,086*
 names; their union contained **2,087**, without traversal or command-output
 truncation. Missing legacy paths, skipped symbolic links and unevaluated shell
 conditions remain provisional/partial warnings. This check neither submitted a
-compute job nor modified cluster files. A connector restart and fresh discovery
-are required to persist the new inventory through the normal worker protocol.
+compute job nor modified cluster files. The first normal worker refresh exposed
+cold shared-filesystem latency and reached the original four-second enumeration
+bound. A focused follow-up increased automatic enumeration to twenty seconds
+and independently validates the complete candidate path list before optional
+availability; truncated enumeration can no longer shorten that command's path.
+Its 140 focused backend/module/SSH tests passed; root also ran 132 related
+backend/module/async-Slurm checks. A subsequent ordinary worker refresh saved
+**2,076** names without truncation, with 26 intended paths and 25 validated paths
+(the absent legacy path stays visible). The portal then rendered the full saved
+catalog and eleven collapsed partition groups. Command availability remains an
+explicit per-cluster owner option rather than being enabled by that refresh.
 
 Authenticated checks on the refreshed local portal confirmed collapsed groups
 for both configured Slurm sites, the owner-only test preview, module-availability
