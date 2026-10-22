@@ -97,6 +97,8 @@ def validate_provider_configuration(document):
             for key in ("group_object_class", "group_membership_attribute"):
                 if key in policy and (not isinstance(policy[key], str) or not _ATTRIBUTE.fullmatch(policy[key])):
                     raise ValueError("Invalid directory group policy")
+            if policy.get("group_membership_attribute", "memberUid").lower() != "memberuid":
+                raise ValueError("This adapter supports only POSIX memberUid group membership")
             if "required_group_subject" in policy:
                 from uuid import UUID
                 if str(UUID(policy["required_group_subject"])) != policy["required_group_subject"]:

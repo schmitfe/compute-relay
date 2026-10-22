@@ -12,6 +12,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError as Django
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt, csrf_protect
+from django.views.decorators.debug import sensitive_post_parameters
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 
 from compute_broker.domain.validation import strict_json, relative_path
@@ -279,15 +280,24 @@ def report(request, attempt_id):
 
 
 @csrf_protect
+@sensitive_post_parameters("password")
 def signin(request):
     error = ""
+    from .identity.providers import get_login_choices
+    choices = get_login_choices()
+    selected = request.POST.get("provider", "local" if len(choices) == 1 and choices[0][0] == "local" else "") if request.method == "POST" else (choices[0][0] if choices else "")
     if request.method == "POST":
-        user = authenticate(request, username=request.POST.get("username"), password=request.POST.get("password"))
+        # Validate the explicit route before invoking any Django backend.
+        from .identity.backends import BACKEND_PATH
+        safe_route = selected == "local" or tuple(settings.AUTHENTICATION_BACKENDS) == (BACKEND_PATH,)
+        user = authenticate(request, provider=selected, username=request.POST.get("username"), password=request.POST.get("password")) if selected in dict(choices) and safe_route else None
         if user is not None:
             login(request, user)
             return redirect("/")
         error = "Sign-in details were not recognized."
-    return render(request, "broker/login.html", {"error": error})
+    response = render(request, "broker/login.html", {"error": error, "providers": choices, "selected_provider": selected})
+    response["Cache-Control"] = "no-store, private"
+    return response
 
 
 @csrf_protect
