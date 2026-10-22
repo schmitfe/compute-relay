@@ -6,7 +6,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && apt-get update \
     && apt-get install --yes --no-install-recommends slapd ldap-utils openssl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
-COPY deploy/ldap/entrypoint.sh deploy/ldap/bootstrap.py deploy/ldap/slapd.conf deploy/ldap/seed.ldif deploy/ldap/samba-fixture.schema deploy/ldap/cert.extensions /opt/ldap-fixture/
+COPY deploy/ldap/entrypoint.sh deploy/ldap/bootstrap.py deploy/ldap/tls.py deploy/ldap/slapd.conf deploy/ldap/seed.ldif deploy/ldap/samba-fixture.schema deploy/ldap/cert.extensions /opt/ldap-fixture/
 ENTRYPOINT ["/bin/sh", "/opt/ldap-fixture/entrypoint.sh"]
 
 FROM python:3.13-slim-bookworm AS acceptance
