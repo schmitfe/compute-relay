@@ -35,24 +35,26 @@ def run():
     with tempfile.TemporaryDirectory(prefix="cb-", dir="/tmp") as temp:
         root = Path(temp);root.chmod(0o700)
         path = root / "setup.json";path.write_text(json.dumps(setup));path.chmod(0o600)
-        command = [sys.executable, "-m", "compute_broker.cli", "connector", "--state-directory", str(root),
+        directory = root / "connectors" / "lab"
+        command = [sys.executable, "-m", "compute_broker.cli", "connector", "--state-directory", str(directory),
             "--non-interactive", "--allow-insecure-http"]
         log = root / "connector.log"
         with log.open("wb") as output:
             run.stage = "connector_start_and_discovery"
-            worker = subprocess.Popen([*command, "--setup", str(path)], stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+            worker = subprocess.Popen([*command, "--setup", str(path)], stdin=subprocess.DEVNULL, stdout=output, stderr=output, umask=0o002)
             try:
                 deadline = time.monotonic() + 45
                 agent = Client(base, token=(args.demo_file.parent / "agent-token").read_text().strip())
                 while time.monotonic() < deadline:
                     require(worker.poll() is None, "Personal connector exited during pairing or discovery")
                     entries = agent.request("GET", "/api/v1/connections")["connections"]
-                    if (root / "state.json").exists() and any(row["id"] == demo["connection_id"] and row["auth_state"] == "ready" for row in entries):
+                    if (directory / "state.json").exists() and any(row["id"] == demo["connection_id"] and row["auth_state"] == "ready" for row in entries):
                         break
                     time.sleep(0.25)
                 else:
                     raise SmokeFailure("Personal connector identification timed out")
-                state = json.loads((root / "state.json").read_bytes())
+                require(all(p.stat().st_mode & 0o777 == 0o700 for p in [root / "connectors", directory]), "Nested state was not created privately")
+                state = json.loads((directory / "state.json").read_bytes())
                 require(state["connection_id"] == demo["connection_id"], "Pairing replaced the cluster identity")
                 # Real submitted Python, result hashes and final Slurm accounting
                 # all travel through the newly established master socket.
@@ -62,16 +64,16 @@ def run():
                 worker.terminate()
                 worker.wait(timeout=15)
         run.stage = "shutdown_and_resume"
-        require(not (root / "s").exists(), "Connector shutdown left its authenticated master socket")
-        original = json.loads((root / "state.json").read_bytes())
-        resumed = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        require(not (directory / "s").exists(), "Connector shutdown left its authenticated master socket")
+        original = json.loads((directory / "state.json").read_bytes())
+        resumed = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, umask=0o002)
         try:
             deadline = time.monotonic() + 20
-            while time.monotonic() < deadline and not (root / "s").exists():
+            while time.monotonic() < deadline and not (directory / "s").exists():
                 require(resumed.poll() is None, "Personal connector could not resume its saved worker identity")
                 time.sleep(0.1)
-            require((root / "s").exists(), "Resumed SSH master was not established")
-            require(json.loads((root / "state.json").read_bytes())["worker_id"] == original["worker_id"], "Resume registered another worker")
+            require((directory / "s").exists(), "Resumed SSH master was not established")
+            require(json.loads((directory / "state.json").read_bytes())["worker_id"] == original["worker_id"], "Resume registered another worker")
             run.stage = "remove_configuration_and_revoke"
             removal_path = f"/clusters/{demo['connection_id']}/remove/"
             confirmation = human.request("GET", removal_path, binary=True)
@@ -79,13 +81,13 @@ def run():
                 rb'name="(setup_revision|connection_revision_sha256)" value="([^"]*)"', confirmation)}
             human.request("POST", removal_path, fields, form=True, binary=True)
             resumed.wait(timeout=15)
-            require(resumed.returncode == 0 and not (root / "s").exists(), "Revocation left the connector or its SSH master active")
+            require(resumed.returncode == 0 and not (directory / "s").exists(), "Revocation left the connector or its SSH master active")
             require(not agent.request("GET", "/api/v1/connections")["connections"], "Removed configuration remains executable")
         finally:
             if resumed.poll() is None:
                 resumed.terminate();resumed.wait(timeout=15)
         print(json.dumps({"ok": True, "fixture_only": True, "automatic_worker_pairing": True,
-            "native_ssh_master": True, "discovery": True, "reviewed_slurm_execution": True,
+            "native_ssh_master": True, "nested_private_state": True, "discovery": True, "reviewed_slurm_execution": True,
             "same_worker_on_resume": True, "master_closed_on_shutdown": True,
             "removed_configuration": True, "master_closed_on_revocation": True}))
 

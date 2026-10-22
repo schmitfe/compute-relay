@@ -59,6 +59,15 @@ credential storage: its configuration, enrollment/worker state and SSH session
 capability are not agent inputs. Preserve it across restarts so the existing
 worker identity and submission journal can be reused.
 
+Missing state-directory levels are created with private permissions (0700),
+independently of a group-friendly default umask. Existing directories are never
+silently changed. A `STATE_ANCESTOR_WRITABLE` error means a parent directory
+allows writes by a group or other users: remove those write permissions from
+that directory, or choose a suitable private location. Validation happens
+before the file picker, SSH login or pairing request. Other fixed startup codes
+identify expired setup, unreadable or insufficiently private files, and a state
+directory already in use, without printing credentials or response bodies.
+
 When no identity path is saved, initial interactive startup opens a native file picker
 titled **Select your SSH private key**, initially in your local `~/.ssh` directory.
 It returns only the selected existing file's path. It never opens or reads the

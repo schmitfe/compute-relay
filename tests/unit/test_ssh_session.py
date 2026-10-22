@@ -228,6 +228,28 @@ def test_writable_ancestor_is_rejected(connection, state, runner):
     assert runner.calls == [] and not (parent / "private").exists()
 
 
+def test_nested_state_directories_are_private_even_with_shared_umask(connection, state, runner):
+    nested = state / "broker" / "lab"
+    previous = os.umask(0o002)
+    try:
+        session = SSHSession(connection, nested).start()
+    finally:
+        os.umask(previous)
+    try:
+        assert all(directory.stat().st_mode & 0o777 == 0o700 for directory in (state, state / "broker", nested))
+    finally:
+        session.close()
+
+
+def test_existing_group_writable_parent_is_diagnosed_without_changing_it(connection, state, runner):
+    state.mkdir(mode=0o700);state.chmod(0o775)
+    with pytest.raises(ssh_session.SessionStorageError) as error:
+        SSHSession(connection, state / "lab").start()
+    assert error.value.code == "STATE_ANCESTOR_WRITABLE"
+    assert state.stat().st_mode & 0o777 == 0o775
+    assert not (state / "lab").exists() and not runner.calls
+
+
 @pytest.mark.parametrize("lifetime", [0, 59, 86401, True, 60.0])
 def test_lifetime_has_finite_validated_bounds(connection, state, lifetime):
     with pytest.raises(TransportError): SSHSession(connection, state, lifetime)

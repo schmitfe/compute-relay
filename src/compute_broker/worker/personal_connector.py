@@ -14,13 +14,30 @@ from .client import ControlError, JsonClient, strict_json
 from .enrollment import profile_metadata
 
 
+class ConnectorStartupError(ValueError):
+    MESSAGES = {
+        "PRIVATE_FILE_UNREADABLE": "Cannot read the setup file or saved connector state. Check that the file exists and is accessible to you.",
+        "PRIVATE_FILE_REQUIRED": "Connector files must be owned by you, regular, without hard links and private (0600).",
+        "SETUP_EXPIRED": "Pairing expired; download a fresh connector setup from the cluster page.",
+        "ALREADY_PAIRED": "This connector is already paired. Resume without --setup, or use a new state directory.",
+        "PAIRING_UNCERTAIN": "A previous pairing outcome is uncertain. Download a new setup and choose a new state directory.",
+    }
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(self.MESSAGES[code])
+
+
 def read_private(path, *, limit=64 * 1024):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise ConnectorStartupError("PRIVATE_FILE_UNREADABLE") from None
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o077
                 or info.st_uid != os.getuid()):
-            raise ValueError("Connector files must be owned by you, regular and private (0600).")
+            raise ConnectorStartupError("PRIVATE_FILE_REQUIRED")
         data = stream.read(limit + 1)
     if len(data) > limit:
         raise ValueError("Connector file exceeds its size limit.")
@@ -54,7 +71,7 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     JsonClient(setup["broker_url"], setup["pairing_token"], allow_insecure_http=allow_insecure_http)
     from datetime import datetime, timezone
     if datetime.fromisoformat(setup["expires_at"]) <= datetime.now(timezone.utc):
-        raise ValueError("Pairing expired; download a fresh connector setup.")
+        raise ConnectorStartupError("SETUP_EXPIRED")
     hints = setup["local"]
     if not isinstance(hints, dict) or set(hints) - {"identity_file", "known_hosts", "session_seconds"}:
         raise ValueError("Invalid local connector hints.")
@@ -137,20 +154,25 @@ async def serve(state, session, state_directory, *, once=False, deadline=None):
 
 
 def run(args):
-    from .ssh_session import SSHSession
+    from .ssh_session import SSHSession, open_session_directory
     directory = Path(args.state_directory).expanduser().absolute()
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = directory.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("Connector state directory must be owned by you and private (0700).")
     # Prevent two connector processes from consuming the same worker identity.
+    # Validate and create every ancestor before key selection or lock creation.
     import fcntl
-    fd = os.open(directory / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    directory_fd = open_session_directory(directory, create=True)
     try:
+        fd = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    try:
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077):
+            raise ConnectorStartupError("PRIVATE_FILE_REQUIRED")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         path = directory / "state.json"
         if args.setup and path.exists():
-            raise ValueError("This connector is already paired. Resume without --setup, or use a new state directory.")
+            raise ConnectorStartupError("ALREADY_PAIRED")
         setup = read_private(args.setup) if args.setup else None
         choose_identity = getattr(args, "choose_identity", False)
         if choose_identity and (args.non_interactive or not setup):
@@ -163,7 +185,7 @@ def run(args):
         # A journal intent survives interruption; a consumed pairing response
         # cannot be replayed to recover a lost secret. Re-pair explicitly instead.
         if setup and (directory / "pairing-pending.json").exists():
-            raise ValueError("A previous pairing outcome is uncertain. Download a new setup and choose a new state directory.")
+            raise ConnectorStartupError("PAIRING_UNCERTAIN")
         session = SSHSession(state["connection"], directory, lifetime_seconds=state["session_seconds"])
         try:
             print("Connecting to your cluster. Complete any OpenSSH host-key, passphrase or MFA prompt in this terminal.")
@@ -184,6 +206,8 @@ def run(args):
 
 def main(args):
     from .file_picker import FileSelectionCancelled, FileSelectionUnavailable
+    from .ssh_session import SessionStorageError
+    from compute_broker.transports.openssh import TransportError
     previous = signal.getsignal(signal.SIGTERM)
     def stopped(signum, frame):
         raise KeyboardInterrupt
@@ -196,6 +220,18 @@ def main(args):
         print(str(error))
     except FileSelectionUnavailable as error:
         print(str(error), file=sys.stderr)
+        raise SystemExit(1) from None
+    except (ConnectorStartupError, SessionStorageError) as error:
+        print(f"Connector could not start [{error.code}]: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except BlockingIOError:
+        print("Connector could not start [STATE_LOCKED]: Another connector is using this state directory. Stop it before retrying.", file=sys.stderr)
+        raise SystemExit(1) from None
+    except TransportError:
+        print("Connector could not start [SSH_LOGIN_FAILED]: Check the SSH connection settings and any OpenSSH message above.", file=sys.stderr)
+        raise SystemExit(1) from None
+    except ControlError:
+        print("Connector could not start [BROKER_PAIRING_FAILED]: Check that the broker is reachable. A pairing request may already have been accepted; download a new setup and use a new state directory for another first pairing.", file=sys.stderr)
         raise SystemExit(1) from None
     except Exception:
         # Do not print exceptions that may include a setup token or SSH details.

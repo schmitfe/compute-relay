@@ -47,6 +47,43 @@ def test_noninteractive_start_never_opens_requested_picker(setup, tmp_path, monk
     assert not sessions
 
 
+def test_writable_parent_is_reported_before_picker_login_or_pairing(setup, tmp_path, monkeypatch, sessions, pairing, capsys):
+    from compute_broker.worker import file_picker
+    parent = tmp_path / "broker";parent.mkdir(mode=0o775);parent.chmod(0o775)
+    args = arguments(tmp_path, setup, choose_identity=True)
+    args.state_directory = str(parent / "lab")
+    args.non_interactive = False
+    monkeypatch.setattr(file_picker, "choose_identity_file", lambda: pytest.fail("Unsafe state opened a picker"))
+    with pytest.raises(SystemExit):
+        connector.main(args)
+    diagnostic = capsys.readouterr().err
+    assert "STATE_ANCESTOR_WRITABLE" in diagnostic and "group" in diagnostic
+    assert setup["pairing_token"] not in diagnostic and not sessions and not pairing.calls
+    assert parent.stat().st_mode & 0o777 == 0o775 and not (parent / "lab").exists()
+
+
+def test_connector_creates_every_missing_state_level_privately(setup, tmp_path, sessions, pairing, served):
+    args = arguments(tmp_path, setup)
+    args.state_directory = str(tmp_path / "broker" / "lab")
+    previous = os.umask(0o002)
+    try:
+        connector.run(args)
+    finally:
+        os.umask(previous)
+    assert (tmp_path / "broker").stat().st_mode & 0o777 == 0o700
+    assert (tmp_path / "broker/lab").stat().st_mode & 0o777 == 0o700
+    assert len(pairing.calls) == 1
+
+
+def test_expired_setup_has_actionable_safe_cli_diagnostic(setup, tmp_path, sessions, pairing, capsys):
+    setup["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    with pytest.raises(SystemExit):
+        connector.main(arguments(tmp_path, setup))
+    diagnostic = capsys.readouterr().err
+    assert "SETUP_EXPIRED" in diagnostic and "download a fresh" in diagnostic
+    assert setup["pairing_token"] not in diagnostic and not sessions and not pairing.calls
+
+
 @pytest.fixture
 def setup():
     return {"schema_version": "1.0", "broker_url": "https://broker.example.invalid",

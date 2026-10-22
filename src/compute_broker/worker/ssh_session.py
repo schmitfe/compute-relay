@@ -15,6 +15,65 @@ import subprocess
 from compute_broker.transports.openssh import OpenSSHTransport, TransportError
 
 
+class SessionStorageError(TransportError):
+    """Only fixed local diagnostics are safe to show at the CLI boundary."""
+    MESSAGES = {
+        "STATE_DIRECTORY_NOT_PRIVATE": "The state directory must be owned by you with permissions 0700.",
+        "STATE_ANCESTOR_WRITABLE": "A parent of the state directory allows group or other-user writes. Remove those write permissions before retrying; existing directories are not changed automatically.",
+        "STATE_DIRECTORY_UNSAFE": "The state path must contain accessible real directories without symlinks.",
+        "STATE_PATH_INVALID": "Use a normalized absolute state path without whitespace or %; the path plus /s must fit within 100 bytes.",
+    }
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(self.MESSAGES[code])
+
+
+def open_session_directory(directory, *, create=False):
+    """Validate ancestors without following links; create each missing level privately.
+
+    mkdir(parents=True) uses the process umask for intermediate levels. In a
+    group-writable development checkout that can produce 0775 parents, which
+    must never hold an authenticated SSH socket. Existing permissions stay put.
+    """
+    value = os.fspath(directory)
+    if (not isinstance(value, str) or not os.path.isabs(value) or os.path.normpath(value) != value
+            or value == "/" or any(character.isspace() or character in "%\x00" for character in value)
+            or len(os.fsencode(str(Path(value) / "s"))) > 100):
+        raise SessionStorageError("STATE_PATH_INVALID")
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root_uid = os.fstat(descriptor).st_uid
+    parts = Path(value).parts[1:]
+    try:
+        for index, part in enumerate(parts):
+            last = index == len(parts) - 1
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass  # Validate a concurrent creator's directory too.
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            metadata = os.fstat(descriptor)
+            if last:
+                if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+                    raise SessionStorageError("STATE_DIRECTORY_NOT_PRIVATE")
+            else:
+                if metadata.st_mode & 0o022 and not (metadata.st_uid == root_uid and metadata.st_mode & stat.S_ISVTX):
+                    raise SessionStorageError("STATE_ANCESTOR_WRITABLE")
+        return descriptor
+    except BaseException as error:
+        os.close(descriptor)
+        if isinstance(error, OSError):
+            raise SessionStorageError("STATE_DIRECTORY_UNSAFE") from None
+        raise
+
+
 class SSHSession:
     def __init__(self, connection, state_directory, lifetime_seconds=28800):
         if type(lifetime_seconds) is not int or not 60 <= lifetime_seconds <= 86400:
@@ -64,37 +123,7 @@ class SSHSession:
         return metadata.st_dev, metadata.st_ino
 
     def _open_directory(self, *, create=False):
-        """Walk every ancestor without following symlinks, then retain its FD."""
-        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        root_uid = os.fstat(descriptor).st_uid
-        parts = self.state_directory.parts[1:]
-        try:
-            for index, part in enumerate(parts):
-                last = index == len(parts) - 1
-                try:
-                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-                except FileNotFoundError:
-                    if not create or not last:
-                        raise
-                    os.mkdir(part, mode=0o700, dir_fd=descriptor)
-                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-                os.close(descriptor)
-                descriptor = child
-                metadata = os.fstat(descriptor)
-                if last:
-                    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
-                        raise TransportError("SSH session directory must be owned by this user and mode 0700")
-                elif metadata.st_mode & 0o022:
-                    # Root-owned sticky directories such as /tmp cannot let a
-                    # different UID replace this user's private child directory.
-                    if not (metadata.st_uid == root_uid and metadata.st_mode & stat.S_ISVTX):
-                        raise TransportError("SSH session ancestors cannot be writable by other users")
-            if not parts:
-                raise TransportError("SSH session storage cannot be the filesystem root")
-            return descriptor
-        except BaseException:
-            os.close(descriptor)
-            raise
+        return open_session_directory(self.state_directory, create=create)
 
     def _directory_matches(self):
         if self._directory_fd is None:

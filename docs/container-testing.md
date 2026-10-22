@@ -114,6 +114,17 @@ connection were retained. Authenticated HTTP checks confirmed the local-key
 picker guidance, removal control and confirmation page. This development-data
 cleanup made no SSH requests and did not delete HPC files.
 
+An interactive development retry exposed a startup bug under umask `0002`:
+`mkdir(parents=True)` created an intermediate state directory as `0775`, which
+the existing SSH safety check rejected with an unhelpful generic message.
+State setup now validates ancestors before key selection and creates every
+missing level as `0700`. Existing unsafe directories are rejected with a fixed
+actionable diagnostic and are never silently changed. All **87 focused tests**
+passed. The updated Docker acceptance ran with umask `0002` and a nested state
+path; pairing, discovery, native job `1`, output/hash validation, restart and
+revocation cleanup passed. Accounting settled at 1 CPU core-second with zero
+reservations. No institutional SSH login was attempted for this regression.
+
 ### PostgreSQL, LDAP and async Slurm acceptance, 22 October 2026
 
 A full PostgreSQL regression run passed **780 tests and 65 subtests**, with one
