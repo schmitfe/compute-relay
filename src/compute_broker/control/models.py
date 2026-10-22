@@ -58,9 +58,22 @@ class ClusterRegistration(models.Model):
     remote_user = models.CharField(max_length=80, blank=True)
     port = models.PositiveIntegerField(default=22)
     requested_root = models.CharField(max_length=240, blank=True)
+    connector_settings = models.JSONField(default=dict)
     revision = models.PositiveIntegerField(default=1)
     connection = models.OneToOneField(Connection, null=True, blank=True, on_delete=models.PROTECT,
                                      related_name="registration")
+    created_at = models.DateTimeField(default=timezone.now)
+
+
+class ConnectorEnrollment(models.Model):
+    """One-use human-authorized device pairing; never stores a bearer value."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    registration = models.ForeignKey(ClusterRegistration, on_delete=models.PROTECT)
+    token_hash = models.CharField(max_length=64, unique=True)
+    setup_revision = models.PositiveIntegerField()
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True)
+    worker = models.ForeignKey(WorkerIdentity, null=True, on_delete=models.PROTECT)
     created_at = models.DateTimeField(default=timezone.now)
 
 
