@@ -122,6 +122,19 @@ def test_adapter_uses_verified_tls_before_bind_and_clears_transient_credentials(
     assert connections[0].password is connections[0].user is connections[0].request is None
 
 
+def test_adapter_accepts_native_ldap3_case_insensitive_attribute_mapping(tmp_path, monkeypatch):
+    from ldap3.utils.ciDict import CaseInsensitiveDict
+    row = record()
+    row["raw_attributes"] = CaseInsensitiveDict(row["raw_attributes"])
+    fake_library(monkeypatch, [[row], [row]])
+    principal = LDAPAdapter(configuration(tmp_path)["directory"]).authenticate("alice", "synthetic-password")
+    assert principal.login_name == "alice" and principal.active
+    assert principal.subject == row["raw_attributes"]["entryUUID"][0].decode()
+    oversized = CaseInsensitiveDict({"attr" + str(index): [b"value"] for index in range(33)})
+    with pytest.raises(DirectoryFailure, match="DIRECTORY_RECORD_INVALID"):
+        ldap_adapter._attributes(oversized)
+
+
 @pytest.mark.parametrize("failure", ["certificate", "tls", "credentials"])
 def test_ldap_failure_never_downgrades_tls_or_discloses_library_details(tmp_path, monkeypatch, failure):
     config = configuration(tmp_path, server_uri="ldap://directory.fixture.invalid", start_tls=True)["directory"]

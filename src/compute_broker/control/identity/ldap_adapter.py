@@ -5,6 +5,7 @@ and https://ldap3.readthedocs.io/en/latest/connection.html
 """
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from datetime import datetime, timezone
 import os
 import re
@@ -73,7 +74,7 @@ def _bind_password(filename):
 
 
 def _attributes(raw):
-    if not isinstance(raw, dict) or len(raw) > 32:
+    if not isinstance(raw, Mapping) or len(raw) > 32:
         raise DirectoryFailure("DIRECTORY_RECORD_INVALID")
     result = {}
     for key, values in raw.items():
