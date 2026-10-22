@@ -12,7 +12,8 @@
 <p>Run this cluster's connector on your device. SSH authentication, key passphrases and second-factor prompts remain local; no manual worker registration is required.</p>
 <form method="post" action="/clusters/{{ cluster.id }}/connect/">{% csrf_token %}<input type="hidden" name="setup_revision" value="{% if personal_setup %}{{ personal_setup.revision }}{% endif %}"><button>Download personal connector setup</button></form>
 <p>Make the downloaded setup private with <code>chmod 600 /path/to/personal-connector.json</code>, then run <code>compute-broker connector --setup /path/to/personal-connector.json --state-directory /path/to/private/connector-state</code>. Resume with the same state directory; omit <code>--setup</code>.</p>
-<p>If the key path was not saved in setup, add <code>--identity-file /absolute/path/to/key</code> when starting the connector. Setup does not submit a compute job or enable automatic spending.</p>
+<p>Leave the SSH key path empty to open a native file picker on your device at interactive startup. Use <code>--choose-identity</code> to select another key, or <code>--identity-file /absolute/path/to/key</code> without a graphical session. The key is never uploaded. If needed, set its private permissions locally with <code>chmod 600 /absolute/path/to/key</code>.</p>
+<p>Setup does not submit a compute job or enable automatic spending.</p>
 </section>
 {% endif %}
 <section>

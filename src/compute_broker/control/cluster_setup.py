@@ -40,7 +40,7 @@ class RegistrationForm(forms.Form):
         help_text="Optional while saving. Set an absolute directory before starting your personal connector; the connector will identify the cluster before jobs are allowed.")
     identity_file = forms.CharField(max_length=4096, required=False, strip=False,
         label="Local SSH key path (optional)",
-        help_text="A path on the device that will run your connector, such as ~/.ssh/id_ed25519. Only the path is saved; the key and passphrase stay on that device.")
+        help_text="Leave empty to choose your key in a native file picker on your device when the connector starts. Or enter a local path such as ~/.ssh/id_ed25519. Only the path is saved; the key and passphrase stay local.")
     known_hosts = forms.CharField(max_length=4096, required=False, strip=False,
         label="Local known-hosts path (optional)",
         help_text="Use an absolute path or ~/.ssh/known_hosts on your device. If omitted, the connector manages its own host-key confirmation locally.")

@@ -12,6 +12,8 @@
 <p>Keep the downloaded setup private. In a terminal on your device, start the installed connector with that file and a private state directory:</p>
 <pre>chmod 600 /path/to/personal-connector.json
 compute-broker connector --setup /path/to/personal-connector.json --state-directory /path/to/private/connector-state</pre>
+<p>If no SSH key path was saved, a native file picker opens locally when you start the connector interactively. Use <code>--choose-identity</code> to choose a different key, or <code>--identity-file /absolute/path/to/key</code> in a terminal without a graphical session. The picker selects a path; it does not upload the file.</p>
+<p>Your private key must be readable only by your account. If needed, set its permissions locally with <code>chmod 600 /absolute/path/to/key</code>.</p>
 <p>OpenSSH asks locally for host-key confirmation, your key passphrase and any second factor required by the cluster. The connector then connects this cluster and runs discovery. No compute job is submitted during setup.</p>
 <p>To resume later, run <code>compute-broker connector --state-directory /path/to/private/connector-state</code>. Keep that terminal available for local authentication when needed.</p>
 {% else %}<p>Set your remote username and proposed job directory in <a href="/clusters/setup/{{ setup.id }}/edit/">cluster details</a> before downloading the setup.</p>{% endif %}

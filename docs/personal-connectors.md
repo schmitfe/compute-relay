@@ -16,10 +16,11 @@ sharing a project's allowance does not delegate another user's HPC account.
 2. Enter the Slurm login hostname, remote username, SSH port and proposed remote
    job directory. You may initially save without the username or directory, but
    both are needed before starting the connector.
-3. Optionally enter the SSH key and known-hosts **paths on your device**. Use an
-   absolute path or one beginning with `~/`. These are local hints, not uploads:
-   the portal never reads those files. Do not paste a key, password, passphrase
-   or second factor into any field.
+3. Leave the SSH key path empty to choose the file with your device's native
+   picker at interactive connector startup. You may instead enter SSH key and
+   known-hosts **paths on your device**, using an absolute path or one beginning
+   with `~/`. These are local hints, not uploads: the portal never reads those
+   files. Do not paste a key, password, passphrase or second factor into a field.
 4. Choose a requested SSH session lifetime between 60 seconds and 24 hours.
    The default is eight hours. This does not extend a shorter session permitted
    by the cluster.
@@ -58,6 +59,17 @@ credential storage: its configuration, enrollment/worker state and SSH session
 capability are not agent inputs. Preserve it across restarts so the existing
 worker identity and submission journal can be reused.
 
+When no identity path is saved, initial interactive startup opens a native file picker
+titled **Select your SSH private key**, initially in your local `~/.ssh` directory.
+It returns only the selected existing file's path. It never opens or reads the
+key contents and does not send the file to the portal. Cancelling stops selection;
+it does not choose a default key or start a second dialog.
+
+The picker uses Tk when available. Linux can fall back to a system-installed
+Zenity dialog when a graphical session is present. A headless or noninteractive
+session needs an explicit local `--identity-file` path; it never opens a GUI.
+Picker tests use mocks, not a real desktop or private key.
+
 OpenSSH performs the initial login interactively in that terminal. It can ask
 you to verify a new host key, unlock an encrypted key and complete the site's
 second factor, including Cisco MFA during SSH login. Verify the host-key
@@ -65,7 +77,10 @@ fingerprint through the cluster's trusted channel. The broker never collects
 these answers in the web UI, and the background worker does not blindly repeat
 interactive MFA attempts.
 
-If no identity path was saved, supply a local override:
+To select a different key locally even when a path was saved, add
+`--choose-identity` to the startup or resume command. Keep the terminal available
+for the subsequent SSH prompts. For a session without a graphical picker,
+supply a local override:
 
 ```sh
 compute-broker connector \
@@ -73,6 +88,18 @@ compute-broker connector \
   --identity-file /absolute/path/to/ssh-key \
   --state-directory /absolute/private/connector-state
 ```
+
+Your private key must be owned by your account and inaccessible to other users.
+The picker does not alter file permissions. If needed, fix the selected key
+locally before retrying:
+
+```sh
+chmod 600 /absolute/path/to/ssh-key
+```
+
+The downloaded setup also needs private permissions, as in the first command.
+Selecting a file does not bypass the connector's existing ownership, path and
+permission checks; a directory or missing file is not a valid key selection.
 
 After local authentication, the connector enrolls its owner-scoped worker,
 publishes a narrow profile for the selected target, binds the cluster and runs
