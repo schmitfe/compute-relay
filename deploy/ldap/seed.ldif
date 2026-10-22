@@ -1,0 +1,109 @@
+dn: dc=fixture,dc=invalid
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+dc: fixture
+o: Synthetic broker LDAP fixture
+
+dn: cn=broker-reader,dc=fixture,dc=invalid
+objectClass: organizationalRole
+objectClass: simpleSecurityObject
+cn: broker-reader
+userPassword: @@READER_PASSWORD@@
+
+dn: ou=people,dc=fixture,dc=invalid
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=fixture,dc=invalid
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=alice,ou=people,dc=fixture,dc=invalid
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+objectClass: sambaSamAccount
+uid: alice
+cn: Alice Synthetic
+sn: Synthetic
+givenName: Alice
+displayName: Alice Synthetic
+uidNumber: 10001
+gidNumber: 10001
+homeDirectory: /nonexistent/alice
+loginShell: /bin/false
+mail: same@fixture.invalid
+shadowExpire: 99999
+sambaSID: S-1-5-21-111111111-222222222-333333333-1001
+sambaAcctFlags: [U          ]
+userPassword: @@ALICE_PASSWORD@@
+
+dn: uid=bob,ou=people,dc=fixture,dc=invalid
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+objectClass: sambaSamAccount
+uid: bob
+cn: Bob Synthetic
+sn: Synthetic
+givenName: Bob
+displayName: Bob Synthetic
+uidNumber: 10002
+gidNumber: 10001
+homeDirectory: /nonexistent/bob
+loginShell: /bin/false
+mail: bob@fixture.invalid
+shadowExpire: 99999
+sambaSID: S-1-5-21-111111111-222222222-333333333-1002
+sambaAcctFlags: [U          ]
+userPassword: @@BOB_PASSWORD@@
+
+dn: uid=disabled,ou=people,dc=fixture,dc=invalid
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+objectClass: sambaSamAccount
+uid: disabled
+cn: Disabled Synthetic
+sn: Synthetic
+givenName: Disabled
+displayName: Disabled Synthetic
+uidNumber: 10003
+gidNumber: 10001
+homeDirectory: /nonexistent/disabled
+loginShell: /bin/false
+mail: disabled@fixture.invalid
+shadowExpire: 99999
+sambaSID: S-1-5-21-111111111-222222222-333333333-1003
+sambaAcctFlags: [UD         ]
+userPassword: @@DISABLED_PASSWORD@@
+
+dn: uid=expired,ou=people,dc=fixture,dc=invalid
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+objectClass: sambaSamAccount
+uid: expired
+cn: Expired Synthetic
+sn: Synthetic
+givenName: Expired
+displayName: Expired Synthetic
+uidNumber: 10004
+gidNumber: 10001
+homeDirectory: /nonexistent/expired
+loginShell: /bin/false
+mail: expired@fixture.invalid
+shadowExpire: 1
+sambaSID: S-1-5-21-111111111-222222222-333333333-1004
+sambaAcctFlags: [U          ]
+userPassword: @@EXPIRED_PASSWORD@@
+
+dn: cn=allowed,ou=groups,dc=fixture,dc=invalid
+objectClass: posixGroup
+cn: allowed
+gidNumber: 10001
+memberUid: alice
+memberUid: bob
+memberUid: disabled
+memberUid: expired
