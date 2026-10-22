@@ -78,6 +78,48 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 ## Verification and limitations
 
+### Module job startup and failure details, 22 October 2026
+
+A reviewed CPU-cluster diagnostic exposed a login-only Lmod initialization path
+in its environment recipe. Slurm accepted the allocation, but Bash failed before
+executing Python because `/usr/share/lmod/lmod/init/bash` was absent on the
+compute node. Its collected stderr and final accounting were retained; the
+review page previously omitted those logs and scheduler exit status.
+
+Module recipes now default to the cluster-provided module command, using a login
+batch shell and restoring the Slurm submission directory after site/account
+startup. Their default wrapper sources no explicit initializer. An existing
+advanced initializer is only a fallback when the command is unavailable; a
+missing command has a fixed, actionable error. New discovery retains optional
+initializer provenance without prefilling it as a required recipe setting.
+Existing failed packages and environment revisions remain immutable.
+
+The disposable `cb-module-jobs-20261022` fixture installed Debian Environment
+Modules and a synthetic Python module. Its complete personal-connector workflow
+passed: ordinary reviewed execution, a module recipe with blank initialization,
+a normal cluster-check approval, native execution, reported loaded module name,
+JSON artifact, settled accounting, same-worker resume and revocation. Test
+containers and synthetic volumes were removed afterward.
+
+The owner then approved the corrected lab diagnostic in the portal. It completed
+with exit status `0:0`, Python 3.12.4 and all five selected modules. The script
+reported two seconds; scheduler allocation elapsed time was four seconds with
+two CPUs, so the run spent eight CPU-core seconds. Together with the original
+failed allocation's two CPU-core seconds, the existing diagnostic project had
+ten spent, zero GPU usage, zero reservations and two lifetime admissions. Its
+allowance and counters were preserved rather than reset.
+
+Authenticated HTTP checks confirmed that the failed review shows its specific
+cause, native job ID, exit status and escaped logs before prepared files; the
+successful review and cluster test page show final results. Review responses
+use `no-store`. Default tests cover permission denial, bounded/escaped output,
+classification without fabricated causes, use of an existing module command,
+explicit fallback behavior and the no-initializer default. Independent review
+found no actionable issue in these paths. The final PostgreSQL run passed
+**1,249 tests and 65 subtests**, with one optional test skipped and two upstream
+LDAP dependency deprecation warnings. Migration drift and whitespace checks
+passed; no schema migration was required for the portal update.
+
 ### Folder creation, reviewed diagnostics and module catalogs, 22 October 2026
 
 The integrated PostgreSQL suite passed **1,198 tests and 65 subtests**, with one

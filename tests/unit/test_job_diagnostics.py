@@ -53,7 +53,8 @@ def test_missing_known_initializer_reports_environment_cause_without_claiming_py
     assert detail["title"] == "Module initialization file is missing"
     assert "not evidence that the Python script ran" in detail["message"]
     assert "cluster-provided module command" in detail["suggestion"]
-    assert "will not rerun automatically" in detail["suggestion"]
+    assert "new job for review" in detail["suggestion"]
+    assert "saved failed package stays unchanged" in detail["suggestion"]
     assert path in detail["stderr"]
 
 
