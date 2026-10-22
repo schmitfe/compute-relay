@@ -1,26 +1,35 @@
-# Deployment and operations plan
+# Deployment and operations
 
-Only the development alpha and synthetic container fixtures are currently implemented. See [runtime configuration](runtime.md) and [container testing](container-testing.md). Protected profiles in this plan are refused by the current settings until their installation tests are complete.
+The development alpha includes native and synthetic container fixtures, SQLite and PostgreSQL configuration, an offline database-transfer tool, explicit local/LDAP login and an opt-in asynchronous core Slurm worker. See [runtime configuration](runtime.md) and [container testing](container-testing.md). These implemented components do not establish a protected shared installation. The current settings accept only `development`; protected profiles remain refused until their installation tests are complete.
 
-The [shared-service specification](hosted-architecture.md) now defines the
-local/LDAP identity model, PostgreSQL cutover, async connector implementation and
-prohibition on central user SSH private-key storage. Its isolated session mode
-needs a tested keyless activation mechanism; ordinary Compose packaging alone
-does not establish that capability or tenant isolation.
+The [shared-service architecture](hosted-architecture.md) distinguishes the
+implemented database, identity and worker foundations from the remaining hosted
+deployment work. The design prohibits central user SSH private-key storage. Its
+isolated server-session mode still needs a tested keyless activation mechanism;
+ordinary Compose packaging alone does not establish that capability or tenant
+isolation.
 
 ## Supported profiles
 
 | Profile | Intended use | Credential isolation |
 | --- | --- | --- |
-| `development` | Same-user source checkout, fake backend, synthetic data | No claim of protection from an agent under that user; real SSH credentials disabled |
-| `personal_protected` | One owner on a supported Linux device | Administrator-managed service identities, protected runtime/configuration, private worker sockets |
-| `server` | Shared Linux server and organizational users | PostgreSQL, HTTPS, explicit local/LDAP providers, project roles and isolated per-principal connectors |
+| `development` | Implemented same-user checkout and test fixtures; separately authorized supervised SSH tests | No protection from an agent under that user; routine acceptance uses synthetic credentials |
+| `personal_protected` | Planned installation for one owner on supported Linux | Requires administrator-managed identities, protected runtime/configuration and private worker sockets; not selectable yet |
+| `server` | Planned protected shared Linux installation | PostgreSQL and local/LDAP foundations exist; HTTPS operations, isolated connectors and production acceptance remain; not selectable yet |
 
 Docker Compose is the packaging target for the protected profiles. An administrator installs a reviewed image/configuration outside the agent-writable checkout and manages runtime access. A dedicated service-owned rootless runtime is also possible if its control socket is inaccessible to the agent. Do not expose an installation as protected merely because a container runs as non-root. No container runtime runs on Slurm login/compute nodes as a broker prerequisite; remote Python 3 and the existing Slurm CLI are the initial helper prerequisites.
 
 The first protected host target is Linux with OpenSSH. Windows/macOS support is deferred until service identity or restricted-VM operation and installation tests are specified. A user who cannot perform a one-time privileged setup can use development mode with a fake backend, or connect an agent-only facade to a broker hosted elsewhere.
 
-## Planned container layout
+## Containers and protected deployment target
+
+The repository supplies control/worker Docker targets and disposable fake,
+Slurm, PostgreSQL and LDAP fixtures. Their commands and evidence are in
+[container testing](container-testing.md), [database migration](database-migration.md)
+and the [LDAP fixture guide](../deploy/ldap/README.md). Install the `postgres` or
+`ldap` dependency extra when enabling that adapter; the minimal control image
+does not implicitly enable them. The following layout describes the protected
+deployment target, rather than a completed production installer.
 
 | Service | Mounts | Connectivity |
 | --- | --- | --- |
@@ -43,7 +52,7 @@ Do not use default Compose flat networking as the authorization boundary. The wo
 | --- | --- |
 | Application | Deployment profile, canonical URL/origins, timezone UTC internally, listener addresses, limits, retention |
 | Storage quotas | Per-project/global bytes and object counts, upload concurrency/reservations, orphan TTL and minimum disk headroom |
-| Authentication | Local owner or trusted OIDC issuer/client, verified group mapping, approval channel policy |
+| Authentication | Implemented local/LDAP provider routing and protected LDAP configuration; project memberships and approval channel policy; OIDC remains future work |
 | Database/storage | Protected local paths or PostgreSQL secret reference, object store adapter |
 | Workers | Worker IDs, enrollment trust, assigned connection IDs, lease/timeouts and outbound target allowlist |
 | Connections | Host/port/user, pinned host key/CA, service key reference, protected ControlPath, absolute Slurm/Python paths, working root |
@@ -67,9 +76,35 @@ Strict independent human approval needs a trusted session/device that the agent 
 
 ## Shared server and directory login
 
-Deploy the same control application against PostgreSQL and organizational OIDC. Prefer the organization's existing identity provider; LDAP federation can live in Keycloak or a comparable existing service rather than requiring the broker to handle directory passwords. A direct LDAP adapter is a later alternative, not a personal-installation requirement. Configure audience/issuer validation, group-to-project role rules, deprovisioning and session expiry explicitly. Stable issuer/subject pairs identify users. [Keycloak LDAP federation](https://www.keycloak.org/docs/latest/server_admin/index.html)
+The implemented `IdentityRoutingBackend` is the sole Django authentication
+backend. Local login remains the default. An optional `ldap3` adapter supports
+verified LDAPS or required StartTLS, explicit provider selection and immutable
+provider/`entryUUID` identity binding. A directory failure never selects a local
+account with a matching name. First LDAP login creates no project membership,
+worker or HPC access. See [identity configuration](../src/compute_broker/control/identity/README.md)
+and the [synthetic TLS fixture](../deploy/ldap/README.md); no institutional
+directory acceptance is implied by that fixture.
 
-Per-user cluster connections retain independent identities. The server may host connections for approved service identities, or pair a protected worker on a user's device over outbound authenticated HTTPS. LDAP login alone does not grant SSH access. A personal connector does not admit jobs while disconnected from the authoritative control service. Batch jobs already submitted continue; accounting reservations remain until reconciliation.
+Directory authority is cached for a configured interval of at most 300 seconds.
+Expired verification or directory denial blocks new authority, including use of
+the user's existing project keys and dispatch. The optional protected refresher
+does network I/O outside database transactions and cannot clear operator
+suspension. Current eligibility checks support configured POSIX group membership,
+Samba flags and shadow expiry. Automatic directory-to-project role mapping,
+membership-management screens, login rate limiting and OIDC remain unfinished.
+
+Project keys are bound to their issuing users. Current project role and account
+eligibility are checked on key use and again at dispatch. An executable connection
+and its worker must belong to that same user; a shared project allowance does not
+delegate another member's SSH identity. Only the issuer can rotate and reveal a
+replacement execution key. Membership and cross-member resource grants currently
+need reviewed operator management. LDAP login alone does not grant SSH access.
+
+Protected personal connectors would use outbound authenticated HTTPS to the
+authoritative control service. They do not admit jobs while disconnected. Batch
+jobs already submitted continue; accounting reservations remain until
+reconciliation. A central per-user session supervisor and keyless MFA activation
+still require implementation and site acceptance.
 
 Remote HTTP MCP also needs a standards-compliant OAuth resource-server integration, scoped project selection and actual ChatGPT/Claude/Codex client tests. Do not assume an OIDC web login or a raw project API header is compatible with every hosted client. No new OAuth authorization-server implementation is part of the first local milestone.
 
@@ -81,12 +116,38 @@ Routine maintenance includes key/session rotation, admission pause, cancellation
 
 Restore starts with admissions paused. Verify database/object consistency, reconcile every outstanding native identity and remote submission UUID, and resolve any jobs that were accepted after the backup snapshot. A restore cannot safely assume a missing local record means no remote job. Do not resume after a stale backup by clearing reservations. Preserve accounting evidence and record operator adjustments explicitly.
 
-SQLite-to-PostgreSQL migration uses explicit export/import commands, row counts, digests, referential integrity and ledger reconstruction checks; it is not a database URL toggle. Local-to-hosted migration fences the old controller, transfers data, links the owner to organizational identity through a trusted account-link operation, re-pairs workers and resumes one authoritative ledger. Rollback requires reconciliation, not simultaneous writable controllers.
+The implemented [offline SQLite-to-PostgreSQL procedure](database-migration.md)
+requires stopped writers, paused projects, resolved work, an immutable source
+backup and an empty migrated target. It checks model/through-row counts,
+canonical digests, ledger/storage balances and artifact bytes, preserving UUIDs,
+password hashes and session rows. Keep the original protected Django secret.
+Changing the Django authentication backend path nevertheless requires browser
+sign-in again. Legacy keys without proven issuing users remain quarantined until
+an operator explicitly verifies their owner; a sole current member is not proof.
+The tool never changes the live database configuration itself.
+
+A future protected local-to-hosted cutover also needs reviewed identity linking
+and connector re-enrollment into the new isolation boundary. Run one authoritative
+ledger; rollback after new activity requires reconciliation rather than starting
+a second writable controller. A copied-data rehearsal does not certify full
+disaster recovery or hosted production operations.
+
+The [async runner](async-workers.md) is opt-in and supports core Slurm only. It
+bounds HTTP/SSH operations and separates owner lanes, while keeping existing
+leases, journals and accounting. Optional extensions still use the default
+synchronous runner. Process concurrency is not an operating-system isolation
+boundary or a substitute for protected connector installation.
 
 Uninstall stops admissions first, reconciles or explicitly hands off active jobs, exports retained data if requested, closes SSH masters and revokes worker/project credentials. Removing containers does not cancel Slurm jobs or revoke remote public keys. Delete protected data only through an explicit operator action after reconciling unsettled usage.
 
 ## Public demonstration
 
-Provide a fake-backend demonstration with generated synthetic identities and no real cluster network access. A separate ephemeral SSH/Slurm integration fixture may use Docker on an isolated test runner, never the production daemon. Demonstration passwords/keys must be generated at runtime and must not be accepted by protected installations.
+The native fake demonstration and disposable Docker fake/SSH-Slurm workflows are
+implemented. Separate PostgreSQL and TLS LDAP fixtures test those adapters with
+synthetic identities. Ordinary CI uses no institutional credentials or remote
+cluster allocations. Demonstration passwords and keys are generated at runtime
+and must not become protected-installation credentials.
 
-No actual Dockerfile, Compose deployment or install command is claimed by this planning repository. Milestone M1 produces and verifies the fake deployment; protected deployment follows its OS isolation tests.
+Dockerfiles and Compose fixtures provide reproducible development acceptance.
+They do not yet provide the protected installer, independent human approval
+channel, institutional Cisco/MFA activation or full hosted production acceptance.
