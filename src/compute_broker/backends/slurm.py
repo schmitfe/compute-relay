@@ -129,15 +129,17 @@ class SlurmBackend:
         self.connection = connection
         self.transport = transport or OpenSSHTransport(connection)
 
-    def _call(self, operation: str, **arguments) -> dict:
+    def _request(self, operation: str, **arguments) -> dict:
         # Only fixed operation names exist. No shell command, host, or credential
         # is accepted from an agent request.
         remote_config = {key: self.connection[key] for key in
                          ("remote_root", "slurm_paths", "scheduler_environment") if key in self.connection}
         if operation == "discover" and "environment_discovery" in self.connection:
             remote_config["environment_discovery"] = self.connection["environment_discovery"]
-        return self.transport.call_helper(helper_source(), {"operation": operation,
-                                                            "config": remote_config, **arguments})
+        return {"operation": operation, "config": remote_config, **arguments}
+
+    def _call(self, operation: str, **arguments) -> dict:
+        return self.transport.call_helper(helper_source(), self._request(operation, **arguments))
 
     def _verify_binding(self, manifest: dict) -> None:
         if manifest["connection_revision_sha256"] != connection_revision_sha256(self.connection):
