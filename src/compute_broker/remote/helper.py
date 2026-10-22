@@ -37,9 +37,10 @@ SYSTEM_MODULE_PATHS = (
 )
 MODULE_PATH_CONFIGURATION_FILES = (
     "/etc/profile", "/etc/environment", "/etc/lmod/.modulespath", "/etc/lmod/modulespath",
-    "/etc/environment-modules/modulespath", "/usr/share/Modules/init/.modulespath",
-    "/usr/share/modules/init/.modulespath",
+    "/etc/environment-modules/modulespath", "/etc/environment-modules/initrc",
+    "/usr/share/Modules/init/.modulespath", "/usr/share/modules/init/.modulespath",
 )
+MODULE_PROFILE_DIRECTORIES = ("/etc/profile.d",)
 
 
 def canonical(value):
@@ -405,6 +406,52 @@ def read_trusted_module_configuration(path, maximum):
         os.close(descriptor)
 
 
+def module_profile_configuration(deadline):
+    """List bounded system shell snippets as data, without sourcing anything.
+
+    Sites often set MODULEPATH in a separate /etc/profile.d file rather than
+    the distribution's modules.sh. Directory and later file reads retain the
+    strict root-owned system trust policy, independent of metadata tree policy.
+    """
+    paths, observations, truncated, count = [], [], False, 0
+    for directory in MODULE_PROFILE_DIRECTORIES:
+        if time.monotonic() >= deadline:
+            truncated = True
+            break
+        try:
+            trusted_system_path(directory, directory=True)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if count >= 128 or len(paths) >= 48 or time.monotonic() >= deadline:
+                        truncated = True
+                        break
+                    count += 1
+                    if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.sh", entry.name):
+                        # Each file/link is separately audited before its bounded
+                        # read. No directory aliases are recursively traversed.
+                        paths.append(directory + "/" + entry.name)
+            observations.append({"path": directory, "status": "listed"})
+        except (OSError, ValueError):
+            observations.append({"path": directory, "status": "unsafe_or_unavailable"})
+    return sorted(paths), observations, truncated
+
+
+def module_configuration_reference(path):
+    """Only conventional absolute module initialization/configuration paths."""
+    if not isinstance(path, str) or any(character in path for character in "$`;&|<>(){}\\*?["):
+        return False
+    try:
+        discovery_path(path)
+    except ValueError:
+        return False
+    if path.startswith(("/home/", "/users/", "/root/")):
+        return False
+    basename = os.path.basename(path)
+    return (basename in {"modulespath", ".modulespath", "initrc"}
+            or ("/init/" in path and basename in {"bash", "profile", "profile.sh", "sh"})
+            or (path.startswith("/etc/profile.d/") and basename.endswith(".sh")))
+
+
 def literal_module_paths(text, *, path_file=False):
     """Extract literal path data only; shell syntax/expansions are never run.
 
@@ -423,7 +470,25 @@ def literal_module_paths(text, *, path_file=False):
             continue
         if fields[0] == "export":
             fields = fields[1:]
-        if path_file:
+        if not path_file and fields and fields[0] in {".", "source"}:
+            if len(fields) == 2 and module_configuration_reference(fields[1]):
+                references.append(fields[1])
+            continue
+        if not path_file and fields[:2] == ["module", "unuse"]:
+            # Shell branch ordering/state is deliberately not interpreted. A
+            # global subtraction could hide paths still active in another
+            # branch. Keep a provisional union and disclose the uncertainty.
+            unsupported += 1
+            continue
+        # Environment Modules initrc is a Tcl modulefile, but only literal
+        # path declarations are read here. Never evaluate Tcl, defaults or rc.
+        if not path_file and fields and fields[:2] == ["module", "use"]:
+            values = fields[2:]
+            if values and values[0] in {"-a", "--append", "-p", "--prepend"}:
+                values = values[1:]
+        elif not path_file and fields and fields[0] in {"prepend-path", "append-path"} and fields[1:2] == ["MODULEPATH"]:
+            values = fields[2:]
+        elif path_file:
             values = fields
         else:
             if not fields or not re.match(r"(?:MODULEPATH|LMOD_SITE_MODULEPATH|MODULEPATH_ROOT|LMOD_MODULEPATH_INIT|MODULEPATH_INIT)=", fields[0]):
@@ -462,6 +527,8 @@ def automatic_module_inventory(options):
     Modules/Lmod path-list files provide bounded, provisional candidate roots.
     """
     candidates, provenance, warnings, configuration_sources = [], [], [], []
+    group_managed_roots = []
+    configuration_directories = []
     truncated, unsupported, total_bytes, entries = False, 0, 0, 0
     deadline = time.monotonic() + 2
     initializers = [options["module_init"]] if options.get("module_init") else list(MODULE_INITIALIZERS)
@@ -478,10 +545,13 @@ def automatic_module_inventory(options):
     else:
         sources = []
         pending = list(dict.fromkeys([*MODULE_PATH_CONFIGURATION_FILES, *initializers]))
+        snippets, configuration_directories, listing_truncated = module_profile_configuration(deadline)
+        pending.extend(snippets)
+        truncated = truncated or listing_truncated
         for initializer in initializers:
             pending.append(os.path.dirname(os.path.realpath(initializer)) + "/.modulespath")
         seen = set()
-        while pending and len(seen) < 32 and total_bytes < 131072 and time.monotonic() < deadline:
+        while pending and len(seen) < 64 and total_bytes < 131072 and time.monotonic() < deadline:
             filename = pending.pop(0)
             if filename in seen:
                 continue
@@ -505,7 +575,8 @@ def automatic_module_inventory(options):
         if not sources:
             sources.extend((path, "standard_module_directory") for path in SYSTEM_MODULE_PATHS)
     for candidate, source in sources:
-        if len(candidates) >= 16 or time.monotonic() >= deadline:
+        root_declared = source not in {"configured_module_paths", "standard_module_directory"}
+        if len(candidates) >= 64 or time.monotonic() >= deadline:
             truncated = True
             break
         roots = [candidate]
@@ -524,22 +595,23 @@ def automatic_module_inventory(options):
             descriptor = None
             try:
                 parent = discovery_path(os.path.realpath(candidate[:-2]))
-                descriptor = open_metadata_module_root(parent, deadline=deadline)
+                descriptor = open_metadata_module_root(parent, deadline=deadline, allow_group_writable=root_declared)
                 with os.scandir(descriptor) as directory:
                     for entry in directory:
-                        if entries >= 4096 or len(roots) >= 16 or time.monotonic() >= deadline:
+                        if entries >= 4096 or len(roots) >= 64 or time.monotonic() >= deadline:
                             truncated = True
                             break
                         entries += 1
                         if entry.is_dir(follow_symlinks=False):
                             roots.append(parent + "/" + entry.name)
             except (OSError, ValueError):
+                warnings.append("A literal wildcard module root was unsafe, unavailable or outside discovery bounds: " + candidate)
                 continue
             finally:
                 if descriptor is not None:
                     os.close(descriptor)
         for root in roots:
-            if len(candidates) >= 16 or time.monotonic() >= deadline:
+            if len(candidates) >= 64 or time.monotonic() >= deadline:
                 truncated = True
                 break
             try:
@@ -550,28 +622,43 @@ def automatic_module_inventory(options):
             if resolved not in candidates:
                 candidates.append(resolved)
                 provenance.append({"path": root, "resolved_path": resolved, "source": source})
-    scan_options = {"module_paths": candidates}
+            if root_declared and resolved not in group_managed_roots:
+                group_managed_roots.append(resolved)
+    scan_options = {"module_paths": candidates, "group_managed_roots": group_managed_roots,
+                    "automatic_limits": True}
     if chosen_initializer:
         scan_options["module_init"] = chosen_initializer
     result = metadata_module_inventory(scan_options)
     result.update(requested_inventory_mode="auto", path_source="configured" if "module_paths" in options else "trusted_system_configuration",
         source="automatic_system_modulepath_metadata", path_provenance=provenance,
+        path_semantics="literal_candidate_union",
         configuration_bytes_read=total_bytes, configuration_sources=configuration_sources,
+        configuration_directories=configuration_directories,
         unsupported_configuration_lines=unsupported,
         loaded=[], loaded_state="not_observed")
     if unsupported:
         result["partial"] = True
         warnings.append("Dynamic or unsupported configuration syntax was not evaluated; candidate roots may be incomplete.")
+    if warnings:
+        result["partial"] = True
     if truncated:
         result["truncated"] = result["partial"] = True
         warnings.append("Automatic path discovery reached a configuration, time, directory-entry or path-count bound.")
     result["warnings"].extend(warnings)
-    result["explanation"] = "Provisional catalog from literal system MODULEPATH data and regular module-file metadata. System shell startup, module files and rc files were not executed; aliases, loaded state and compute-node availability are unverified."
+    result["explanation"] = "Provisional catalog from the union of literal system MODULEPATH/module-use declarations and regular module-file metadata. Conditional branches and module unuse are not interpreted. System shell startup, module files and rc files were not executed; aliases, loaded state and compute-node availability are unverified."
     return result
 
 
-def metadata_module_directory_permissions(info, path, *, final, ancestor_warnings):
+def metadata_module_directory_permissions(info, path, *, final, ancestor_warnings, allow_group_writable=False):
     if not info.st_mode & 0o022:
+        return
+    if allow_group_writable and not info.st_mode & 0o002:
+        # Only auto roots declared by strict root-owned system configuration get
+        # this name-only exception. It never authorizes evaluation or file reads.
+        warning = {"path": path, "uid": info.st_uid, "gid": info.st_gid,
+                   "mode": oct(stat.S_IMODE(info.st_mode)), "reason": "group_managed_metadata_only"}
+        if warning not in ancestor_warnings and len(ancestor_warnings) < 64:
+            ancestor_warnings.append(warning)
         return
     # A provisional name catalog may cross these two narrowly defined shared
     # system ancestors. This never makes module code trusted for evaluation.
@@ -587,7 +674,7 @@ def metadata_module_directory_permissions(info, path, *, final, ancestor_warning
         ancestor_warnings.append(warning)
 
 
-def open_metadata_module_root(path, *, deadline=None, ancestor_warnings=None):
+def open_metadata_module_root(path, *, deadline=None, ancestor_warnings=None, allow_group_writable=False):
     """Open an explicit resolved directory, checking every ancestor without links.
 
     Unlike availability discovery, names alone need no root-owner guarantee.
@@ -604,7 +691,8 @@ def open_metadata_module_root(path, *, deadline=None, ancestor_warnings=None):
     ancestor_warnings = ancestor_warnings if ancestor_warnings is not None else []
     fd = os.open("/", os.O_RDONLY | DIRECTORY | NOFOLLOW)
     try:
-        metadata_module_directory_permissions(os.fstat(fd), "/", final=False, ancestor_warnings=ancestor_warnings)
+        metadata_module_directory_permissions(os.fstat(fd), "/", final=False, ancestor_warnings=ancestor_warnings,
+                                              allow_group_writable=allow_group_writable)
         parts = components(path[1:])
         current = ""
         for index, part in enumerate(parts):
@@ -615,7 +703,7 @@ def open_metadata_module_root(path, *, deadline=None, ancestor_warnings=None):
             fd = next_fd
             current += "/" + part
             metadata_module_directory_permissions(os.fstat(fd), current, final=index == len(parts) - 1,
-                                                  ancestor_warnings=ancestor_warnings)
+                                                  ancestor_warnings=ancestor_warnings, allow_group_writable=allow_group_writable)
         return fd
     except BaseException:
         os.close(fd)
@@ -651,6 +739,7 @@ def metadata_module_inventory(options):
               "truncated": False, "partial": False, "warnings": [], "roots": [], "skipped_paths": [],
               "ancestor_warnings": [],
               "visited_entries": 0, "visited_directories": 0,
+              "group_writable_entries": 0,
               "skipped": {"symlinks": 0, "unsafe_permissions": 0, "housekeeping_or_names": 0,
                           "special_files": 0, "depth_limit": 0, "inaccessible": 0}}
     if options.get("module_init"):
@@ -664,18 +753,29 @@ def metadata_module_inventory(options):
             result["initializer_status"] = "unsafe_or_unavailable"
             result["partial"] = True
             result["warnings"].append("Configured module initializer did not pass metadata checks; it was not evaluated.")
-    deadline = time.monotonic() + 2
+    # Automatic system catalogs can be much larger than an explicitly selected
+    # small tree. These are internal fixed bounds, not caller-supplied budgets.
+    automatic = options.get("automatic_limits", False)
+    max_entries, max_directories, max_names = (32768, 4096, 8192) if automatic else (4096, 256, 512)
+    max_depth, seconds = (12, 4) if automatic else (8, 2)
+    result["limits"] = {"entries": max_entries, "directories": max_directories, "names": max_names,
+                        "depth": max_depth, "seconds": seconds}
+    group_managed_roots = set(options.get("group_managed_roots", []))
+    result["write_policy"] = "root_declared_group_managed_metadata" if group_managed_roots else "strict_metadata"
+    deadline = time.monotonic() + seconds
     names = set()
     for root in dict.fromkeys(options["module_paths"]):
         observation = {"path": root, "status": "unavailable"}
         result["roots"].append(observation)
-        if result["visited_entries"] >= 4096 or result["visited_directories"] >= 256 or len(names) >= 512 or time.monotonic() >= deadline:
+        allow_group_writable = root in group_managed_roots
+        if result["visited_entries"] >= max_entries or result["visited_directories"] >= max_directories or len(names) >= max_names or time.monotonic() >= deadline:
             result["truncated"] = result["partial"] = True
             observation["status"] = "not_scanned_limit"
             result["skipped_paths"].append({"path": root, "status": "not_scanned_limit"})
             continue
         try:
-            root_fd = open_metadata_module_root(root, deadline=deadline, ancestor_warnings=result["ancestor_warnings"])
+            root_fd = open_metadata_module_root(root, deadline=deadline, ancestor_warnings=result["ancestor_warnings"],
+                                                allow_group_writable=allow_group_writable)
         except (OSError, ValueError) as exc:
             result["partial"] = True
             reason = "not_found" if isinstance(exc, FileNotFoundError) else "not_scanned_limit" if isinstance(exc, TimeoutError) else "unsafe_or_inaccessible"
@@ -689,21 +789,24 @@ def metadata_module_inventory(options):
         pending = [(root_fd, "", 0)]
         try:
             while pending:
-                if result["visited_entries"] >= 4096 or result["visited_directories"] >= 256 or len(names) >= 512 or time.monotonic() >= deadline:
+                if result["visited_entries"] >= max_entries or result["visited_directories"] >= max_directories or len(names) >= max_names or time.monotonic() >= deadline:
                     result["truncated"] = result["partial"] = True
                     observation["status"] = "truncated"
                     break
                 directory, prefix, depth = pending.pop()
                 try:
                     # Check the opened inode again, not just the earlier entry.
-                    if os.fstat(directory).st_mode & 0o022:
+                    directory_mode = os.fstat(directory).st_mode
+                    if directory_mode & 0o022 and not (allow_group_writable and not directory_mode & 0o002):
                         result["skipped"]["unsafe_permissions"] += 1
                         result["partial"] = True
                         continue
+                    if directory_mode & 0o020:
+                        result["group_writable_entries"] += 1
                     result["visited_directories"] += 1
                     with os.scandir(directory) as entries:
                         for entry in entries:
-                            if result["visited_entries"] >= 4096 or len(names) >= 512 or time.monotonic() >= deadline:
+                            if result["visited_entries"] >= max_entries or len(names) >= max_names or time.monotonic() >= deadline:
                                 result["truncated"] = result["partial"] = True
                                 observation["status"] = "truncated"
                                 break
@@ -716,25 +819,27 @@ def metadata_module_inventory(options):
                                 result["skipped"]["symlinks"] += 1
                                 result["partial"] = True
                                 continue
-                            if info.st_mode & 0o022:
+                            if info.st_mode & 0o022 and not (allow_group_writable and not info.st_mode & 0o002):
                                 result["skipped"]["unsafe_permissions"] += 1
                                 result["partial"] = True
                                 continue
                             relative = prefix + "/" + entry.name if prefix else entry.name
                             if stat.S_ISDIR(info.st_mode):
-                                if depth >= 8:
+                                if depth >= max_depth:
                                     result["skipped"]["depth_limit"] += 1
                                     result["truncated"] = result["partial"] = True
                                     continue
                                 # Pending handles are bounded too; do not open
                                 # thousands of siblings before visiting any.
-                                if result["visited_directories"] + len(pending) >= 256:
+                                if result["visited_directories"] + len(pending) >= max_directories:
                                     result["truncated"] = result["partial"] = True
                                     observation["status"] = "truncated"
                                     continue
                                 child = os.open(entry.name, os.O_RDONLY | DIRECTORY | NOFOLLOW, dir_fd=directory)
                                 pending.append((child, relative, depth + 1))
                             elif stat.S_ISREG(info.st_mode):
+                                if info.st_mode & 0o020:
+                                    result["group_writable_entries"] += 1
                                 name = metadata_module_name(relative)
                                 if name:
                                     names.add(name)
@@ -760,7 +865,9 @@ def metadata_module_inventory(options):
     if result["truncated"]:
         result["warnings"].append("Metadata scan reached its time, depth, entry, directory or catalog-name bound.")
     if result["ancestor_warnings"]:
-        result["warnings"].append("Configured roots cross root-owned writable shared ancestors. This provisional metadata exception grants no authority to evaluate module code; inspect ancestor_warnings.")
+        result["warnings"].append("Catalog roots cross shared writable ancestors or group-managed software trees. This provisional metadata exception grants no authority to evaluate module code; inspect ancestor_warnings.")
+    if group_managed_roots:
+        result["warnings"].append("Root-declared site software trees may be software-group writable. Candidate names are untrusted metadata, not permission to execute module files.")
     return result
 
 

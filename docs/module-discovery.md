@@ -12,11 +12,23 @@ Personal connectors use this protected profile setting:
 
 Automatic mode builds a **provisional metadata catalog**. It reads only bounded,
 root-owned, non-writable system configuration at known locations, including
-`/etc/profile`, the supported module initialization files, and Modules/Lmod
-`modulespath` or `.modulespath` files. It extracts literal `MODULEPATH` and
-related path settings as data. It does not source a shell profile, evaluate
-variables or substitutions, run module commands, or read module-file contents.
+`/etc/profile`, bounded `/etc/profile.d/*.sh` snippets, supported module
+initialization files, and Modules/Lmod `modulespath`, `.modulespath` and
+`initrc` configuration. It extracts literal `MODULEPATH` settings and literal
+`module use` or Tcl `prepend-path MODULEPATH` declarations as data. Conventional
+literal absolute references to module initialization/path configuration can be
+followed through the same root-ownership and byte bounds. It does not source a
+shell profile, evaluate variables or substitutions, run module commands, or
+read software module-file contents.
 Literal site path data takes precedence over generic installation defaults.
+
+Shell conditions are not interpreted. The result is a union of literal
+candidate paths, including paths in different conditional branches. A
+`module unuse` statement is disclosed as unsupported rather than globally
+subtracting a directory that might remain active in another branch. Commented
+declarations are ignored. The snapshot reports
+`path_semantics=literal_candidate_union`; it does not claim to reproduce a
+particular interactive shell's final state.
 
 Lmod documents that sites can define `MODULEPATH` before initialization or use
 its `.modulespath` file, and that the latter can contain directory wildcards.
@@ -26,10 +38,15 @@ it does not run a general shell or recursive glob.
 
 Discovered aliases resolve to canonical directory roots before the existing
 metadata scanner opens them without following links. The same restrictions on
-root directories, descendants and files still apply. The scanner permits
-non-root site ownership for name-only catalogs, retains its narrow warned
-exceptions for shared system ancestors, and skips unsafe permissions, links,
-special files and housekeeping names. Personal home directories are not
+root directories, descendants and files still apply. Automatic paths declared
+by protected root-owned system configuration additionally permit
+software-group-writable trees and ancestors, with an explicit
+`root_declared_group_managed_metadata` policy and warnings. This is a name-only
+exception: module contents are never read or evaluated, world-writable trees
+remain excluded, and directory traversal remains descriptor-relative without
+following links. Direct explicit metadata mode retains its stricter write
+policy, and the availability execution policy is unchanged. The scanner skips
+links, special files and housekeeping names. Personal home directories are not
 searched automatically. A valid system initializer may be reported for recipe
 prefill, but it is not executed during this inventory.
 
@@ -39,14 +56,39 @@ The snapshot includes `requested_inventory_mode=auto`, `inventory_mode=metadata`
 candidate module names for the existing selector. `loaded=[]` together with
 `loaded_state=not_observed` explicitly means loaded state was not measured.
 Unsupported dynamic configuration is reported rather than executed; an
-operator can supply explicit paths if needed. The catalogue remains subject
-to the existing 512-name, 4096-entry, 256-directory and time bounds.
+operator can supply explicit paths if needed. Automatic path discovery has
+fixed bounds of 64 configuration files, 128 KiB total configuration data, 64
+candidate roots and two seconds; profile directory listing is separately
+bounded. Its catalog scanner permits up to 8192 names, 32768 directory entries,
+4096 directories, depth 12 and four seconds. Reaching a limit is always
+reported as partial/truncated. Explicit metadata mode retains the existing
+512-name, 4096-entry, 256-directory, depth-eight and two-second bounds.
 
 For example, the lab's literal system setting names
 `/opt/apps/modules/Core`, `Software`, `Tools`, `Suits` and its Lmod utility
 directory. Those aliases resolve to the shared site installation. A personal
 connector can discover the scientific Python versions from these paths
 without evaluating site-admin-owned module code.
+
+The university site illustrates why the generic package defaults are
+insufficient. Its distribution `modulespath` contains only system utilities;
+the actual software trees are added by root-owned `ramsesmods.sh` and
+`zeasybuild.sh` snippets, using literal `module use` declarations and a final
+directory wildcard. The scientific trees are maintained by a software group
+and are group writable. A read-only acceptance run of the fixed scanner found
+2076 candidate names across 1293 directories with no traversal truncation,
+compared with five utility names before the fix. The result remains partial
+because aliases/symlinks, conditional state and an absent legacy path were
+omitted. This measures filename discovery, not compute-node compatibility.
+
+Lmod's normal spider learns additional hierarchy paths by evaluating
+modulefiles, and its cache stores Lua data. Automatic metadata mode does not
+run spider or evaluate that cache. A compiler/MPI hierarchy whose paths appear
+only in module code therefore needs explicit operator-supplied paths or a
+separately authorized availability probe; a filename catalog alone cannot
+establish prerequisites or correct load ordering.
+[Lmod spider behavior](https://lmod.readthedocs.io/en/latest/136_spider.html),
+[Lmod system cache](https://lmod.readthedocs.io/en/latest/130_spider_cache.html).
 
 The other modes retain their meaning:
 
