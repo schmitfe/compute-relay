@@ -102,6 +102,14 @@ class ConnectorTask(models.Model):
         indexes = [models.Index(fields=["connection", "state", "created_at"], name="connector_task_pending")]
 
 
+class ClusterCheckConfiguration(models.Model):
+    connection = models.OneToOneField(Connection, on_delete=models.PROTECT, related_name="check_configuration")
+    project = models.OneToOneField("Project", on_delete=models.PROTECT)
+    environment = models.ForeignKey("Environment", on_delete=models.PROTECT)
+    credential = models.ForeignKey("ProjectCredential", on_delete=models.PROTECT)
+    created_at = models.DateTimeField(default=timezone.now)
+
+
 class Environment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=80)

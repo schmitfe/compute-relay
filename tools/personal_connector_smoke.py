@@ -13,7 +13,7 @@ from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
-from container_smoke import Client, SmokeFailure, require, run as job_smoke
+from container_smoke import Client, PreformattedText, SmokeFailure, require, run as job_smoke
 
 
 class ConfigurationFields(HTMLParser):
@@ -25,6 +25,25 @@ class ConfigurationFields(HTMLParser):
         values = dict(attrs)
         if tag == "input" and values.get("name"):
             self.values[values["name"]] = values.get("value", "")
+
+
+class ClusterCheckFields(ConfigurationFields):
+    def __init__(self):
+        super().__init__()
+        self.selected = None
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        values = dict(attrs)
+        if tag == "select":
+            self.selected = values.get("name")
+        elif tag == "option" and self.selected:
+            if self.selected not in self.values or "selected" in values:
+                self.values[self.selected] = values.get("value", "")
+
+    def handle_endtag(self, tag):
+        if tag == "select":
+            self.selected = None
 
 
 def redirected_path(client):
@@ -90,6 +109,41 @@ def finish_configuration(human, demo, directory):
     require(saved["connection"]["remote_root"] == chosen, "Selected baseline was not persisted locally")
 
 
+def cluster_check(human, demo):
+    """Use the same preview, review and settled results a human sees."""
+    path = f"/clusters/{demo['connection_id']}/test/"
+    page = human.request("GET", path, binary=True)
+    fields = ClusterCheckFields();fields.feed(page.decode())
+    require(b"Prepare test for review" in page, "Cluster check preview is unavailable")
+    page = human.request("POST", path, fields.values, form=True, binary=True)
+    review_path = redirected_path(human)
+    require(review_path.startswith("/review/"), "Cluster check did not open execution review")
+    require(b"compute-broker-cluster-check-v1" in page, "Review lacks the diagnostic source")
+    fields = ConfigurationFields();fields.feed(page.decode())
+    require("execution_request_id" in fields.values, "Cluster check bypassed human approval")
+    human.request("POST", review_path, {**fields.values, "decision": "approve",
+        "comment": "Approved only for the disposable Slurm fixture."}, form=True, binary=True)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        page = human.request("GET", review_path, binary=True)
+        if "succeeded · accounting settled".encode() in page:
+            break
+        time.sleep(0.5)
+    else:
+        raise SmokeFailure("Cluster check did not succeed with settled accounting")
+    page = human.request("GET", path, binary=True)
+    results = PreformattedText();results.feed(page.decode())
+    for block in results.blocks:
+        try:
+            result = json.loads(block["text"])
+        except ValueError:
+            continue
+        if isinstance(result, dict) and result.get("marker") == "compute-broker-cluster-check-v1":
+            require(result.get("hostname") and result.get("python"), "Cluster check lacks remote identity")
+            return
+    raise SmokeFailure("Cluster check returned no diagnostic JSON output")
+
+
 def run():
     run.stage = "read_fixture_metadata"
     parser = argparse.ArgumentParser(description=__doc__)
@@ -140,6 +194,8 @@ def run():
                 # all travel through the newly established master socket.
                 run.stage = "reviewed_native_job"
                 job_smoke(base, args.demo_file, 90)
+                run.stage = "portal_cluster_check"
+                cluster_check(human, demo)
             finally:
                 worker.terminate()
                 worker.wait(timeout=15)
@@ -172,7 +228,7 @@ def run():
             "same_worker_on_resume": True, "master_closed_on_shutdown": True,
             "removed_configuration": True, "master_closed_on_revocation": True,
             "post_login_directory_browser": True, "created_selected_folder": True,
-            "owner_configuration_persisted": True}))
+            "owner_configuration_persisted": True, "reviewed_cluster_check": True}))
 
 
 if __name__ == "__main__":

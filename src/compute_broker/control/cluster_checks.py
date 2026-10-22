@@ -157,7 +157,7 @@ def _default_environment(connection):
 
 def _ensure_configuration(user, connection_id, revision, environment):
     with transaction.atomic():
-        current = User.objects.select_for_update().get(id=user.id)
+        current = User.objects.select_for_update(no_key=True).get(id=user.id)
         list(AuthenticationIdentity.objects.select_for_update().filter(user=current))
         connection = _owned_connection(current, connection_id)
         worker = WorkerIdentity.objects.select_for_update().get(id=connection.worker_id)

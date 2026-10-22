@@ -3,6 +3,7 @@
 <h1 data-discovery-state="{{ cluster.discovery_state }}" data-configuration-confirmed="{{ cluster.configuration_confirmed|yesno:'true,false' }}">{{ cluster.name }}</h1>
 <nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a>{% if personal_configuration %}<a href="/clusters/{{ cluster.id }}/configuration/">Cluster configuration</a><a href="/clusters/{{ cluster.id }}/directories/">Working directory</a>{% endif %}</nav>
 {% if cluster.owner_id == user.id %}<p><a href="/clusters/{{ cluster.id }}/remove/">Remove cluster configuration</a></p>{% endif %}
+{% if cluster.owner_id == user.id %}<p><a class="button" href="/clusters/{{ cluster.id }}/test/">Test cluster</a></p>{% endif %}
 <p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }} · Discovery: <strong>{{ cluster.discovery_state }}</strong></p>
 <p>Job directory: <code>{{ cluster.configuration.remote_root|default:"Legacy configuration" }}</code></p>
 <details><summary>Advanced connection details</summary><p>Worker: <a href="/workers/{{ cluster.worker_id }}/">{{ cluster.worker.name }}</a> · Credential profile: {{ cluster.configuration.credential_profile|default:"Legacy configuration" }}</p></details>
