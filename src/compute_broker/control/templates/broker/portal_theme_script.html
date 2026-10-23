@@ -1,0 +1,40 @@
+<script>
+(() => {
+  const storageKey = 'compute-broker.theme';
+  const choices = ['system', 'light', 'dark'];
+  const root = document.documentElement;
+  const system = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  let preference = 'system', selector = null;
+  function normalized(value) { return choices.includes(value) ? value : 'system'; }
+  try { preference = normalized(window.localStorage.getItem(storageKey)); } catch (_) {}
+  function apply() {
+    const theme = preference === 'system' ? (system && system.matches ? 'dark' : 'light') : preference;
+    root.dataset.theme = theme;
+    root.dataset.themePreference = preference;
+    root.style.colorScheme = theme;
+    if (selector) selector.value = preference;
+  }
+  // Apply before styles/content so saved or system dark colors use the first paint.
+  apply();
+  function systemChanged() { if (preference === 'system') apply(); }
+  if (system && typeof system.addEventListener === 'function') system.addEventListener('change', systemChanged);
+  else if (system && typeof system.addListener === 'function') system.addListener(systemChanged);
+  window.addEventListener('storage', event => {
+    if (event.key !== storageKey && event.key !== null) return;
+    preference = normalized(event.newValue);
+    apply();
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    selector = document.getElementById('portal-theme');
+    if (!selector) return;
+    selector.value = preference;
+    const picker = document.getElementById('portal-theme-picker');
+    if (picker) picker.hidden = false;
+    selector.addEventListener('change', () => {
+      preference = normalized(selector.value);
+      apply();
+      try { window.localStorage.setItem(storageKey, preference); } catch (_) {}
+    });
+  });
+})();
+</script>
