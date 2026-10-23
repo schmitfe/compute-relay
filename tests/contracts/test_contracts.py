@@ -146,11 +146,24 @@ class PlanningContractTests(unittest.TestCase):
         data["reservation"]["cpu_core_seconds"] = 16 * data["maximum_allocation"]["maximum_charge_duration_seconds"]
         validate_document("prepared-job.schema.json", data)
 
-    def test_termination_margin_is_part_of_reservation(self):
+    def test_new_packages_reserve_requested_walltime_without_added_duration(self):
         data = deepcopy(self.prepared)
         data["reservation"]["cpu_core_seconds"] = 8 * data["maximum_allocation"]["time_limit_seconds"]
         data["reservation"]["gpu_device_seconds"] = data["maximum_allocation"]["time_limit_seconds"]
+        validate_document("prepared-job.schema.json", data)
+        data["maximum_allocation"]["maximum_charge_duration_seconds"] += 60
+        data["reservation"]["cpu_core_seconds"] += 8 * 60
+        data["reservation"]["gpu_device_seconds"] += 60
         self.reject_prepared(data)
+
+    def test_policy_charge_duration_property_is_optional_and_legacy_values_are_accepted(self):
+        data = load_json(CONTRACTS / "examples" / "project-policy.json")
+        self.assertNotIn("maximum_charge_duration_seconds", data["per_job_limits"])
+        validate_document("project-policy.schema.json", data)
+        data["per_job_limits"]["maximum_charge_duration_seconds"] = 60
+        validate_document("project-policy.schema.json", data)
+        schema = load_json(CONTRACTS / "project-policy.schema.json")
+        self.assertTrue(schema["properties"]["per_job_limits"]["properties"]["maximum_charge_duration_seconds"]["deprecated"])
 
     def test_connection_revision_is_required(self):
         data = deepcopy(self.prepared)

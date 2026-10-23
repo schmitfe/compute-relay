@@ -113,15 +113,15 @@ def validate_prepared(data: dict) -> None:
         raise ValueError("GPU allocation requires an explicit GPU type")
     if allocation["time_limit_seconds"] != requested["time_limit_seconds"]:
         raise ValueError("Walltime changed after request preparation")
-    duration = allocation["maximum_charge_duration_seconds"]
-    if duration < allocation["time_limit_seconds"]:
-        raise ValueError("Maximum charge duration is below scheduler walltime")
+    duration = requested["time_limit_seconds"]
+    if allocation["maximum_charge_duration_seconds"] != duration:
+        raise ValueError("Legacy charge duration must equal requested scheduler walltime")
     expected = {
         "cpu_core_seconds": allocation["cpu_cores"] * duration,
         "gpu_device_seconds": allocation["gpu_devices"] * duration,
     }
     if data["reservation"] != expected:
-        raise ValueError("Reservation must cover the complete maximum allocation")
+        raise ValueError("Reservation must cover allocated resources multiplied by requested walltime")
 
 
 def validate_document(schema_name: str, data: dict) -> None:

@@ -47,8 +47,7 @@ def bootstrap_demo(args):
         owner = User.objects.create_user(username=username, password=password)
         worker = WorkerIdentity.objects.create(owner=owner, name="Synthetic demo worker", token_hash=token_hash(worker_token))
         profile = {"partitions": ["debug"], "accounts": ["broker"], "qos": [], "maximum_cpus": 2,
-                   "maximum_gpus": 0, "maximum_memory_mib": 1024, "maximum_time_limit_seconds": 600,
-                   "termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30}
+                   "maximum_gpus": 0, "maximum_memory_mib": 1024, "maximum_time_limit_seconds": 600}
         config = {"backend": args.backend, "profile_revision": 1, "site_profile": profile}
         if args.backend == "fake":
             config["state_directory"] = args.fake_state_directory
@@ -82,7 +81,7 @@ def bootstrap_demo(args):
         policy = {"schema_version": "1.0", "project_id": str(project.id), "revision": 1, "mode": args.mode,
                   "allowed_connection_ids": [str(connection.id)], "allowed_environment_revision_sha256": [environment.revision_sha256],
                   "allowed_gpu_types": [], "max_active_jobs": 2, "max_total_jobs": 1000,
-                  "per_job_limits": {"cpu_cores": 2, "gpu_devices": 0, "memory_mib": 1024, "time_limit_seconds": 600, "maximum_charge_duration_seconds": 635},
+                  "per_job_limits": {"cpu_cores": 2, "gpu_devices": 0, "memory_mib": 1024, "time_limit_seconds": 600},
                   "allowance": {"cpu_core_seconds": 7200, "gpu_device_seconds": 0},
                   "admission_expires_at": (timezone.now() + timedelta(days=7)).isoformat()}
         validate("project-policy.schema.json", policy)

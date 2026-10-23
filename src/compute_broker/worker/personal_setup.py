@@ -193,7 +193,7 @@ class PersonalWorker(AsyncWorker):
                         self.persist(updated)
             elif task["kind"] == "configure":
                 from compute_broker.domain.cluster_configuration import validate_cluster_configuration
-                validate_cluster_configuration(task["request"]["site_profile"], require_limits=True)
+                requested_profile = validate_cluster_configuration(task["request"]["site_profile"], require_limits=True)
                 if type(task["request"].get("module_availability_enabled", False)) is not bool:
                     raise ValueError("Invalid module listing setting")
                 result = deepcopy(self.state["last_configuration_result"]) if (
@@ -203,7 +203,7 @@ class PersonalWorker(AsyncWorker):
                     if self.state.get("last_configuration_task") != task["id"]:
                         updated = deepcopy(self.state)
                         updated["connection"]["remote_root"] = result["path"]
-                        updated["site_profile"] = task["request"]["site_profile"]
+                        updated["site_profile"] = requested_profile
                         updated["module_availability_enabled"] = task["request"].get("module_availability_enabled", False)
                         result["module_availability_enabled"] = updated["module_availability_enabled"]
                         updated["profile_generation"] = self.state.get("profile_generation", 1) + 1

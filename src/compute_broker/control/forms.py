@@ -48,7 +48,6 @@ class ProjectForm(forms.Form):
     max_gpus = forms.IntegerField(min_value=0, max_value=16, initial=0, label="GPUs per job")
     memory_mib = forms.IntegerField(min_value=128, max_value=16777216, initial=1024, label="Memory per job (MiB)")
     wall_minutes = forms.IntegerField(min_value=1, max_value=10080, initial=10, label="Scheduler time per job (minutes)")
-    charge_minutes = forms.DecimalField(min_value=1, max_value=20160, decimal_places=3, initial=11, label="Maximum charged duration per job (minutes)", help_text="Include the cluster's verified termination, overtime and cleanup margins.")
     max_active_jobs = forms.IntegerField(min_value=1, max_value=100, initial=2, label="Concurrent jobs")
     max_total_jobs = forms.IntegerField(required=False, min_value=0, max_value=1000000, initial=1000,
         label="Total submission limit", help_text="Lifetime execution authorizations across every API key. Failures and cancellations still count. Zero blocks new executions.")
@@ -92,8 +91,6 @@ class ProjectForm(forms.Form):
             data["max_total_jobs"] = 1000
         if data.get("expires_at") and data["expires_at"] <= timezone.now():
             self.add_error("expires_at", "Choose a future cutoff.")
-        if data.get("charge_minutes") is not None and data.get("wall_minutes") is not None and data["charge_minutes"] < data["wall_minutes"]:
-            self.add_error("charge_minutes", "Charged duration cannot be shorter than scheduler time.")
         types = [part.strip() for part in data.get("allowed_gpu_types", "").split(",") if part.strip()]
         if any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}", part) for part in types):
             self.add_error("allowed_gpu_types", "Use valid Slurm GPU type names.")
@@ -101,8 +98,6 @@ class ProjectForm(forms.Form):
         for name in ("cpu_hours", "gpu_hours"):
             if name in data:
                 data[name.replace("hours", "seconds")] = int((data[name] * 3600).to_integral_value(rounding=ROUND_FLOOR))
-        if "charge_minutes" in data:
-            data["charge_seconds"] = int((data["charge_minutes"] * 60).to_integral_value(rounding=ROUND_FLOOR))
         return data
 
 

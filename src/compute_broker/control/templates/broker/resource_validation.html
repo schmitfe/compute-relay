@@ -1,0 +1,13 @@
+{% load broker_resource_limits %}{% autoescape on %}
+{% if validation %}<section id="resource-validation" aria-labelledby="resource-validation-title" data-resource-valid="{{ validation.valid|yesno:'true,false,unknown' }}">
+<h2 id="resource-validation-title">Current resource check</h2>
+{% if validation.violations %}
+<p class="error"><strong>The prepared package exceeds current resource limits.</strong> Review each resource below before requesting another execution.</p>
+<div class="table-scroll"><table><thead><tr><th>Resource</th><th>Requested</th><th>Effective allocation</th><th>Limit</th><th>Above limit</th><th>Limit source</th></tr></thead><tbody>
+{% for item in validation.violations %}<tr><th>{{ item.resource|resource_label }}</th><td>{{ item.requested|default_if_none:"Not recorded" }} {{ item.unit }}</td><td>{{ item.effective }} {{ item.unit }}</td><td>{{ item.limit }} {{ item.unit }}</td><td>{{ item.excess }} {{ item.unit }}</td><td>{{ item.source|resource_source }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% if validation.project_envelope_human_override_allowed %}<p>This project permits a human reviewer to approve an exception to its per-job envelope. Cluster limits, available compute allowance and other execution checks still apply.</p>{% else %}<p>Prepare a revised job within these limits, choose a permitted cluster that fits, or ask a project administrator to change the project settings. Approval does not bypass this project's resource limits.</p>{% endif %}
+{% elif validation.valid %}<p>The prepared allocation fits the current project resource envelope. Available allowance and all other execution checks still apply.</p>{% endif %}
+<p><small>This check uses current settings. It does not change the saved package or execution history. Effective CPU and GPU allocations can exceed the requested counts when cluster allocation rules require it.</small></p>
+</section>{% endif %}
+{% endautoescape %}

@@ -312,14 +312,14 @@ class EnrollmentTests(unittest.TestCase):
 
     def test_authorized_discovery_can_renew_derived_binding_but_jobs_remain_strict(self):
         _, old, old_digest = resolve_connection(self.public, self.profiles)
-        self.profile["site_profile"]["termination_margin_seconds"] = 60
+        self.profile["site_profile"]["allocated_cpus"] = 4
         with self.assertRaises(EnrollmentError):
             resolve_connection(old, self.profiles)
         self.worker.execute(self.discovery_lease(old))
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "discovered")
         self.assertNotEqual(report["connection_revision_sha256"], old_digest)
-        self.assertEqual(report["configuration"]["site_profile"]["termination_margin_seconds"], 60)
+        self.assertEqual(report["configuration"]["site_profile"]["allocated_cpus"], 4)
         for key in ("backend", "credential_profile", "ssh", "remote_root"):
             self.assertEqual(report["configuration"][key], old[key])
         # Renewal never bypasses a withdrawn host/user/root permission.
@@ -327,9 +327,9 @@ class EnrollmentTests(unittest.TestCase):
         self.worker.execute(self.discovery_lease(old))
         self.assertEqual(self.control.calls[-1][2]["error_code"], "TARGET_NOT_ALLOWED")
 
-    def test_browser_cannot_replace_trusted_allocation_margins(self):
+    def test_browser_cannot_replace_trusted_allocation_floor(self):
         _, public, _ = resolve_connection(self.public, self.profiles)
-        public["site_profile"]["termination_margin_seconds"] = 0
+        public["site_profile"]["allocated_cpus"] = 1
         with self.assertRaises(EnrollmentError):
             resolve_connection(public, self.profiles)
 

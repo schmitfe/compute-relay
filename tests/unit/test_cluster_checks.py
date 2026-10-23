@@ -168,13 +168,32 @@ def test_incomplete_disabled_or_unconfirmed_connection_blocks_check(diagnostic, 
     assert not ClusterCheckConfiguration.objects.exists()
 
 
-@pytest.mark.parametrize("change", [{"cleanup_margin_seconds": None}, {"allocated_gpus": 1},
+@pytest.mark.parametrize("change", [{"allocated_gpus": 1},
     {"allocated_cpus": 128, "maximum_cpus": 128}, {"maximum_memory_mib": 64}])
 def test_unsafe_or_unaffordable_cpu_only_shape_is_not_given_a_bigger_grant(diagnostic, change):
     diagnostic.connection.configuration["site_profile"].update(change)
     diagnostic.connection.save(update_fields=["configuration"])
     assert form_post(human(diagnostic.owner), diagnostic.path, data(diagnostic)).status_code == 409
     assert not ClusterCheckConfiguration.objects.exists()
+
+
+def test_cluster_check_uses_requested_walltime_without_legacy_margin_requirements(diagnostic):
+    from compute_broker.domain.cluster_configuration import TIMING_FIELDS
+    profile = diagnostic.connection.configuration["site_profile"]
+    profile.update(termination_margin_seconds=None, overtime_margin_seconds=6000, cleanup_margin_seconds=-1,
+        automatic_execution_allowed=False)
+    profile["allocated_cpus"] = 4
+    profile["maximum_cpus"] = 4
+    diagnostic.connection.save(update_fields=["configuration"])
+    plan = cluster_checks.resource_plan(diagnostic.connection)
+    assert plan["reservation_cpu_seconds"] == 240
+    assert plan["profile"]["automatic_execution_allowed"] is False
+    assert not set(plan["profile"]) & set(TIMING_FIELDS)
+    config, job = prepared(diagnostic)
+    assert config.project.grant.policy["per_job_limits"] == {"cpu_cores": 4, "gpu_devices": 0,
+        "memory_mib": 128, "time_limit_seconds": 60}
+    assert job.manifest["reservation"]["cpu_core_seconds"] == 240
+    assert job.execution_requests.get().state == "awaiting_approval"
 
 
 def test_stale_preview_revision_creates_no_diagnostic_project(diagnostic):

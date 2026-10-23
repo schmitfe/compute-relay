@@ -12,6 +12,7 @@ import posixpath
 import re
 
 from compute_broker.backends import canonical_json_bytes
+from compute_broker.domain.cluster_configuration import TIMING_FIELDS
 
 
 class EnrollmentError(ValueError):
@@ -80,6 +81,10 @@ def profile_metadata(alias: str, profile: dict) -> dict:
     if not isinstance(site, dict) or set(site) - _SITE_FIELDS:
         raise EnrollmentError("INVALID_CREDENTIAL_PROFILE")
     for key, value in site.items():
+        if key in TIMING_FIELDS:
+            # Retained raw private state is still fingerprinted for old jobs,
+            # but these obsolete settings do not enter active public metadata.
+            continue
         if key == "automatic_execution_allowed":
             if type(value) is not bool:
                 raise EnrollmentError("INVALID_CREDENTIAL_PROFILE")
@@ -96,7 +101,7 @@ def profile_metadata(alias: str, profile: dict) -> dict:
     return {"alias": alias, "backend": profile["backend"], "revision_sha256": fingerprint,
             "allowed_hosts": copy.deepcopy(hosts), "allowed_users": copy.deepcopy(users),
             "allowed_ports": copy.deepcopy(ports), "remote_root_prefixes": copy.deepcopy(roots),
-            "site_profile": copy.deepcopy(site)}
+            "site_profile": {key: copy.deepcopy(value) for key, value in site.items() if key not in TIMING_FIELDS}}
 
 
 def resolve_connection(configuration: dict, profiles: dict, *, refresh: bool = False) -> tuple[dict, dict, str]:
@@ -121,14 +126,22 @@ def resolve_connection(configuration: dict, profiles: dict, *, refresh: bool = F
         raise EnrollmentError("TARGET_NOT_ALLOWED")
     revision = profile.get("profile_revision", 1)
     fingerprint = metadata["revision_sha256"]
+    configured_site = configuration.get("site_profile", metadata["site_profile"])
+    if not isinstance(configured_site, dict):
+        raise EnrollmentError("INVALID_CONNECTION_CONFIGURATION")
+    active_site = {key: value for key, value in configured_site.items() if key not in TIMING_FIELDS}
     if not refresh and (configuration.get("profile_revision", revision) != revision
             or configuration.get("credential_profile_revision_sha256", fingerprint) != fingerprint
-            or configuration.get("site_profile", metadata["site_profile"]) != metadata["site_profile"]):
+            or active_site != metadata["site_profile"]):
         raise EnrollmentError("CREDENTIAL_PROFILE_CHANGED")
     public = {"backend": metadata["backend"], "credential_profile": alias, "ssh": copy.deepcopy(ssh),
               "remote_root": root, "profile_revision": revision,
               "credential_profile_revision_sha256": fingerprint,
               "site_profile": metadata["site_profile"]}
+    if not refresh and any(key in configured_site for key in TIMING_FIELDS):
+        # Keep the immutable digest used by an already prepared historical
+        # package. A normal discovery refresh publishes the canonical profile.
+        public["site_profile"] = copy.deepcopy(configured_site)
     digest = hashlib.sha256(canonical_json_bytes(public)).hexdigest()
     if not refresh and configuration.get("revision_sha256", digest) != digest:
         raise EnrollmentError("CONNECTION_REVISION_CHANGED")

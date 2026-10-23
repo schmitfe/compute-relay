@@ -14,13 +14,13 @@
     "allowed_gpu_types": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/name"}},
     "per_job_limits": {
       "type": "object", "additionalProperties": false,
-      "required": ["cpu_cores", "gpu_devices", "memory_mib", "time_limit_seconds", "maximum_charge_duration_seconds"],
+      "required": ["cpu_cores", "gpu_devices", "memory_mib", "time_limit_seconds"],
       "properties": {
         "cpu_cores": {"type": "integer", "minimum": 1, "maximum": 1024},
         "gpu_devices": {"type": "integer", "minimum": 0, "maximum": 16},
         "memory_mib": {"type": "integer", "minimum": 128, "maximum": 16777216},
         "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60},
-        "maximum_charge_duration_seconds": {"type": "integer", "minimum": 60, "maximum": 1209600}
+        "maximum_charge_duration_seconds": {"type": "integer", "minimum": 60, "maximum": 1209600, "deprecated": true, "description": "Legacy policy field accepted for existing documents and ignored. Reservations use requested scheduler walltime; final charges use observed allocated runtime."}
       }
     },
     "max_active_jobs": {"type": "integer", "minimum": 1, "maximum": 100},

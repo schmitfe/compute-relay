@@ -50,12 +50,12 @@ def package(sample):
     return prepared, files
 
 
-def test_prepare_is_deterministic_and_reserves_the_charge_bound(sample):
+def test_prepare_is_deterministic_and_reserves_requested_walltime(sample):
     prepared, files = package(sample)
     assert prepared == prepare(*sample[:3], REVISION)
     manifest = prepared["manifest"]
-    assert manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == 95
-    assert manifest["reservation"] == {"cpu_core_seconds": 190, "gpu_device_seconds": 0}
+    assert manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == 60
+    assert manifest["reservation"] == {"cpu_core_seconds": 120, "gpu_device_seconds": 0}
     assert "#SBATCH --time=1\n" in prepared["generated_files"]["_broker/batch.sh"]
     assert "#SBATCH --no-requeue\n" in prepared["generated_files"]["_broker/batch.sh"]
     assert "exec /usr/bin/python3 ./main.py\n" in prepared["generated_files"]["_broker/batch.sh"]
@@ -101,10 +101,11 @@ def test_requested_walltime_must_be_an_explicit_whole_minute(sample):
         package(sample)
 
 
-def test_native_unknown_margin_prevents_preparation(sample):
+def test_native_preparation_needs_no_margin_configuration(sample):
     sample[2]["backend"] = "slurm"
-    with pytest.raises(BackendError, match="overtime_margin"):
-        package(sample)
+    sample[2]["site_profile"] = {"partitions": ["debug"], "accounts": ["broker"]}
+    prepared, _ = package(sample)
+    assert prepared["manifest"]["reservation"] == {"cpu_core_seconds": 120, "gpu_device_seconds": 0}
 
 
 def test_job_arguments_are_quoted_as_data(sample):
@@ -299,7 +300,7 @@ def test_ssh_mfa_fails_closed_instead_of_reauthenticating():
     assert "BatchMode=yes" in argv
 
 
-def test_discovery_separates_visibility_from_access_and_unknown_cleanup():
+def test_discovery_separates_visibility_from_access_without_timing_margins():
     response = {
         "version": {"returncode": 0, "stdout": "slurm 22.05\n"},
         "nodes": {"returncode": 0, "stdout": "gpu01|gpu*|32|256000|gpu:a100:4|idle\n"},
@@ -311,21 +312,11 @@ def test_discovery_separates_visibility_from_access_and_unknown_cleanup():
     assert result["nodes"][0]["gres"] == "gpu:a100:4"
     assert result["nodes"][0]["partition"] == "gpu"
     assert result["association_query_status"] == "unknown"
-    candidate = result["timing_candidates"]["gpu"]
-    assert candidate["termination_margin_seconds"] == 5
-    assert candidate["overtime_margin_seconds"] == 120
-    assert candidate["cleanup_margin_seconds"] is None
-    assert candidate["finite_timing_candidate"] is False
-    verified_cleanup = parse_discovery(response, {"site_profile": {"cleanup_margin_seconds": 30}})
-    assert verified_cleanup["timing_candidates"]["gpu"]["finite_timing_candidate"] is True
-    assert verified_cleanup["timing_candidates"]["gpu"]["requires_operator_verification"] is True
-    response["partitions"]["stdout"] = "PartitionName=gpu OverTimeLimit=UNLIMITED\n"
-    assert parse_discovery(response, {"site_profile": {"cleanup_margin_seconds": 30}})["timing_candidates"]["gpu"]["finite_timing_candidate"] is False
-    response["partitions"]["stdout"] = "PartitionName=gpu OverTimeLimit=NONE\n"
-    inherited = parse_discovery(response, {})["timing_candidates"]["gpu"]
-    assert inherited["overtime_margin_seconds"] == 0
-    assert inherited["overtime_source"] == "global"
-    assert inherited["cleanup_margin_seconds"] is None
+    assert "timing_candidates" not in result
+    assert result["scheduler_settings"]["KillWait"] == "5 sec"
+    assert not any("finite verified site margin" in note for note in result["notes"])
+    legacy = parse_discovery(response, {"site_profile": {"cleanup_margin_seconds": 30}})
+    assert "timing_candidates" not in legacy
 
 
 def test_helper_discovery_performs_only_fixed_readonly_queries(monkeypatch):

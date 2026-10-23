@@ -56,7 +56,7 @@ Do not use default Compose flat networking as the authorization boundary. The wo
 | Database/storage | Protected local paths or PostgreSQL secret reference, object store adapter |
 | Workers | Worker IDs, enrollment trust, assigned connection IDs, lease/timeouts and outbound target allowlist |
 | Connections | Host/port/user, pinned host key/CA, service key reference, protected ControlPath, absolute Slurm/Python paths, working root |
-| Site accounting | Supported Slurm version, rounding/allocation behavior, finite termination margin and evidence; automatic mode capability |
+| Site accounting | Supported Slurm version, rounding/allocation behavior and final allocated-runtime evidence; automatic mode capability; reservations use requested walltime |
 
 Connection settings are immutable revisions. Editing host, username, scheduler binaries, working root, host-key trust or allocation model invalidates prepared packages using the prior target configuration. Routine liveness/idle-resource observations do not invalidate otherwise identical reviewed bytes.
 

@@ -345,10 +345,10 @@ def test_hello_advertises_new_folder_support_explicitly(personal):
 
 def test_invalid_configuration_errors_follow_their_field_and_link_from_summary(personal):
     response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal,
-        maximum_cpus=0, cleanup_margin_seconds=-1, remote_root="relative"))
+        maximum_cpus=0, maximum_memory_mib=0, remote_root="relative"))
     assert response.status_code == 200 and not ConnectorTask.objects.exists()
     body = response.content.decode()
-    for name in ("maximum_cpus", "cleanup_margin_seconds", "remote_root"):
+    for name in ("maximum_cpus", "maximum_memory_mib", "remote_root"):
         assert f'href="#id_{name}"' in body
         assert f'id="id_{name}_error"' in body
         assert body.index(f'name="{name}"') < body.index(f'id="id_{name}_error"')

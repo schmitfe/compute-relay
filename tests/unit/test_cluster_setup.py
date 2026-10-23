@@ -166,6 +166,12 @@ def test_binding_creates_one_connection_then_discovery_unlocks_project_use(manag
     report_discovery(context.worker, connection.id, discovery_report(connection, context.worker, lease))
     connection.refresh_from_db()
     assert connection.setup_complete and connection_allowed(context.credential, connection.id)
+    # Relational membership alone is not an execution grant. Newly configured
+    # targets become agent-visible only after the project explicitly grants it.
+    assert str(connection.id).encode() not in agent_get(context.token, "/api/v1/connections").content
+    grant = context.project.grant
+    grant.policy["allowed_connection_ids"].append(str(connection.id))
+    grant.save(update_fields=["policy"])
     assert str(connection.id).encode() in agent_get(context.token, "/api/v1/connections").content
     assert human(context.owner).get(f"/clusters/setup/{draft.id}/").url == f"/clusters/{connection.id}/"
 

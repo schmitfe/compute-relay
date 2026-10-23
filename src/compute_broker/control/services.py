@@ -56,6 +56,9 @@ def allowance(project):
         admitted=Count("id"), active=Count("id", filter=~Q(state__in=TERMINAL)))
     return {
         "project_id": str(project.id), "mode": grant.policy["mode"], "paused": project.paused,
+        "per_job_limits": {field: grant.policy["per_job_limits"][field]
+                           for field in ("cpu_cores", "gpu_devices", "memory_mib", "time_limit_seconds")},
+        "policy_revision": grant.policy["revision"], "admission_expires_at": grant.policy["admission_expires_at"],
         "limit": limit, "spent": {"cpu_core_seconds": grant.spent_cpu, "gpu_device_seconds": grant.spent_gpu},
         "reserved": {"cpu_core_seconds": grant.reserved_cpu, "gpu_device_seconds": grant.reserved_gpu},
         "available": {"cpu_core_seconds": max(0, limit["cpu_core_seconds"] - grant.spent_cpu - grant.reserved_cpu), "gpu_device_seconds": max(0, limit["gpu_device_seconds"] - grant.spent_gpu - grant.reserved_gpu)},
@@ -108,6 +111,10 @@ def prepare_job(job):
     environment = bound_environment(job.project, job.request)
     config = dict(connection.configuration, backend=connection.backend, revision_sha256=connection.revision_sha256)
     env = dict(environment.configuration, id=str(environment.id), revision_sha256=environment.revision_sha256)
+    from .resource_api import planned_allocation, resource_error, violations_for_connection
+    violations = violations_for_connection(job.request["resources"], planned_allocation(job.request["resources"], config), config)
+    if violations:
+        raise resource_error(violations)
     result = prepare(job.request, env, config, str(job.id))
     if job.extension_name:
         from compute_broker.extensions import services_for
@@ -137,12 +144,8 @@ def prepare_job(job):
 
 
 def _within_envelope(job, policy):
-    allocation = job.manifest["maximum_allocation"]
-    limits = policy["per_job_limits"]
-    return (allocation["cpu_cores"] <= limits["cpu_cores"] and allocation["gpu_devices"] <= limits["gpu_devices"]
-            and allocation["time_limit_seconds"] <= limits["time_limit_seconds"]
-            and allocation["maximum_charge_duration_seconds"] <= limits["maximum_charge_duration_seconds"]
-            and job.request["resources"]["memory_mib"] <= limits["memory_mib"])
+    from compute_broker.domain.resource_limits import allocation_violations
+    return not allocation_violations(job.request["resources"], job.manifest["maximum_allocation"], policy["per_job_limits"])
 
 
 def authorize(execution_request, *, decision=None):
@@ -178,7 +181,9 @@ def authorize(execution_request, *, decision=None):
     if gpu_type and gpu_type not in policy["allowed_gpu_types"]:
         raise BrokerError("POLICY_DENIED", "GPU type is outside project policy.", 403)
     if not _within_envelope(job, policy) and not (policy["mode"] == "mixed" and decision):
-        raise BrokerError("RESOURCE_LIMIT", "Effective allocation exceeds the project envelope.", 409)
+        from .resource_api import resource_error
+        from compute_broker.domain.resource_limits import allocation_violations
+        raise resource_error(allocation_violations(job.request["resources"], job.manifest["maximum_allocation"], policy["per_job_limits"]))
     attempts = Attempt.objects.filter(job__project=project)
     if attempts.count() >= policy.get("max_total_jobs", DEFAULT_MAX_TOTAL_JOBS):
         raise BrokerError("TOTAL_JOB_LIMIT", "The project has reached its lifetime submission limit.", 409)
@@ -256,6 +261,7 @@ def serialize_attempt(attempt):
 
 
 def serialize_job(job, *, package=False):
+    from .resource_api import resource_validation
     executions = []
     for execution in job.execution_requests.all().order_by("created_at"):
         decision = ApprovalDecision.objects.filter(execution_request=execution).first()
@@ -266,6 +272,7 @@ def serialize_job(job, *, package=False):
               "state": job.display_state, "package_state": job.state, "request": job.request,
               "manifest_sha256": job.manifest_sha256, "execution_requests": executions,
               "attempts": [serialize_attempt(a) for a in job.attempts.order_by("created_at")]}
+    result["resource_validation"] = resource_validation(job)
     if package or job.manifest:
         result["manifest"] = job.manifest
     if package:
@@ -361,6 +368,10 @@ def dispatch(worker, attempt_id, data):
             raise BrokerError("REVISION_CHANGED", "Package or connection binding changed.", 409)
         policy = attempt.grant.policy
         validate("project-policy.schema.json", policy)
+        grant = attempt.grant
+        if (grant.spent_cpu + grant.reserved_cpu > policy["allowance"]["cpu_core_seconds"]
+                or grant.spent_gpu + grant.reserved_gpu > policy["allowance"]["gpu_device_seconds"]):
+            raise BrokerError("BUDGET_UNAVAILABLE", "Actual usage and outstanding reservations exceed the project allowance. New dispatch is blocked.", 409)
         if datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")) <= timezone.now():
             raise BrokerError("GRANT_EXPIRED", "Dispatch cutoff has passed.", 409)
         job = attempt.job
@@ -399,7 +410,6 @@ def _settle(attempt, cpu, gpu, evidence, *, release=False):
     LedgerEntry.objects.create(grant=grant, attempt=attempt, action=action, cpu=cpu, gpu=gpu, evidence=evidence)
     attempt.accounting_state = "released" if release else "settled"
     if cpu > attempt.reservation_cpu or gpu > attempt.reservation_gpu:
-        Project.objects.filter(id=attempt.job.project_id).update(paused=True)
         attempt.error_code = "OBSERVED_OVERAGE"
 
 

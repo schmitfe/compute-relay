@@ -17,7 +17,7 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `GET /health/live` | No private information | Process liveness only |
 | `GET /health/ready` | Internal/operator | Dependency readiness; no secrets, hosts or project details in public response |
 | `GET /api/v1/projects/{id}/allowance` | Project read | Limits, spent, reserved, available, debt, policy version and outstanding uncertainty |
-| `GET /api/v1/connections` | Project read | Only assigned connections, safe capabilities, observation timestamps and authentication state |
+| `GET /api/v1/connections` | Project read | Assigned connections, safe capabilities, authentication state and current effective project/cluster resource limits |
 | `POST /api/v1/connections/{id}/refresh` | Human connection owner/admin | Queue bounded discovery; agents read cached snapshots rather than flood schedulers |
 | `POST /api/v1/projects/{id}/objects` | Upload scope | Stream one regular file; return immutable digest/size descriptor after verification |
 | `POST /api/v1/jobs` | `jobs:submit` | Create immutable revision from the job-request schema; does not execute |
@@ -47,9 +47,15 @@ A human decision binds an execution-request UUID as well as the immutable revisi
 
 ### Current authenticated project discovery
 
-`GET /api/v1/context` returns `schema_version: "1.0"`, `project` (`id`, `name`) and `credential` (`id`, `scopes`, `execution_mode`). It requires a valid project bearer key and current issuing-user eligibility/project membership, but no additional job scope. Human browser sessions and worker keys do not authorize it. It returns only the key's own project and no token, token hash, SSH settings or private credential references; success responses use `Cache-Control: no-store` and vary on `Authorization`.
+`GET /api/v1/context` returns `schema_version: "1.0"`, `project` (`id`, `name`) and `credential` (`id`, `scopes`, `execution_mode`). It requires a valid project bearer key and current issuing-user eligibility/project membership. Keys with `jobs:read` also receive `compute` (the current `/api/v1/connections` payload) and `allowance` (the project's current allowance response); other keys receive identity metadata only. Human browser sessions and worker keys do not authorize it. It returns only the key's own project and no token, token hash, SSH settings or private credential references; success responses use `Cache-Control: no-store` and vary on `Authorization`.
 
 The stdio adapter uses this endpoint before starting MCP and derives routing identity from the verified key. `get_project_context` refreshes the same metadata. Job preparation/revision and workflow node requests may omit `project_id` through MCP; the adapter inserts it before calling the existing REST API. Direct REST job requests still require the canonical project ID, and all REST endpoints continue to enforce their own scopes/project checks. Optional legacy `BROKER_PROJECT_ID` must match the discovered identity or adapter startup fails.
+
+Read current `effective_limits` from `list_compute_targets` before sizing work. Each target combines the project's per-job CPU/GPU/memory/walltime ceilings with the configured cluster ceilings and protocol bounds. `per_job_limits` contains the usable minima, `allocation_floors` describes CPU/GPU rounding, and `project_limits`/`cluster_limits` explain the inputs. `feasible`, `blocking_reasons` and `unknowns` report configurations that cannot fit even a minimal request or lack necessary information. An independent maximum does not prove that all maxima coexist on one node or that a selected partition/account/QoS accepts the job. These are configured ceilings, not live free-resource counts. `mixed` policy permits a separate human-review path above its automatic envelope while cluster caps and allowance still apply.
+
+The connections payload also identifies `policy_revision`, project `per_job_limits`, `project_mode`, `project_paused`, `admission_expires_at`, `key_execution_mode`, `allowed_gpu_types` and `as_of`, alongside `connections` and cluster-scoped `environments`. A target reports `requires_human_approval` and its immutable `connection_revision_sha256`. Job detail includes `resource_validation` so a prepared package's effective allocation can be compared with current limits.
+
+Read `get_project_allowance` as well: available CPU/GPU seconds, debt, active jobs, lifetime submissions and expiry can block a job that fits the per-job ceilings. Reserve effective allocated resources multiplied by requested walltime. Final settlement charges actual allocated elapsed time in full, including usage beyond the reservation. No termination, overtime or cleanup interval is added to planning limits.
 
 ## Idempotency and errors
 
@@ -64,14 +70,14 @@ Use an error envelope:
     "message": "The project has insufficient unreserved GPU time.",
     "request_id": "55555555-5555-4555-8555-555555555555",
     "retryable": false,
-    "details": {"dimension": "gpu_device_seconds", "required": 3660, "available": 1800}
+    "details": {"dimension": "gpu_device_seconds", "required": 3600, "available": 1800}
   }
 }
 ```
 
 | HTTP status | Codes and use |
 | --- | --- |
-| `400` | `INVALID_JSON`, `INVALID_REQUEST`, `UNKNOWN_FIELD`, `UNSUPPORTED_FEATURE`, unsafe logical path |
+| `400` | `INVALID_JSON`, `INVALID_REQUEST`, `UNKNOWN_FIELD`, `UNSUPPORTED_FEATURE`, `RESOURCE_LIMIT`, unsafe logical path |
 | `401` | Missing, expired or revoked credential; remote MCP also emits appropriate authentication metadata |
 | `403` | `SCOPE_DENIED`, connection/environment disallowed, human authority required |
 | `404` | Missing object or inaccessible cross-project reference without existence disclosure |
@@ -82,15 +88,34 @@ Use an error envelope:
 
 Login required, pending human review, and queued work normally appear as structured workflow states on a successful request. A later unknown submission returns a state/reconciliation explanation, not a misleading HTTP error inviting blind resubmission. Raw SSH exceptions, secrets, connection command lines and private paths are never passed through to agents.
 
+Resource rejections identify every exceeded dimension instead of requiring the agent to guess:
+
+```json
+{
+  "error": {
+    "code": "RESOURCE_LIMIT",
+    "message": "Effective CPU allocation exceeds the project limit.",
+    "details": {
+      "violations": [
+        {"resource": "cpu_cores", "requested": 3, "effective": 4,
+         "limit": 2, "excess": 2, "source": "project", "unit": "cores"}
+      ]
+    }
+  }
+}
+```
+
+The four resources are `cpu_cores`, `gpu_devices`, `memory_mib` and `time_limit_seconds`; units are `cores`, `devices`, `MiB` and `seconds`. `effective` includes configured allocation rounding, and `source` identifies a project or cluster restriction. Limits are rechecked during preparation and admission, so previously read values may become stale. Refresh context, targets and allowance, then revise the resource request or choose another permitted target; do not repeatedly submit the same rejected package. The local client retains its stable `CONTROL_HTTP_ERROR` code/status and surfaces `broker_code: RESOURCE_LIMIT` with sanitized numeric `details`. It bounds error-body reads and discards remote prose and unrecognized fields before rendering the MCP tool error.
+
 ## MCP tools
 
 Local stdio MCP is a facade under the agent account calling the authenticated service API. It does not import Django models, read the control database, or inherit an unrestricted SSH agent. The application API remains the policy authority even if the facade is modified.
 
 | Tool | Scope | Behavior |
 | --- | --- | --- |
-| `get_project_context` | Valid project key and current membership | The key's project, scopes and execution-mode preference; no secret values |
-| `list_compute_targets` | `jobs:read` | Assigned targets, capabilities and freshness |
-| `get_project_allowance` | `jobs:read` | Shared balance, reservations and policy |
+| `get_project_context` | Valid project key and current membership | The key's project, scopes and execution-mode preference; planning limits/targets when `jobs:read` is present; no secret values |
+| `list_compute_targets` | `jobs:read` | Assigned targets, capabilities and current `effective_limits` |
+| `get_project_allowance` | `jobs:read` | Shared balance, reservations, current per-job policy and submission limits |
 | `upload_job_file` | Upload scope | Bounded content upload; local bridge may read only configured local roots |
 | `prepare_job` | `jobs:submit` | Create/prepare immutable revision, return review URL and required reservation |
 | `request_execution` | `jobs:submit` | Request human review or deterministic budgeted admission |
@@ -122,6 +147,6 @@ Human login/MFA uses a different narrow channel that can interact only with a co
 
 ## Job example
 
-See [GPU request](../contracts/examples/gpu-job.json), [CPU request](../contracts/examples/cpu-job.json), [prepared GPU package](../contracts/examples/prepared-gpu-job.json), and [project policy](../contracts/examples/project-policy.json). The GPU example requests 8 cores and 1 A100 for 3600 seconds. Its synthetic site envelope adds 60 seconds of termination margin, so the reservation is 29,280 core-seconds and 3,660 GPU-seconds. Real site margins must be measured/configured before automatic admission.
+See [GPU request](../contracts/examples/gpu-job.json), [CPU request](../contracts/examples/cpu-job.json), [prepared GPU package](../contracts/examples/prepared-gpu-job.json), and [project policy](../contracts/examples/project-policy.json). The GPU example requests 8 cores and 1 A100 for 3,600 seconds, reserving 28,800 core-seconds and 3,600 GPU-seconds. Settlement uses actual observed allocated runtime, including any elapsed time beyond the reservation.
 
 The example manifest uses synthetic file digests. Runtime tests must build real file bundles, compute canonical manifests, verify actual hashes and compare the final scheduler script against what the reviewer saw.

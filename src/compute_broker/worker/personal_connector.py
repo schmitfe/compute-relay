@@ -94,9 +94,11 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     lifetime = hints.get("session_seconds", 28800)
     if type(lifetime) is not int or not 60 <= lifetime <= 86400:
         raise ValueError("Session lifetime must be 60–86400 seconds.")
+    from compute_broker.domain.cluster_configuration import validate_cluster_configuration
+    site_profile = validate_cluster_configuration(setup["site_profile"], require_limits=False)
     return {"schema_version": "1.0", "owner_id": owner, "registration_id": identifier, "name": setup["name"],
         "broker_url": setup["broker_url"], "connection": private, "session_seconds": lifetime,
-        "allow_insecure_http": allow_insecure_http, "site_profile": setup["site_profile"],
+        "allow_insecure_http": allow_insecure_http, "site_profile": site_profile,
         "module_discovery_mode": "auto", "module_availability_enabled": hints.get("module_availability_enabled", False)}
 
 

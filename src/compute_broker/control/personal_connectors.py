@@ -41,7 +41,9 @@ def check_idle(registration):
 
 
 def site_profile(registration):
-    profile = dict(registration.connection.configuration.get("site_profile", {})) if registration.connection_id else {}
+    from compute_broker.domain.cluster_configuration import TIMING_FIELDS
+    profile = {key: value for key, value in registration.connection.configuration.get("site_profile", {}).items()
+        if key not in TIMING_FIELDS} if registration.connection_id else {}
     profile["automatic_execution_allowed"] = False
     return profile
 

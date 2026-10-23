@@ -11,6 +11,7 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
+from compute_broker.domain.cluster_configuration import TIMING_FIELDS
 from .auth import worker_identity
 from .cluster_services import PUBLIC_CONFIG_FIELDS
 from .cluster_setup import canonical_root
@@ -258,14 +259,16 @@ def report(request, task_id):
             idle(connection)
             config = document.get("configuration")
             profile = next((p for p in worker.profiles if p.get("alias") == connection.configuration["credential_profile"]), None)
+            def active_site(value):
+                return {key: item for key, item in value.items() if key not in TIMING_FIELDS} if isinstance(value, dict) else None
             if (result.get("ok") is not True or result.get("writable") is not True
                     or not isinstance(config, dict) or set(config) != PUBLIC_CONFIG_FIELDS or not profile
                     or any(config.get(key) != connection.configuration.get(key) for key in ("backend", "ssh", "credential_profile"))
-                    or config.get("site_profile") != task.request["site_profile"]
+                    or active_site(config.get("site_profile")) != active_site(task.request["site_profile"])
                     or result.get("module_availability_enabled", False) is not task.request.get("module_availability_enabled", False)
                     or not canonical_root(config.get("remote_root")) or config.get("remote_root") != result.get("path")
                     or config.get("remote_root") not in profile["remote_root_prefixes"]
-                    or config.get("site_profile") != profile["site_profile"]
+                    or active_site(config.get("site_profile")) != active_site(profile["site_profile"])
                     or config.get("credential_profile_revision_sha256") != profile["revision_sha256"]):
                 raise BrokerError("INVALID_CONFIGURATION", "The connector did not confirm the requested cluster configuration.", 409)
             connection.configuration, connection.revision_sha256 = config, digest(config)

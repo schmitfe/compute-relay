@@ -31,7 +31,10 @@ def test_context_returns_only_current_keys_project_and_public_metadata(broker):
     response = Client().get("/api/v1/context", {"project_id": str(uuid4())},
                             HTTP_AUTHORIZATION="Bearer " + c.token)
     assert response.status_code == 200
-    assert response.json() == {"schema_version": "1.0",
+    result = response.json()
+    assert result.pop("compute")["per_job_limits"]["cpu_cores"] == 8
+    assert result.pop("allowance")["project_id"] == str(c.project.id)
+    assert result == {"schema_version": "1.0",
         "project": {"id": str(c.project.id), "name": c.project.name},
         "credential": {"id": str(c.credential.id), "scopes": c.credential.scopes,
                        "execution_mode": "inherit"}}
@@ -47,7 +50,9 @@ def test_context_does_not_require_or_grant_a_job_scope(broker):
     c.credential.scopes = ["objects:write"]
     c.credential.save(update_fields=["scopes"])
     client = Client(HTTP_AUTHORIZATION="Bearer " + c.token)
-    assert client.get("/api/v1/context").status_code == 200
+    response = client.get("/api/v1/context")
+    assert response.status_code == 200
+    assert "compute" not in response.json() and "allowance" not in response.json()
     assert client.get("/api/v1/connections").status_code == 403
     assert client.post("/api/v1/context").status_code == 405
 

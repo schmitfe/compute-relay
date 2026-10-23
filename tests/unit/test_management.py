@@ -42,8 +42,7 @@ def management(db, settings, tmp_path):
                                                       "allowed_ports": [22], "remote_root_prefixes": ["/fixture/jobs"]}])
     profile = {"partitions": ["debug"], "accounts": ["broker"], "qos": [],
                "maximum_cpus": 2, "maximum_gpus": 1, "maximum_memory_mib": 1024,
-               "maximum_time_limit_seconds": 600, "termination_margin_seconds": 5,
-               "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30}
+               "maximum_time_limit_seconds": 600}
     worker.profiles[0].update({"revision_sha256": "a" * 64, "site_profile": profile})
     worker.save(update_fields=["profiles"])
     connections = []
@@ -94,7 +93,7 @@ def form_post(client, path, data=None):
 
 def project_data(context, **changes):
     data = {"name": "updated managed project", "mode": "approval_required", "cpu_hours": "2", "gpu_hours": "1",
-            "max_cpus": "2", "max_gpus": "1", "memory_mib": "512", "wall_minutes": "10", "charge_minutes": "11",
+            "max_cpus": "2", "max_gpus": "1", "memory_mib": "512", "wall_minutes": "10",
             "max_active_jobs": "2", "max_total_jobs": "1000", "expires_at": (timezone.now() + timedelta(days=3)).isoformat(),
             "connections": [str(c.id) for c in context.connections], "environments": [str(context.environment.id)],
             "allowed_gpu_types": "a100"}
@@ -326,7 +325,9 @@ def test_multiple_keys_use_existing_project_grant_and_same_balance(management):
     for name in ("Codex test", "Claude test"):
         secret, key = issued(form_post(owner, f"/projects/{context.project.id}/keys/new/", key_data(context, name=name)))
         key_ids.append(key.id)
-        assert agent_get(secret, f"/api/v1/projects/{context.project.id}/allowance").json() == original
+        observed = agent_get(secret, f"/api/v1/projects/{context.project.id}/allowance").json()
+        assert observed.pop("compute")["per_job_limits"]["cpu_cores"] == 2
+        assert observed == original
     assert len(set(key_ids)) == 2
     assert Grant.objects.filter(project=context.project).count() == 1
     assert Grant.objects.get(project=context.project).id == context.grant.id
@@ -519,14 +520,27 @@ def test_edit_limits_preserves_spent_reserved_and_ledger_identity(management):
     context.grant.refresh_from_db()
     assert context.grant.policy["allowance"]["cpu_core_seconds"] == 10800
     assert context.grant.policy["per_job_limits"]["cpu_cores"] == 1
+    assert "maximum_charge_duration_seconds" not in context.grant.policy["per_job_limits"]
     assert (context.grant.spent_cpu, context.grant.reserved_cpu) == (120, 60)
     assert Grant.objects.filter(project=context.project).count() == 1
+
+
+def test_project_walltime_is_the_only_duration_field_and_legacy_charge_post_is_ignored(management):
+    context = management
+    owner = human(context.owner)
+    page = owner.get(f"/projects/{context.project.id}/")
+    assert b'name="charge_minutes"' not in page.content
+    response = form_post(owner, f"/projects/{context.project.id}/",
+        project_data(context, wall_minutes="10", charge_minutes="1"))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["per_job_limits"]["time_limit_seconds"] == 600
+    assert "maximum_charge_duration_seconds" not in context.grant.policy["per_job_limits"]
 
 
 @pytest.mark.parametrize("changes", [
     {"cpu_hours": "0"}, {"cpu_hours": "NaN"}, {"cpu_hours": "Infinity"},
     {"cpu_hours": "10000000000000000"}, {"wall_minutes": "0"},
-    {"charge_minutes": "1", "wall_minutes": "10"},
 ])
 def test_invalid_or_insufficient_limit_edits_leave_existing_policy(management, changes):
     context = management

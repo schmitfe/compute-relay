@@ -113,7 +113,7 @@ def project_policy(project, data, revision):
             "allowed_environment_revision_sha256": sorted(set(e.revision_sha256 for e in data["environments"])),
             "allowed_gpu_types": data["gpu_types"], "max_active_jobs": data["max_active_jobs"], "max_total_jobs": data.get("max_total_jobs", 1000),
             "per_job_limits": {"cpu_cores": data["max_cpus"], "gpu_devices": data["max_gpus"], "memory_mib": data["memory_mib"],
-                               "time_limit_seconds": data["wall_minutes"] * 60, "maximum_charge_duration_seconds": data["charge_seconds"]},
+                               "time_limit_seconds": data["wall_minutes"] * 60},
             "allowance": {"cpu_core_seconds": data["cpu_seconds"], "gpu_device_seconds": data["gpu_seconds"]},
             "admission_expires_at": data["expires_at"].isoformat()}
 
@@ -153,7 +153,6 @@ def project_initial(project):
             "gpu_hours": (Decimal(policy["allowance"]["gpu_device_seconds"]) / 3600).quantize(Decimal(".000001"), rounding=ROUND_CEILING),
             "max_cpus": limit["cpu_cores"], "max_gpus": limit["gpu_devices"], "memory_mib": limit["memory_mib"],
             "wall_minutes": limit["time_limit_seconds"] // 60,
-            "charge_minutes": (Decimal(limit["maximum_charge_duration_seconds"]) / 60).quantize(Decimal(".001"), rounding=ROUND_CEILING),
             "max_active_jobs": policy["max_active_jobs"], "max_total_jobs": policy.get("max_total_jobs", 1000),
             "expires_at": datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")),
             "connections": project.connections.all(), "environments": project.environments.all(),
@@ -182,10 +181,16 @@ def project_detail(request, project_id):
         except BrokerError as exc:
             error = exc.message
     from uuid import uuid4
+    from compute_broker.domain.resource_limits import effective_resource_limits
+    policy = Grant.objects.get(project=project).policy
+    resource_targets = [{"cluster": connection,
+        "limits": effective_resource_limits(policy, connection.configuration, backend=connection.backend)}
+        for connection in project.connections.filter(owner=request.user, enabled=True, archived=False,
+            setup_complete=True, worker__revoked=False, id__in=policy["allowed_connection_ids"]).order_by("name", "id")]
     return render(request, "broker/project_detail.html", {"project": project, "form": form, "error": error,
         "keys": project.projectcredential_set.order_by("-created_at"), "allowance": services.allowance(project),
         "jobs": Job.objects.with_summary().filter(project=project).order_by("-created_at", "-id")[:100],
-        "rotation_nonce": str(uuid4())})
+        "resource_targets": resource_targets, "rotation_nonce": str(uuid4())})
 
 
 @human_view

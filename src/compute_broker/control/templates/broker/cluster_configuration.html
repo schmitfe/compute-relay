@@ -26,12 +26,7 @@
 <a class="button secondary" href="/clusters/{{ cluster.id }}/directories/">Browse directories on this cluster</a></section>
 <section><h2>Resource limits and scheduler access</h2>
 {% for field in form.resource_fields %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}
-<p>CPU, GPU and memory limits are per job. Project and API-key limits still apply. Discovery does not verify termination, overtime or cleanup bounds and does not enable automatic spending.</p></section>
-<section><h2>Accounting bounds for reviewed jobs</h2>
-<p>Enter explicit site assumptions. Scheduler suggestions need your confirmation; cleanup cannot be inferred from discovery. Changing these bounds keeps automatic execution disabled.</p>
-{% if form.timing_suggestions.termination_margin_seconds %}<p>Saved scheduler termination suggestion: {{ form.timing_suggestions.termination_margin_seconds.value }} seconds across {{ form.timing_suggestions.termination_margin_seconds.partitions|join:", " }}.</p>{% endif %}
-{% if form.timing_suggestions.overtime_margin_seconds %}<p>Saved scheduler overtime suggestion: {{ form.timing_suggestions.overtime_margin_seconds.value }} seconds across {{ form.timing_suggestions.overtime_margin_seconds.partitions|join:", " }}.</p>{% endif %}
-{% for field in form.timing_fields %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}</section>
+<p>CPU, GPU, memory and walltime limits are per job. Project and API-key limits still apply. Reservations use the effective CPU/GPU allocation multiplied by scheduler walltime.</p></section>
 <section><h2>Software discovery</h2>{% include "broker/configuration_field.html" with field=form.module_availability_enabled %}
 <p>After saving, run discovery again to refresh the module catalog using this setting.</p></section>
 <button type="submit"{% if waiting or not connector_ready %} disabled{% endif %}>Validate and save cluster configuration</button>

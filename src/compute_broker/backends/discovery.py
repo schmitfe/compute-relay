@@ -6,13 +6,6 @@ import datetime as dt
 import re
 
 
-def _number(value: str | None, multiplier: int = 1) -> int | None:
-    if not isinstance(value, str):
-        return None
-    match = re.fullmatch(r"(\d+)(?:\s+(?:sec|min|seconds|minutes))?", value.strip(), re.IGNORECASE)
-    return int(match.group(1)) * multiplier if match else None
-
-
 def parse_discovery(response: dict, connection: dict) -> dict:
     nodes = []
     for line in response.get("nodes", {}).get("stdout", "").splitlines():
@@ -36,30 +29,6 @@ def parse_discovery(response: dict, connection: dict) -> dict:
         fields = line.split("|")
         if len(fields) >= 5:
             associations.append(dict(zip(("user", "account", "partition", "qos", "default_qos"), fields[:5])))
-    profile = connection.get("site_profile", {})
-    cleanup = profile.get("cleanup_margin_seconds")
-    if type(cleanup) is not int or cleanup < 0:
-        cleanup = None
-    timing = {}
-    for partition in partitions:
-        termination = _number(settings.get("KillWait"))
-        partition_overtime = partition.get("OverTimeLimit")
-        # Slurm23.11 partition_info.c prints NONE for NO_VAL16; job_mgr.c
-        # inherits the global limit for that sentinel. UNLIMITED is distinct.
-        # https://github.com/SchedMD/slurm/blob/slurm-23-11-4-1/src/api/partition_info.c#L315
-        # https://github.com/SchedMD/slurm/blob/slurm-23-11-4-1/src/slurmctld/job_mgr.c#L9652
-        overtime_value = settings.get("OverTimeLimit") if partition_overtime is None or partition_overtime.upper() == "NONE" else partition_overtime
-        overtime = _number(overtime_value, 60)
-        finite = termination is not None and overtime is not None and cleanup is not None
-        timing[partition["PartitionName"]] = {
-            "termination_margin_seconds": termination,
-            "overtime_margin_seconds": overtime,
-            "overtime_source": "global" if partition_overtime is None or partition_overtime.upper() == "NONE" else "partition",
-            "cleanup_margin_seconds": cleanup,
-            "finite_timing_candidate": finite,
-            "requires_operator_verification": True,
-            "unbounded_requeue_risk": "ForceRequeueOnFail" in settings.get("PrologFlags", ""),
-        }
     return {
         "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(), "connection_state": "ready",
         "version": response.get("version", {}).get("stdout", "").strip(),
@@ -70,10 +39,9 @@ def parse_discovery(response: dict, connection: dict) -> dict:
         else ("not_enabled" if "AccountingStoreFlags" in settings else "unknown"),
         "authorization": "unknown; visible resources and association snapshots require project/site authorization",
         "availability": "snapshot only; no resources reserved",
-        "timing_candidates": timing,
         "software": response.get("software", {"status": "not_reported", "scope": "login_node", "verified_on_compute": False}),
         "notes": ["GPU types/counts are advertised GRES; GPU memory may require an operator annotation.",
-                  "Cleanup charge duration cannot be inferred reliably from ordinary discovery; a finite verified site margin is required.",
+                  "Compute reservations use requested walltime; final accounting uses actual allocated elapsed time.",
                   "Discovery does not enable budgeted admission or submit compute-node probes."],
         "commands": {key: {"returncode": value.get("returncode"), "stderr": value.get("stderr", "")[:1024]}
                      for key, value in response.items() if isinstance(value, dict) and key != "software"},

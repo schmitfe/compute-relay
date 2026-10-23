@@ -320,7 +320,7 @@ def test_unknown_submission_preserves_reservation_and_leases_reconcile(broker):
     assert services.lease_work(broker.worker)["lease"]["operation"] == "reconcile"
 
 
-def test_final_overage_is_charged_once_and_pauses_new_admissions(broker):
+def test_final_overage_is_charged_once_and_exhausted_allowance_blocks_new_admissions(broker):
     budgeted(broker, cpu=60, gpu=0)
     job = prepared_job(broker)
     attempt, lease = dispatched(broker, job)
@@ -333,11 +333,15 @@ def test_final_overage_is_charged_once_and_pauses_new_admissions(broker):
     broker.project.refresh_from_db()
     broker.grant.refresh_from_db()
     attempt.refresh_from_db()
-    assert broker.project.paused
+    assert not broker.project.paused
     assert (broker.grant.spent_cpu, broker.grant.reserved_cpu) == (120, 0)
     assert attempt.error_code == "OBSERVED_OVERAGE"
     assert services.allowance(broker.project)["debt"]["cpu_core_seconds"] == 60
     assert LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1
+    with pytest.raises(BrokerError) as error:
+        with transaction.atomic():
+            services.request_execution(job, broker.credential)
+    assert error.value.code == "BUDGET_UNAVAILABLE"
 
 
 def test_output_storage_failure_does_not_suppress_final_accounting(broker):

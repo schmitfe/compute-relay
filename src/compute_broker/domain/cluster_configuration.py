@@ -14,9 +14,11 @@ RESOURCE_BOUNDS = {
     "maximum_memory_mib": (128, 16777216), "maximum_time_limit_seconds": (60, 604800),
 }
 ALLOWLIST_FIELDS = ("partitions", "accounts", "qos")
+# Accepted only when reading old configuration. New canonical profiles omit
+# these fields; reservations use requested walltime and settle actual usage.
 TIMING_FIELDS = ("termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds")
-SAFETY_FIELDS = (*TIMING_FIELDS, "allocated_cpus", "allocated_gpus", "automatic_execution_allowed")
-_FIELDS = set(RESOURCE_BOUNDS) | set(ALLOWLIST_FIELDS) | set(SAFETY_FIELDS)
+SAFETY_FIELDS = ("allocated_cpus", "allocated_gpus", "automatic_execution_allowed")
+_FIELDS = set(RESOURCE_BOUNDS) | set(ALLOWLIST_FIELDS) | set(SAFETY_FIELDS) | set(TIMING_FIELDS)
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}\Z")
 _UNLIMITED = {"UNLIMITED", "INFINITE"}
 _UNKNOWN_REASONS = {
@@ -222,7 +224,7 @@ def derive_cluster_configuration(snapshot, current_profile=None):
         unknowns.append("qos")
     warnings = {"Visible resources and association snapshots do not grant scheduler or project authorization.",
         "Resource maxima are independent single-node ceilings; they may come from different nodes or partitions.",
-        "Allocation rounding, account/QoS limits and cleanup bounds still require verification."}
+        "Allocation rounding and account/QoS limits still require verification."}
     warnings.update(warning for partition in partitions for warning in partition["warnings"])
     if any(item["unknowns"] for item in partitions):
         warnings.add("Some partition limits are unknown; aggregate known maxima do not apply to every partition.")
@@ -235,7 +237,7 @@ def validate_cluster_configuration(profile, *, require_limits=True):
     """Validate a finite version-one profile, without asserting site verification."""
     if not isinstance(profile, dict) or set(profile) - _FIELDS:
         raise ClusterConfigurationError("Cluster configuration has unsupported fields.")
-    result = deepcopy(profile)
+    result = {key: deepcopy(value) for key, value in profile.items() if key not in TIMING_FIELDS}
     for field in ALLOWLIST_FIELDS:
         if field in result and (not isinstance(result[field], list) or len(result[field]) > 1000
                 or any(not _name(value) for value in result[field]) or len(set(result[field])) != len(result[field])):
@@ -264,7 +266,4 @@ def validate_cluster_configuration(profile, *, require_limits=True):
     for field, floor in (("maximum_cpus", "allocated_cpus"), ("maximum_gpus", "allocated_gpus")):
         if field in result and floor in result and result[field] < result[floor]:
             raise ClusterConfigurationError("Resource ceilings cannot be lower than retained allocation rounding.")
-    if ("maximum_time_limit_seconds" in result and all(field in result for field in SAFETY_FIELDS[:3])
-            and result["maximum_time_limit_seconds"] + sum(result[field] for field in SAFETY_FIELDS[:3]) > 1209600):
-        raise ClusterConfigurationError("Walltime and retained timing margins exceed the supported charge duration.")
     return result

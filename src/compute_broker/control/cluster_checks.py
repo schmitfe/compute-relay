@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from compute_broker.backends.preparation import BackendError
 from compute_broker.backends.environments import validate_environment_config, render_environment, EnvironmentProfileError
-from compute_broker.domain.cluster_configuration import validate_cluster_configuration, ClusterConfigurationError, TIMING_FIELDS
+from compute_broker.domain.cluster_configuration import validate_cluster_configuration, ClusterConfigurationError
 from . import services
 from .auth import new_token, token_hash, require_credential_actor
 from .errors import BrokerError
@@ -60,21 +60,18 @@ def resource_plan(connection, policy=None):
         profile = validate_cluster_configuration(connection.configuration.get("site_profile", {}))
     except ClusterConfigurationError:
         raise BrokerError("CHECK_CONFIGURATION_REQUIRED", "Configure finite cluster resource limits before preparing a test.", 409) from None
-    if any(type(profile.get(field)) is not int for field in TIMING_FIELDS):
-        raise BrokerError("CHECK_TIMING_REQUIRED", "Enter explicit finite termination, overtime and cleanup bounds in Cluster configuration before testing.", 409)
     if profile.get("allocated_gpus", 0):
         raise BrokerError("CHECK_GPU_ROUNDING", "This connection's allocation rounding cannot provide a CPU-only diagnostic. Use an appropriate CPU connection.", 409)
     limits = policy.get("per_job_limits", {}) if policy else {}
     cpus = min(2, profile["maximum_cpus"], limits.get("cpu_cores", 1024))
     effective = max(cpus, profile.get("allocated_cpus", cpus))
-    duration = 60 + sum(profile[field] for field in TIMING_FIELDS)
+    duration = 60
     if (cpus < 1 or effective > min(profile["maximum_cpus"], limits.get("cpu_cores", 1024))
             or min(profile["maximum_memory_mib"], limits.get("memory_mib", 16777216)) < 128
-            or profile["maximum_time_limit_seconds"] < 60
-            or duration > limits.get("maximum_charge_duration_seconds", 1209600)):
+            or min(profile["maximum_time_limit_seconds"], limits.get("time_limit_seconds", 604800)) < 60):
         raise BrokerError("CHECK_RESOURCE_LIMIT", "The tiny test does not fit the current cluster or diagnostic project envelope.", 409)
     return {"resources": {"nodes": 1, "cpus": cpus, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},
-        "effective_cpus": effective, "maximum_charge_duration_seconds": duration,
+        "effective_cpus": effective,
         "reservation_cpu_seconds": effective * duration, "profile": profile}
 
 
@@ -191,7 +188,7 @@ def _ensure_configuration(user, connection_id, revision, environment):
         policy = {"schema_version": "1.0", "project_id": str(project.id), "revision": 1, "mode": "approval_required",
             "allowed_connection_ids": [str(connection.id)], "allowed_environment_revision_sha256": [environment.revision_sha256],
             "allowed_gpu_types": [], "per_job_limits": {"cpu_cores": plan["effective_cpus"], "gpu_devices": 0,
-                "memory_mib": 128, "time_limit_seconds": 60, "maximum_charge_duration_seconds": plan["maximum_charge_duration_seconds"]},
+                "memory_mib": 128, "time_limit_seconds": 60},
             "max_active_jobs": 1, "max_total_jobs": TOTAL_JOBS,
             "allowance": {"cpu_core_seconds": CPU_ALLOWANCE, "gpu_device_seconds": 0}, "admission_expires_at": expiry.isoformat()}
         Grant.objects.create(project=project, policy=policy)

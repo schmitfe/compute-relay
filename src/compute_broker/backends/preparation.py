@@ -131,18 +131,15 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         profile = connection.get("site_profile", {})
         if connection.get("backend") == "fake":
             profile = {"partitions": ["debug", "cpu", "gpu"], "accounts": ["broker", "research"],
-                       "qos": [], "termination_margin_seconds": 0,
-                       "overtime_margin_seconds": 0, "cleanup_margin_seconds": 0, **profile}
-        margins = [positive_int(profile.get(key), key, minimum=0, maximum=604800)
-                   for key in ("termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds")]
+                       "qos": [], **profile}
         max_cpus = max(cpus, positive_int(profile.get("allocated_cpus", cpus), "allocated CPU count", maximum=1024))
         max_gpus = max(gpus, positive_int(profile.get("allocated_gpus", gpus), "allocated GPU count", minimum=0, maximum=16))
         max_memory = positive_int(profile.get("allocated_memory_mib", memory), "allocated memory", maximum=16777216)
         if max_memory != memory:
             raise BackendError("Memory allocation rounding is not supported by the version-one manifest")
-        charge_duration = duration + sum(margins)
-        if charge_duration > 1209600:
-            raise BackendError("Charge duration exceeds supported maximum")
+        # Reserve configured walltime. Final Slurm accounting may exceed this
+        # estimate; settle actual usage and block subsequent overspending.
+        charge_duration = duration
         for label, actual, config_key in (
             ("CPU count", max_cpus, "maximum_cpus"), ("GPU count", max_gpus, "maximum_gpus"),
             ("memory", max_memory, "maximum_memory_mib"), ("walltime", duration, "maximum_time_limit_seconds"),

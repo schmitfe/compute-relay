@@ -242,7 +242,7 @@ def management_setup(human, demo, timeout):
     expiry = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     project_fields = {"name": "Container managed project " + suffix, "mode": "budgeted",
                       "cpu_hours": "2", "gpu_hours": "0", "max_cpus": "1", "max_gpus": "0",
-                      "memory_mib": "128", "wall_minutes": "1", "charge_minutes": "2",
+                      "memory_mib": "128", "wall_minutes": "1",
                       "max_active_jobs": "2", "max_total_jobs": "1", "expires_at": expiry, "connections": [demo["connection_id"]],
                       "environments": [demo["environment_id"]], "allowed_gpu_types": ""}
     human.request("POST", "/projects/new/", project_fields, form=True, binary=True)
@@ -257,12 +257,15 @@ def management_setup(human, demo, timeout):
     first_secret, first_id = revealed_key(human, first_html)
     first_agent = Client(human.base, token=first_secret)
     initial_budget = first_agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
+    initial_budget.pop("compute", None)  # Current planning observations are not shared ledger state.
     require(initial_budget["limit"]["cpu_core_seconds"] == 7200, "Created project has the wrong CPU allowance")
     second_html = human.request("POST", key_path, {**key_fields, "name": "Container Claude key", "submission_id": str(uuid4())},
                                 form=True, binary=True)
     second_secret, second_id = revealed_key(human, second_html)
     second_agent = Client(human.base, token=second_secret)
-    require(second_agent.request("GET", f"/api/v1/projects/{project_id}/allowance") == initial_budget,
+    second_budget = second_agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
+    second_budget.pop("compute", None)
+    require(second_budget == initial_budget,
             "Additional project key created a separate allowance")
     replay = human.request("POST", key_path, key_fields, form=True, binary=True, expected=(409,))
     require(first_secret.encode() not in replay, "Repeated creation disclosed an existing key")
@@ -271,7 +274,9 @@ def management_setup(human, demo, timeout):
     secret, key_id = revealed_key(human, rotated_html)
     first_agent.request("GET", "/api/v1/connections", expected=(401,), binary=True)
     agent = Client(human.base, token=secret)
-    require(agent.request("GET", f"/api/v1/projects/{project_id}/allowance") == initial_budget,
+    rotated_budget = agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
+    rotated_budget.pop("compute", None)
+    require(rotated_budget == initial_budget,
             "Key rotation reset project funds")
     human.request("POST", f"/projects/{project_id}/keys/{second_id}/revoke/", {}, form=True, binary=True)
     second_agent.request("GET", "/api/v1/connections", expected=(401,), binary=True)

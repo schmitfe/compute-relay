@@ -73,11 +73,11 @@
     "cpu_cores": 8,
     "gpu_devices": 1,
     "time_limit_seconds": 3600,
-    "maximum_charge_duration_seconds": 3660
+    "maximum_charge_duration_seconds": 3600
   },
   "reservation": {
-    "cpu_core_seconds": 29280,
-    "gpu_device_seconds": 3660
+    "cpu_core_seconds": 28800,
+    "gpu_device_seconds": 3600
   },
   "connection_revision_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 }

@@ -2,6 +2,7 @@
 <h1>{{ job.name }}</h1><p>Project <a href="/projects/{{ job.project.id }}/">{{ job.project.name }}</a> · Owner: {{ job.project.owner.username }} · {{ job.display_state_label }}</p><p>Submitted using: {% if job.credential %}{{ job.credential.name }} (API key){% else %}Not recorded{% endif %}</p><small>Package: {{ job.state }} · Execution status reflects the latest execution request.</small>
 <p class="notice">This preview requires a separate protected service account or server before using real secrets with an agent that controls your desktop. A human session on an agent-controlled desktop does not prove human presence.</p>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% include "broker/resource_validation.html" with validation=detail.resource_validation %}
 {% for diagnostics in attempt_diagnostics %}{% include "broker/attempt_diagnostics.html" with diagnostics=diagnostics %}{% endfor %}
 <section><h2>Allowance</h2><p>{{ allowance.available.cpu_core_seconds }} CPU core-seconds and {{ allowance.available.gpu_device_seconds }} GPU device-seconds remain available. {{ allowance.reserved.cpu_core_seconds }} CPU core-seconds are reserved.</p></section>
 {% if detail.manifest %}<section><h2>Exact prepared package</h2><p>SHA-256 <code>{{ detail.manifest_sha256 }}</code></p><p>Maximum reservation: {{ detail.manifest.reservation.cpu_core_seconds }} CPU core-seconds, {{ detail.manifest.reservation.gpu_device_seconds }} GPU device-seconds.</p>

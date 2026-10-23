@@ -1,5 +1,6 @@
 """Leased, read-only discovery through the credential-holding worker."""
 
+from copy import deepcopy
 import re
 import uuid
 from datetime import timedelta
@@ -8,6 +9,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from compute_broker.domain.cluster_configuration import TIMING_FIELDS
 from .errors import BrokerError
 from .models import Attempt, Connection, ConnectorTask, Project, WorkerIdentity
 from .services import audit, digest
@@ -22,7 +24,7 @@ def publish_profiles(worker, document):
     extensions = document.get("extensions", [])
     if not isinstance(extensions, list) or any(not isinstance(name, str) or name not in EXTENSIONS for name in extensions) or len(set(extensions)) != len(extensions):
         raise BrokerError("INVALID_PROFILES", "Invalid worker extension capabilities.")
-    profiles = document.get("profiles")
+    profiles = deepcopy(document.get("profiles"))
     if not isinstance(profiles, list) or len(profiles) > 100:
         raise BrokerError("INVALID_PROFILES", "Invalid worker profiles.")
     aliases = set()
@@ -42,6 +44,7 @@ def publish_profiles(worker, document):
         for field in ("allowed_hosts", "allowed_users", "allowed_ports", "remote_root_prefixes"):
             if not isinstance(profile[field], list) or not 1 <= len(profile[field]) <= 100:
                 raise BrokerError("INVALID_PROFILES", "Invalid worker target scope.")
+        profile["site_profile"] = {key: value for key, value in profile["site_profile"].items() if key not in TIMING_FIELDS}
     WorkerIdentity.objects.filter(id=worker.id).update(profiles=profiles, supported_extensions=extensions, last_seen_at=timezone.now())
     return {"accepted": True}
 
@@ -84,8 +87,11 @@ def report_discovery(worker, connection_id, document):
             if any(config.get(key) != connection.configuration.get(key) for key in ("backend", "credential_profile", "ssh", "remote_root")):
                 raise BrokerError("REVISION_CHANGED", "Discovery target changed.", 409)
             profile = next((p for p in worker.profiles if p.get("alias") == config["credential_profile"]), None)
-            if (not profile or config["credential_profile_revision_sha256"] != profile["revision_sha256"]
-                    or config["site_profile"] != profile["site_profile"]):
+            reported_site = config.get("site_profile")
+            if (not isinstance(reported_site, dict) or not profile
+                    or config["credential_profile_revision_sha256"] != profile["revision_sha256"]
+                    or {key: value for key, value in reported_site.items() if key not in TIMING_FIELDS}
+                    != {key: value for key, value in profile["site_profile"].items() if key not in TIMING_FIELDS}):
                 raise BrokerError("REVISION_CHANGED", "Protected profile changed during discovery.", 409)
             revision = digest(config)
             if revision != document.get("connection_revision_sha256"):

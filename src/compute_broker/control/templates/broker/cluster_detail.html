@@ -78,8 +78,8 @@
 {% if not cluster.configuration_confirmed %}<p class="notice">Discovery has completed. Choose the working directory and confirm the cluster configuration before submitting jobs.</p>{% endif %}
 <p>Baseline working directory: <code>{{ cluster.configuration.remote_root }}</code>{% if personal_configuration %} · <a href="/clusters/{{ cluster.id }}/directories/">Browse remote directories</a>{% endif %}</p>
 {% if profile.automatic_execution_allowed == False %}<p class="notice">This cluster configuration requires human confirmation for every execution. Automatic project or API-key settings cannot override it. Timing and allocation assumptions need verification before unattended execution.</p>{% endif %}
-<p>Partitions: {{ profile.partitions|join:", " }}<br>Accounts: {{ profile.accounts|join:", " }}<br>Maximum CPUs: {{ profile.maximum_cpus|default:"Not configured" }}<br>Maximum memory (MiB): {{ profile.maximum_memory_mib|default:"Not configured" }}<br>Termination / overtime / cleanup seconds: {{ profile.termination_margin_seconds }} / {{ profile.overtime_margin_seconds }} / {{ profile.cleanup_margin_seconds }}</p>
-<p>Resource defaults come from discovered capacities and can be adjusted in cluster configuration. Timing margins still need verification; discovery alone does not enable unattended spending.</p></section>
+<p>Partitions: {{ profile.partitions|join:", " }}<br>Accounts: {{ profile.accounts|join:", " }}<br>Maximum CPUs: {{ profile.maximum_cpus|default:"Not configured" }}<br>Maximum memory (MiB): {{ profile.maximum_memory_mib|default:"Not configured" }}<br>Maximum walltime (seconds): {{ profile.maximum_time_limit_seconds|default:"Not configured" }}</p>
+<p>Resource defaults come from discovered capacities and can be adjusted in cluster configuration. Compute reservations use scheduler walltime; discovery alone does not enable unattended spending.</p></section>
 <details><summary>Saved discovery JSON, including historical states</summary><pre>{{ snapshot_text }}</pre></details>
 <script>
 const moduleFilter = document.getElementById('module-filter');

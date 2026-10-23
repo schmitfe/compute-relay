@@ -109,7 +109,17 @@ def create_server(facade: ProjectFacade):
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
 
-    server = FastMCP("Compute Broker")
+    server = FastMCP("Compute Broker", instructions=(
+        "Before preparing work, read get_project_context, list_compute_targets and "
+        "get_project_allowance. Use each target's effective_limits, which combine the "
+        "project and cluster limits, and account for allocation rounding. Reserve against "
+        "the requested walltime. These limits can change; saved cluster capacity alone is not permission "
+        "to use it. If RESOURCE_LIMIT is returned, inspect the reported effective values "
+        "and limits, refresh those tools, and revise the resource request or choose "
+        "another permitted target. Do not repeatedly submit the same rejected request. "
+        "Pass a job document as prepare_job.request or revise_job.request; omit project_id "
+        "because the API key selects the project. Preparation does not execute code."
+    ))
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                idempotentHint=True, openWorldHint=True)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
@@ -117,7 +127,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=readonly)
     def get_project_context() -> dict:
-        """Read the API key's project, scopes and execution-mode preference. Requires no project ID; never returns a secret."""
+        """Read this API key's project, active limits, scopes and execution preference. Requires no project ID; never returns a secret. Refresh before planning work."""
         return facade.get_project_context()
 
     @server.tool(annotations=readonly)
@@ -127,12 +137,12 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=readonly)
     def list_compute_targets() -> dict:
-        """Read assigned clusters and saved capabilities; does not log in to a cluster."""
+        """Read permitted clusters, capabilities and effective_limits (project/cluster minimums). Use allocation rounding when sizing jobs; reservations use requested walltime. Does not log in to a cluster."""
         return facade.list_compute_targets()
 
     @server.tool(annotations=readonly)
     def get_project_allowance() -> dict:
-        """Read shared project funds, outstanding reservations, and uncertainty."""
+        """Read current project resource limits, shared funds, reservations and uncertainty. Combine these with each target's effective_limits before preparing work."""
         return facade.get_project_allowance()
 
     @server.tool(annotations=write)
@@ -142,7 +152,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=write)
     def prepare_job(request: dict, idempotency_key: str | None = None) -> dict:
-        """Prepare a job for review. Omit project_id; the API key selects the project. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). Preparation never executes code."""
+        """Prepare a job for review after checking current target effective_limits and allowance. Omit project_id; the API key selects the project. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). On RESOURCE_LIMIT, revise the resources before retrying. Preparation never executes code."""
         return facade.prepare_job(request, idempotency_key)
 
     @server.tool(annotations=write)

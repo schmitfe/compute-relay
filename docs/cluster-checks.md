@@ -7,9 +7,8 @@ with CSRF protection. Administrator access to another user's cluster does not
 permit a test under that user's HPC identity.
 
 First complete and confirm the cluster configuration, with an enabled connection
-and current owned worker. Resource ceilings and all three finite termination,
-overtime and cleanup bounds must already be explicit. Discovery alone does not
-provide those timing guarantees. See [cluster configuration](cluster-configuration.md).
+and current owned worker. Resource ceilings and finite requested walltime must
+already be configured. See [cluster configuration](cluster-configuration.md).
 
 Open the test page, choose a permitted partition/account/job QoS and a Python
 environment, then select **Prepare test for review**. The usual review page
@@ -24,7 +23,8 @@ version, selected Python executable and loaded module names, and writes
 `compute-broker-cluster-check-v1`. It requests two logical CPUs, or one when the
 configured ceiling is one, 128 MiB, zero GPUs and a one-minute scheduler limit.
 Queueing, startup and cleanup can take longer than the script. The reservation
-uses configured allocation rounding and maximum charge duration. A connection
+uses configured allocation rounding and the one-minute requested walltime. Final
+settlement charges actual observed allocated runtime. A connection
 that rounds CPU-only jobs into GPU allocations is unsuitable for this test.
 
 An existing owned recipe can be selected at first setup. The default creates a
@@ -54,7 +54,7 @@ cancelled admitted jobs retain their usual lifetime-slot semantics.
 Tests never replenish funds, reset counters, renew expiry, replace a revoked
 credential or change an existing project back to a preferred policy. If its
 configuration is paused, expired or no longer requires approval, resolve that
-existing project explicitly. A large conservative reservation that cannot fit
+existing project explicitly. A reservation that cannot fit
 the initial allowance is refused; the test does not silently enlarge its budget.
 Normal admission still enforces current policy at approval and dispatch.
 

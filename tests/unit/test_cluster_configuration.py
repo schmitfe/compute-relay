@@ -33,8 +33,7 @@ def snapshot():
 def form_data(**changes):
     return {"partitions": "cpu, gpu", "accounts": "science", "qos": "normal",
         "maximum_cpus": 128, "maximum_gpus": 8, "maximum_memory_mib": 512000,
-        "maximum_time_limit_seconds": 172800, "termination_margin_seconds": 5,
-        "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30, **changes}
+        "maximum_time_limit_seconds": 172800, **changes}
 
 
 def test_maxima_are_single_node_candidates_not_partition_or_cluster_totals(snapshot):
@@ -127,7 +126,8 @@ def test_owner_limits_empty_allowlists_and_existing_verified_safety_are_not_over
         "cleanup_margin_seconds": 30, "automatic_execution_allowed": True}
     original = deepcopy(current)
     result = derive_cluster_configuration(snapshot, current)
-    assert all(result["site_profile"][key] == value for key, value in current.items())
+    assert all(result["site_profile"][key] == value for key, value in current.items() if "margin_seconds" not in key)
+    assert not any("margin_seconds" in key for key in result["site_profile"])
     assert current == original
     result["site_profile"]["accounts"].append("different")
     assert current == original
@@ -139,18 +139,19 @@ def test_new_suggestion_cannot_contradict_retained_allocation_floor():
             {"allocated_cpus": 8})
 
 
-def test_resource_discovery_cannot_make_unknown_timing_executable(sample):
-    from compute_broker.backends import BackendError, prepare
+def test_resource_discovery_prepares_without_timing_assumptions_but_preserves_review_gate(sample):
+    from compute_broker.backends import prepare
     request, environment, connection, _ = sample
     connection["backend"] = "slurm"
     connection["site_profile"] = derive_cluster_configuration({"nodes": [{"partition": "debug", "cpus": "4",
         "memory_mib": "8192", "gres": "(null)"}], "partitions": [{"PartitionName": "debug", "MaxTime": "01:00:00"}],
         "association_query_status": "available", "associations": [{"account": "broker"}]})["site_profile"]
-    with pytest.raises(BackendError, match="termination_margin_seconds"):
-        prepare(request, environment, connection, REVISION)
+    manifest = prepare(request, environment, connection, REVISION)["manifest"]
+    assert manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == request["resources"]["time_limit_seconds"]
+    assert connection["site_profile"]["automatic_execution_allowed"] is False
 
 
-def test_verified_rounding_and_margins_still_control_prepared_reservation(sample):
+def test_verified_allocation_rounding_uses_scheduler_walltime_for_prepared_reservation(sample):
     from compute_broker.backends import prepare
     request, environment, connection, _ = sample
     connection["backend"] = "slurm"
@@ -160,7 +161,7 @@ def test_verified_rounding_and_margins_still_control_prepared_reservation(sample
         "memory_mib": "8192", "gres": "(null)"}]}, current)["site_profile"]
     manifest = prepare(request, environment, connection, REVISION)["manifest"]
     assert manifest["maximum_allocation"]["cpu_cores"] == 4
-    assert manifest["reservation"] == {"cpu_core_seconds": 380, "gpu_device_seconds": 0}
+    assert manifest["reservation"] == {"cpu_core_seconds": 240, "gpu_device_seconds": 0}
 
 
 def test_domain_import_and_derivation_work_with_controller_and_django_imports_blocked():
@@ -189,7 +190,7 @@ def test_form_uses_maximal_missing_defaults_and_preserves_auto_review(snapshot):
         snapshot=snapshot, current_profile={"automatic_execution_allowed": False, "cleanup_margin_seconds": 30})
     assert form.is_valid(), form.errors
     profile = form.site_profile()
-    assert profile["automatic_execution_allowed"] is False and profile["cleanup_margin_seconds"] == 30
+    assert profile["automatic_execution_allowed"] is False and "cleanup_margin_seconds" not in profile
     assert "allocated_cpus" not in profile
 
 
@@ -237,64 +238,51 @@ def test_unknown_facts_require_explicit_owner_values_and_allow_manual_safe_names
     assert explicit.is_valid(), explicit.errors
     result = explicit.site_profile()
     assert result["partitions"] == ["private"] and result["automatic_execution_allowed"] is False
-    assert result["cleanup_margin_seconds"] == 30 and "allocated_cpus" not in result
+    assert "cleanup_margin_seconds" not in result and "allocated_cpus" not in result
 
 
-def test_timing_suggestions_have_provenance_but_never_fill_cleanup(snapshot):
+def test_scheduler_timing_facts_are_not_configuration_fields_or_defaults(snapshot):
     snapshot["timing_candidates"] = {"cpu": {"termination_margin_seconds": 5, "overtime_margin_seconds": 0},
         "gpu": {"termination_margin_seconds": 30, "overtime_margin_seconds": 120, "cleanup_margin_seconds": 0}}
     form = ClusterConfigurationForm(snapshot=snapshot)
-    assert form.initial["termination_margin_seconds"] == 30
-    assert form.initial["overtime_margin_seconds"] == 120
-    assert "cleanup_margin_seconds" not in form.initial
-    assert form.timing_suggestions["termination_margin_seconds"]["source"] == "saved scheduler timing candidates"
-    assert form.timing_suggestions["termination_margin_seconds"]["requires_user_confirmation"] is True
-    assert [field.name for field in form.timing_fields] == ["termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"]
-    assert "cleanup_margin_seconds" not in [field.name for field in form.resource_fields]
-    smaller = ClusterConfigurationForm(form_data(partitions="cpu"), snapshot=snapshot)
-    assert smaller.initial["termination_margin_seconds"] == 5
-    snapshot["timing_candidates"]["gpu"]["overtime_margin_seconds"] = None
-    assert "overtime_margin_seconds" not in ClusterConfigurationForm(snapshot=snapshot).initial
-
-
-def test_timing_values_require_explicit_post_even_when_candidates_are_shown(snapshot):
-    data = form_data()
     for field in ["termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"]:
-        del data[field]
-    form = ClusterConfigurationForm(data, snapshot=snapshot)
-    assert not form.is_valid()
-    assert {"termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"} <= set(form.errors)
+        assert field not in form.fields and field not in form.initial
 
 
-def test_omitted_existing_timing_is_retained_but_changed_assumptions_disable_automatic(snapshot):
+def test_cluster_configuration_accepts_resources_without_separate_timing_fields(snapshot):
+    form = ClusterConfigurationForm(form_data(), snapshot=snapshot)
+    assert form.is_valid(), form.errors
+    assert not any("margin_seconds" in field for field in form.site_profile())
+
+
+def test_legacy_timing_is_removed_without_changing_explicit_automatic_flag(snapshot):
     current = {"termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30,
         "automatic_execution_allowed": True}
-    data = form_data()
-    for field in ["termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"]:
-        del data[field]
-    retained = ClusterConfigurationForm(data, snapshot=snapshot, current_profile=current)
+    retained = ClusterConfigurationForm(form_data(), snapshot=snapshot, current_profile=current)
     assert retained.is_valid(), retained.errors
     assert retained.site_profile()["automatic_execution_allowed"] is True
+    assert not any("margin_seconds" in field for field in retained.site_profile())
     changed = ClusterConfigurationForm(form_data(cleanup_margin_seconds=0), snapshot=snapshot, current_profile=current)
     assert changed.is_valid(), changed.errors
-    assert changed.site_profile()["automatic_execution_allowed"] is False
+    assert changed.site_profile()["automatic_execution_allowed"] is True
 
 
 @pytest.mark.parametrize("field,value", [("termination_margin_seconds", -1), ("overtime_margin_seconds", 604801),
     ("cleanup_margin_seconds", ""), ("cleanup_margin_seconds", "infinite")])
-def test_user_supplied_timing_bounds_are_explicit_finite_and_bounded(snapshot, field, value):
+def test_legacy_timing_post_fields_do_not_affect_configuration(snapshot, field, value):
     form = ClusterConfigurationForm(form_data(**{field: value}), snapshot=snapshot)
-    assert not form.is_valid() and field in form.errors
+    assert form.is_valid(), form.errors
+    assert field not in form.site_profile()
 
 
-def test_walltime_plus_explicit_bounds_cannot_exceed_supported_charge_duration(snapshot):
+def test_legacy_margin_payload_does_not_change_supported_walltime(snapshot):
     form = ClusterConfigurationForm(form_data(termination_margin_seconds=604800, cleanup_margin_seconds=604800), snapshot=snapshot)
-    assert not form.is_valid()
-    assert "charge duration" in str(form.errors)
+    assert form.is_valid(), form.errors
+    assert form.site_profile()["maximum_time_limit_seconds"] == 172800
 
 
 @pytest.mark.parametrize("profile", [{"maximum_cpus": True}, {"maximum_memory_mib": 2**53},
-    {"automatic_execution_allowed": "true"}, {"cleanup_margin_seconds": None}, {"ssh": {"host": "injected"}}])
+    {"automatic_execution_allowed": "true"}, {"ssh": {"host": "injected"}}])
 def test_pure_validation_rejects_noncanonical_or_unsupported_values(profile):
     with pytest.raises(ClusterConfigurationError):
         validate_cluster_configuration(profile, require_limits=False)

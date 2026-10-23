@@ -3,7 +3,7 @@
 After your personal connector finishes discovery, open the cluster overview and
 select **Configure cluster**. Browse remote directories through the connected
 worker, choose a baseline working directory, review discovered resource defaults
-and supply the explicit accounting bounds. Saving queues a human-owned setup
+and confirm the resource ceilings. Saving queues a human-owned setup
 request; the worker validates the path, persists its new scope and acknowledges
 the configuration before new jobs are allowed. No remote files are created by
 selection or validation. Existing execution and accounting must finish before
@@ -74,17 +74,17 @@ not establish current eligibility, account/QoS limits or scheduler acceptance.
 ## Preserving owner choices and safety evidence
 
 Derivation fills missing fields. It preserves existing owner ceilings,
-allowlists, allocation rounding and timing values; a later discovery does not
+allowlists and allocation rounding; a later discovery does not
 silently widen a saved owner restriction. Empty existing allowlists are also
 deliberate values. Discovery cannot enable automatic execution: a fresh profile
 has `automatic_execution_allowed: false`; an already explicit true setting is
 retained rather than inferred again.
 
-No termination/overtime/cleanup margin is created from discovery, even when a
-snapshot labels a timing candidate finite. No CPU/GPU allocation floor is
-inferred from hardware capacity. Resource suggestions do not prove rounding,
-memory-driven CPU allocation, billing behavior, requeue safety or cleanup
-duration. Existing package preparation and project compute limits still apply.
+No CPU/GPU allocation floor is inferred from hardware capacity. Resource
+suggestions do not prove rounding, memory-driven CPU allocation, billing behavior
+or requeue safety. Existing package preparation and project compute limits still
+apply. Reservations use effective allocated resources multiplied by requested
+walltime; final accounting uses observed allocated resource time in full.
 
 The resource form requires an explicit finite value when discovery could not
 provide one. Values must fit the supported bounds, walltime must be whole
@@ -94,20 +94,10 @@ those ceilings. A lower resource ceiling cannot contradict retained allocation
 rounding. Allocation-rounding and automatic-execution fields are not editable
 through this form; forged extra fields cannot change them.
 
-The separate timing section accepts user-supplied termination, overtime and
-cleanup bounds for reviewed jobs, each between zero and 604,800 seconds. The
-first two may be prefilled from finite saved candidates covering every selected
-partition; the largest applicable value and its source are shown as a suggestion.
-Cleanup remains blank unless already explicitly configured. A displayed default
-is not an accepted assumption until posted by the owner. An omitted existing
-bound is retained; an explicitly blank required bound is rejected. Zero is an
-explicit assumption, not evidence that no cleanup exists.
-
-New or changed timing assumptions force automatic execution off, even if the
-previous profile allowed it. Unchanged explicit bounds retain the existing flag.
-The form never marks an assumption verified. A separate protected verification
-path is required before enabling automatic execution. Walltime plus all three
-bounds must fit the supported maximum charge duration.
+The form has no separate termination, overtime or cleanup section. Legacy timing
+properties do not affect new reservations or active agent limits. Actual elapsed
+allocation time can exceed requested walltime, and final charges are not capped
+at the reservation. Debt prevents new project admissions until resolved.
 
 An owner must not turn saved visibility into unattended spending without the
 separate site evidence and project authorization. Configuration review is also
@@ -141,13 +131,12 @@ if form.is_valid():
     edited_profile = form.site_profile()
 ```
 
-Templates can render `form.resource_fields` and `form.timing_fields` separately;
-`form.timing_suggestions` includes candidate values, source, selected partition
-names and an explicit requirement for user confirmation.
+Templates render `form.resource_fields` with field-specific validation messages.
+Resource ceilings and ordinary scheduler settings are the owner's inputs.
 
 The caller must authenticate the owner, check the current connection revision,
 reject stale/busy changes and arrange protected-worker validation/application.
 The form cannot itself change a connection, bind a worker or approve execution.
 Tests cover maxima, heterogeneous GPUs, unknowns, implementation caps, retained
-settings, explicit timing assumptions, forged automatic/rounding fields and a fresh worker-process import with Django and
+settings, requested-walltime reservations, forged automatic/rounding fields and a fresh worker-process import with Django and
 controller imports blocked. No real cluster or compute allocation is involved.

@@ -370,20 +370,21 @@ The strict profile fails closed if that channel is unavailable.
 
 Budget reservations are shared across all keys and subagents in a project.
 Requested Slurm time limits are whole minutes in version one. A prepared
-`maximum_charge_duration_seconds` additionally includes a verified finite margin
-for applicable `KillWait`, `OverTimeLimit`, and termination/cleanup behavior.
-Reserve maximum allocated cores/devices multiplied by that charge duration,
-rather than multiplying only the requested scheduler walltime. A connection
-without a verified finite model cannot admit automatic spending. Slurm documents
-the time-limit behaviors that make this distinction necessary.
+reservation multiplies effective allocated cores/devices by requested scheduler
+walltime. New prepared manifests retain the internal
+`maximum_charge_duration_seconds` field equal to that walltime, and the deprecated
+policy property is optional and ignored. No termination, overtime or cleanup
+interval is configured or added. Final charges use actual allocated resource time,
+including elapsed time beyond the reservation. Debt blocks further admissions.
+Slurm's time-limit behavior means the reservation is not a physical usage ceiling.
 [Slurm batch time limits](https://slurm.schedmd.com/sbatch.html)
 
 Evaluate the effective prepared envelope after site resource rounding against
 the automatic-execution envelope and hard project/installation caps. A small
 request that causes a larger allocation is not an exemption. Mixed-mode review
 can authorize exceeding the automatic envelope, but cannot bypass hard caps or
-available project funds. Charge duration and requested scheduler time retain
-their distinct policy meanings and are both visible to the reviewer.
+available project funds. The reviewer sees requested walltime, effective allocation
+and the resulting reservation; final settlement uses observed allocated runtime.
 
 Reserve atomically before submission, retain the reservation while
 queued/running/uncertain, and settle once authoritative accounting is available.
@@ -424,10 +425,10 @@ host tests explicitly opt-in and synthetic credentials only:
    offline cached balance. Distinguish MFA expiry, administrative disabling and
    permanent connection revocation.
 6. Race budgeted requests from several project tokens and restart workers during
-   every dispatch transition. Assert the ledger never authorizes overspend and
+   every dispatch transition. Assert new reservations fit available allowance and
    uncertain attempts retain their reservations. Include whole-minute rejection,
-   finite termination margins, policy checks after resource rounding, integer
-   precision boundaries, and unknown site models.
+   full settlement of actual usage beyond reserved walltime, debt admission blocks,
+   policy checks after resource rounding, integer precision boundaries, and unknown site models.
 7. Scan release artifacts, image layers, logs, repository history, and exported
    configuration for synthetic secret canaries; never use real keys in tests.
 8. Validate the production Compose/system-service profile in CI or a release VM:

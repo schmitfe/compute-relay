@@ -4,7 +4,7 @@
 <p>This prepares a tiny CPU-only Python job. You will review its exact files and reservation on the normal approval page before anything runs.</p>
 {% if blocked_reason %}<p class="error">{{ blocked_reason }}</p>{% endif %}
 {% if plan %}<p>The script sleeps for two seconds, prints its hostname and Python version, and writes <code>cluster-check.json</code>. It requests {{ plan.resources.cpus }} CPU{{ plan.resources.cpus|pluralize }}, 128 MiB, no GPUs and a one-minute scheduler walltime. Queueing and cleanup can take longer.</p>
-<p>Conservative maximum reservation: <strong>{{ plan.reservation_cpu_seconds }} CPU-core seconds</strong>, including configured rounding and timing bounds. Approval, lifetime limits, cancellation and final accounting follow the ordinary job path.</p>{% endif %}
+<p>Compute reservation: <strong>{{ plan.reservation_cpu_seconds }} CPU-core seconds</strong>, using the effective CPU allocation and requested scheduler walltime. Approval, lifetime limits, cancellation and final accounting follow the ordinary job path.</p>{% endif %}
 <section><h2>Diagnostic allowance</h2>
 {% if configuration %}<p><a href="/projects/{{ configuration.project_id }}/">{{ configuration.project.name }}</a> · Available: {{ allowance.available.cpu_core_seconds }} CPU-core seconds · Reserved: {{ allowance.reserved.cpu_core_seconds }} · Spent: {{ allowance.spent.cpu_core_seconds }} · Lifetime tests admitted: {{ allowance.jobs.admitted }} / {{ allowance.jobs.limit }}</p>
 {% else %}<p>The first prepared test creates a dedicated project with {{ initial_cpu_allowance }} CPU-core seconds, zero GPU allowance, one active job and at most {{ initial_job_limit }} lifetime admitted jobs. Its allowance and internal credential expire after 30 days.</p>{% endif %}

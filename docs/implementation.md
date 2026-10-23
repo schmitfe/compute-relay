@@ -200,7 +200,7 @@ This milestone makes the complete workflow observable without cluster credential
 | M2.5 university MFA | Trusted authentication helper, protected master/socket, ready/login-required lifecycle, no-fallback regular calls | Expire master between check and execution; no new unattended authentication/push; other cluster remains operational |
 | M2.6 opt-in site review workflow | Internal then university tiny Python job, reject with comment, revise, approve, output retrieval | Explicit operator account/partition/cap; sanitized site record; no real job submitted by ordinary tests |
 
-Slurm review mode still enforces hard request caps and reserves the finite reviewed envelope using the M1 ledger baseline. Establish a conservative finite site envelope before enabling version-one real submissions; unknown/unbounded partitions remain discovery/status-only. M2 may settle conservatively against the reserved maximum after terminal confirmation; M3 completes actual-usage settlement and the full two-database/concurrency/site tests needed for unattended spending. The exact university flow may require an approved institutional alternative if protected connection reuse is not permitted.
+Slurm review mode still enforces hard request caps and reserves effective allocated resources multiplied by finite requested walltime using the M1 ledger baseline. Verify the site's allocation model and usable final accounting before enabling automatic submissions. M2 may settle conservatively against the reserved amount after terminal confirmation; M3 completes actual-usage settlement and the full two-database/concurrency/site tests needed for unattended spending. The exact university flow may require an approved institutional alternative if protected connection reuse is not permitted.
 
 ## Milestone M3 project compute allowances
 
@@ -208,11 +208,11 @@ Slurm review mode still enforces hard request caps and reserves the finite revie
 | --- | --- | --- |
 | M3.1 ledger completion | Extend the M1 baseline with actual Slurm usage settlement, idempotent adjustments, debt and full reconstruction | Reference-model/property tests; no floating-point or double settlement |
 | M3.2 atomic admission | SQLite IMMEDIATE and PostgreSQL row-lock paths, active-job cap, policy/credential/pause checks with outbox commit | Independent-process races on both actual databases; cross-dimension failure rolls back all changes |
-| M3.3 site charge model | Effective allocated cores/devices and verified finite termination/cleanup margin; whole-minute scheduler limits | Per-site evidence; prepared envelope checked against automatic and hard caps; unknown/unbounded sites cannot auto-admit |
+| M3.3 site charge model | Effective allocated cores/devices × requested whole-minute walltime for reservation; actual allocated elapsed runtime for settlement | Per-site allocation/accounting evidence; current project/cluster minima and every exceeded resource are exposed to agents; legacy timing properties ignored |
 | M3.4 accounting and recovery | Final `sacct` normalization, no step double-counting, accounting-pending and uncertain reservations, requeue/overage quarantine | Failed/cancelled jobs charged; outages cannot refund uncertainty; full observed debt retained |
 | M3.5 mixed mode and stop | Automatic envelope plus review fallback, grant expiry, explicit pause/cancel, key rotation | All keys share balance; expired grants do not erase commitments; dispatch race is documented/tested |
 
-Initial usage units are CPU core-seconds and GPU device-seconds. A grant restricts supported GPU types rather than claiming all devices have equal cost. Site allocation granularity and termination overtime are part of the bound; the request's `--time` alone is insufficient. Same-UID nested submissions remain outside the service guarantee.
+Initial usage units are CPU core-seconds and GPU device-seconds. A grant restricts supported GPU types rather than claiming all devices have equal cost. Site allocation granularity affects reservations; actual usage beyond requested walltime is fully charged during final settlement, and debt blocks new admissions. Reservations do not impose a physical ceiling on scheduler usage. Same-UID nested submissions remain outside the service guarantee.
 
 ## Milestone M4 software environments and storage-aware workflows
 
@@ -287,7 +287,7 @@ Protected main is the target branch. Require review and relevant CI before merge
 | Public name, rights holder and license | Provisional Compute Broker; no license assigned | Before accepting external code for distribution/public release |
 | University MFA/reuse rules | Human authentication in protected connector, fail closed | M2 site acceptance |
 | Trusted human approval device/session | Independent channel for strict mode | Protected bootstrap |
-| Exact Slurm versions/accounting fields and margins | Discovered privately, unsupported until verified | M2 fixtures and M3 admission |
+| Exact Slurm versions, allocation rounding and accounting fields | Discovered privately, unsupported until verified | M2 fixtures and M3 admission |
 | Shared remote UID acceptance | Documented API-only isolation; no hostile tenant claim | Before multi-user deployment |
 | LDAP provider mapping | Verified TLS, immutable directory subject, explicit groups and no local fallback; OIDC remains optional later | MU-02 |
 | Central keyless session activation | Require an actual site-approved mechanism and per-principal isolation; use protected personal connectors until accepted | MU-05 |

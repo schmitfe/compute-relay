@@ -180,7 +180,7 @@ def build_attempt_diagnostics(attempt):
     if error in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_STORAGE_UNAVAILABLE", "OUTPUT_MISSING", "MISSING_OUTPUT"} and category != "outputs_unavailable":
         notices.append("Some declared outputs could not be collected or stored; this is separate from the allocation result and accounting.")
     if error == "OBSERVED_OVERAGE":
-        notices.append("Reported usage exceeded the reservation. Inspect project allowance, debt and admission pause before requesting more work.")
+        notices.append("Actual usage exceeded the reservation and was charged in full. Inspect the remaining project allowance and any debt before requesting more work.")
     connection = getattr(attempt, "connection", None)
     raw_name = getattr(connection, "name", None)
     cluster_name = raw_name[:100] if isinstance(raw_name, str) else "Cluster not recorded"

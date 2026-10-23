@@ -142,7 +142,7 @@ never sufficient authority to inspect or cancel a job.
 | --- | --- | --- |
 | `probe` | Approved connection reference, probe scope | Connection state and supported feature flags; no secret material |
 | `discover` | Scope and previous snapshot version | Timestamped capability/access/availability snapshots with unknown fields preserved |
-| `prepare` | Validated `JobSpec`, content-addressed inputs, environment profile, immutable site-profile version | `PreparedExecution`: exact batch bytes, all wrappers/setup files, manifest digests, `connection_revision_sha256`, effective `maximum_allocation` including maximum charge duration, output layout, backend/renderer versions |
+| `prepare` | Validated `JobSpec`, content-addressed inputs, environment profile, immutable site-profile version | `PreparedExecution`: exact batch bytes, all wrappers/setup files, manifest digests, `connection_revision_sha256`, effective `maximum_allocation` and requested walltime, output layout, backend/renderer versions |
 | `stage` | Prepared package digest and approved attempt directory | Verified staged manifest/receipt; no job submitted; idempotent for identical content |
 | `submit` | One current submission lease, package digest, attempt identity | Native identity, confirmed rejection, or explicit `submission_uncertain`; no implicit retry |
 | `reconcile_submission` | Attempt marker, remote receipt, bounded time window, remote identity | Exactly one matching native identity, no conclusive result, or conflict requiring operator action |
@@ -166,9 +166,9 @@ per-job caps: a request that fits a cap before rounding can exceed it after roun
 
 `PreparedExecution` must bind the connection's remote identity and immutable
 `connection_revision_sha256`, site-profile version, resolved environment/build dependency,
-package digest, and effective `maximum_allocation` assumptions. This includes
-`maximum_charge_duration_seconds`, which is at least the scheduler time limit and
-conservatively includes verified finite termination, overrun, and cleanup margins.
+package digest, and effective `maximum_allocation` assumptions. New packages retain
+the internal `maximum_charge_duration_seconds` field equal to requested scheduler
+walltime. No termination, overrun or cleanup interval is added to the reservation.
 The control service binds approval or budget authorization to this prepared revision.
 Changing any execution-affecting field makes a new revision. If a connector or backend
 cannot reproduce the exact package, it fails instead of rendering a new one after approval.
@@ -353,29 +353,23 @@ conservative settlement policy, not unattended actual-usage budgeting.
 
 Site profiles specify whether a request allocates extra CPUs/GPUs or a whole node and
 whether suspended time is charged. After site rounding, reserve CPU seconds as the
-maximum allocated cores multiplied by `maximum_charge_duration_seconds`, and GPU seconds
+maximum allocated cores multiplied by requested walltime, and GPU seconds
 as maximum allocated devices multiplied by that duration; preserve GPU type dimensions.
 Apply automatic-execution and hard per-job limits to these effective values, not only
 to the agent's nominal request.
 
-The time bound is deliberately larger than a requested walltime when needed. Slurm's
-`KillWait` provides a termination interval and `OverTimeLimit` can allow overtime,
-including an unlimited setting. Include verified finite values and applicable scheduler
-enforcement/cleanup margins in the prepared `maximum_charge_duration_seconds`; do not
-assume the nominal time limit is the entire chargeable allocation duration. Unknown,
-unbounded, stale, or unsupported timing assumptions disable budgeted admission for the
-connection/partition until a human updates the validated site profile. These are
-conservative admission assumptions, not a guarantee against cluster failure or changes
-outside the broker. [Slurm time-limit configuration](https://slurm.schedmd.com/slurm.conf.html)
+Slurm's `KillWait`, `OverTimeLimit` and site cleanup can extend elapsed allocation time
+beyond requested walltime. They are not separate broker configuration or planning
+limits. Final accounting charges observed allocated resources and elapsed time in full,
+even when they exceed the reservation. The reservation therefore controls admission
+commitments rather than guaranteeing a physical ceiling on scheduler usage. An
+overdrawn project reports debt and cannot admit new work until the debt is resolved.
+[Slurm time-limit configuration](https://slurm.schedmd.com/slurm.conf.html)
 
-If either the maximum resource allocation or maximum charge duration is unknown,
-budgeted submission is disabled for the partition. The current version-one manifest
-also requires a finite bound in review mode, so that partition remains
-discovery/status-only until configured; unbounded reviewed execution needs a separate
-future contract. An
-allocation larger than the prepared bound blocks new unattended submissions, retains
-the disputed reservation/actual-use evidence, and requires investigation; recording an
-overrun does not retroactively make a budget hard.
+If effective resource allocation or requested walltime is unknown, submission remains
+blocked until the request and cluster configuration provide finite values. Missing or
+ambiguous final accounting preserves the reservation until reconciliation. Usable
+observed overage must be settled rather than discarded or capped at the reserved amount.
 
 No automatic retry or agent-requested requeue in the MVP. A retry is a new explicit
 attempt with a new admission decision and reservation. Scheduler-forced requeues are
@@ -520,8 +514,8 @@ The repository's test plan should include these backend-specific cases:
 
 - **Unit/property tests:** deterministic scripts/digests; connection-revision binding;
   whole-minute walltime validation; resource/time rounding and cap checks after rounding;
-  finite `KillWait`/`OverTimeLimit`/cleanup margins; reservation multiplication by maximum
-  charge duration; rejection of unknown/unbounded timing profiles; rejection of
+  reservation multiplication by requested walltime; final accounting beyond that
+  reservation and debt blocking new admission; rejection of missing walltime; rejection of
   unknown flags and newline/control-character injection; shell-quoting boundaries; strict
   native ID parsing; state mapping; TRES parsing without double counts; path traversal,
   symlink swaps, output limits, and cache permission checks.

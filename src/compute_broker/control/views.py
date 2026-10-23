@@ -87,10 +87,15 @@ def health(request):
 @boundary("GET")
 def project_context(request):
     credential = project_credential(request)
-    response = JsonResponse({"schema_version": "1.0",
+    payload = {"schema_version": "1.0",
         "project": {"id": str(credential.project_id), "name": credential.project.name},
         "credential": {"id": str(credential.id), "scopes": credential.scopes,
-                       "execution_mode": credential.execution_mode}})
+                       "execution_mode": credential.execution_mode}}
+    if "jobs:read" in credential.scopes:
+        from .resource_api import compute_context
+        payload["compute"] = compute_context(credential)
+        payload["allowance"] = services.allowance(credential.project)
+    response = JsonResponse(payload)
     response["Cache-Control"] = "no-store"
     response["Vary"] = "Authorization"
     return response
@@ -98,21 +103,16 @@ def project_context(request):
 
 @boundary("GET")
 def connections(request):
-    credential, project = scope(request, "jobs:read")
-    targets = [c for c in project.connections.filter(enabled=True) if connection_allowed(credential, c.id)]
-    target_ids = {c.id for c in targets}
-    return {"connections": [{"id": str(c.id), "name": c.name, "backend": c.backend,
-                              "auth_state": c.auth_state, "capabilities": c.configuration.get("site_profile", {})}
-                             for c in targets],
-            "environments": [{"id": str(e.id), "name": e.name, "revision_sha256": e.revision_sha256,
-                              "connection_id": str(e.connection_id)}
-                             for e in project.environments.filter(connection_id__in=target_ids)]}
+    credential, _ = scope(request, "jobs:read")
+    from .resource_api import compute_context
+    return compute_context(credential)
 
 
 @boundary("GET")
 def allowance(request, project_id):
-    _, project = scope(request, "jobs:read", project_id=project_id)
-    return services.allowance(project)
+    credential, project = scope(request, "jobs:read", project_id=project_id)
+    from .resource_api import compute_context
+    return {**services.allowance(project), "compute": compute_context(credential)}
 
 
 @boundary("POST")
