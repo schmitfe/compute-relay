@@ -433,6 +433,7 @@ def test_attempt_accounting_distinguishes_requested_allocated_and_actual(broker)
     assert result["execution_request_id"] == str(attempt.execution_request_id)
     assert result["accounting"]["requested"]["cpu_cores"] == 1
     assert result["accounting"]["allocated"]["cpu_cores"] == 2
+    assert result["accounting"]["prediction"] == {"cpu_cores": 1, "gpu_devices": 0, "allocation_exceeded": True}
     assert result["accounting"]["cpu_core_seconds"] == 14
     assert result["accounting"]["reservation_difference"]["cpu_core_seconds"] == -46
     assert "must-not-leak" not in json.dumps(result)

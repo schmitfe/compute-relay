@@ -66,6 +66,14 @@ charged CPU/GPU seconds and the difference from the reservation. Missing final
 accounting remains unknown. Output existence and scientific correctness are
 not inferred from scheduler success.
 
+Responses identify their mode explicitly: jobs use `response_mode: compact` or
+`detail`; `get_project_allowance()` uses `budget`, omitting the repeated target
+catalog, while `detail=True` retains it. `get_project_context.adapter` and the
+MCP initialization instructions identify the local adapter's package version,
+schema version and source fingerprint captured when that process starts. This
+helps identify an old running adapter after an upgrade. It is a diagnostic,
+not a signature or a version assertion about the separately deployed broker.
+
 The tool request schema derives from the broker's shipped JSON schema,
 including nested resource, environment, file and output fields. Invalid inputs
 fail before HTTP submission without echoing their values. Logs default to
@@ -81,6 +89,13 @@ performance guarantee.
 ## Workspace source and result helpers
 
 Run these ordinary CLI operations where the initialized project files live:
+
+Initialization writes `.compute-broker/USAGE.md` with the actual installed
+interpreter and workspace path, correctly quoted for the shell. Prefer those
+exact `python -m compute_broker.cli ...` commands when the console script is
+absent from the client's search path. Refresh a known generated workflow with
+`init-mcp --reuse-key --with-workflow`; locally modified guidance is preserved
+by refusing an unrecognized replacement.
 
 ```sh
 compute-broker files stage --manifest source-bundle.json

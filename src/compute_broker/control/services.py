@@ -357,6 +357,10 @@ def serialize_attempt(attempt):
     resources = attempt.job.request.get("resources", {})
     def integer(value):
         return value if type(value) is int and 0 <= value <= 2**53 - 1 else None
+    predicted = {field: integer(attempt.job.manifest.get("maximum_allocation", {}).get(field))
+        for field in ("cpu_cores", "gpu_devices")}
+    allocation_exceeded = any(observed is not None and predicted[field] is not None and observed > predicted[field]
+        for field, observed in (("cpu_cores", diagnostics["allocated_cpus"]), ("gpu_devices", diagnostics["allocated_gpus"])))
     return {"id": str(attempt.id), "execution_request_id": str(attempt.execution_request_id),
         "state": attempt.state, "accounting_state": attempt.accounting_state,
         "native_identity": attempt.native_identity, "error_code": attempt.error_code,
@@ -366,6 +370,7 @@ def serialize_attempt(attempt):
             "requested": {"cpu_cores": integer(resources.get("cpus")), "gpu_devices": integer(resources.get("gpus")),
                           "time_limit_seconds": integer(resources.get("time_limit_seconds"))},
             "allocated": {"cpu_cores": diagnostics["allocated_cpus"], "gpu_devices": diagnostics["allocated_gpus"]},
+            "prediction": {**predicted, "allocation_exceeded": allocation_exceeded},
             "reservation": {"cpu_core_seconds": attempt.reservation_cpu, "gpu_device_seconds": attempt.reservation_gpu},
             "reservation_difference": {"cpu_core_seconds": cpu - attempt.reservation_cpu if cpu is not None else None,
                                        "gpu_device_seconds": gpu - attempt.reservation_gpu if gpu is not None else None}}}

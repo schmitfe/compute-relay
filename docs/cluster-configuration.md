@@ -100,13 +100,34 @@ or requeue safety. Existing package preparation and project compute limits still
 apply. Reservations use effective allocated resources multiplied by requested
 walltime; final accounting uses observed allocated resource time in full.
 
+**CPU allocation unit (logical CPUs)** is separate from the cluster's retained
+minimum allocation. It describes the increment to which allocations round up:
+`ceil(max(requested CPUs, minimum allocation) / unit) * unit`. For example, unit
+2 turns a request for 3 logical CPUs into an effective allocation of 4. A minimum
+allocation of 3 also rounds to 4 with unit 2. The first rounded allocation must
+fit within **Maximum CPUs per job**.
+
+Saved scheduler topology may suggest a unit for the selected partitions. The
+form labels this as provisional metadata and shows its per-partition evidence;
+it is not verification by a compute job. A saved explicit unit takes precedence
+over a new suggestion. Unknown evidence leaves the field blank. Owners can enter,
+change or explicitly clear the unit; an omitted field from an older form retains
+the saved value, or leaves it unspecified if none was saved. A suggestion alone
+does not add a unit to an omitted form submission. Saving a displayed unit still
+requires the normal connector acknowledgement before it changes new packages.
+
+This setting changes effective CPU allocation and its reservation. It does not
+change requested walltime, introduce timing margins or enable automatic
+execution. Project limits continue to apply to the rounded allocation.
+
 The resource form requires an explicit finite value when discovery could not
 provide one. Values must fit the supported bounds, walltime must be whole
 minutes, names must be safe scheduler names, and partition selection cannot be
 empty. Where selected partitions have known ceilings, inputs cannot exceed
 those ceilings. A lower resource ceiling cannot contradict retained allocation
-rounding. Allocation-rounding fields are not editable through this form; forged
-extra fields cannot change them. Automatic execution changes only through the
+rounding. The retained CPU/GPU minimum floors are not editable through this form;
+the explicit CPU allocation unit is the separate owner setting described above.
+Forged minimum-floor fields cannot change them. Automatic execution changes only through the
 explicit personal-cluster checkbox described above.
 
 The form has no separate termination, overtime or cleanup section. Legacy timing

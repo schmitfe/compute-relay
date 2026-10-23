@@ -80,6 +80,9 @@ def enqueue(user, connection_id, kind, payload, revision):
         if (kind == "configure" and payload.get("module_availability_enabled") is True
                 and "personal_module_availability_v1" not in worker.connector_features):
             raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable module avail discovery.", 409)
+        if (kind == "configure" and "cpu_allocation_quantum" in payload.get("site_profile", {})
+                and "personal_cpu_allocation_v1" not in worker.connector_features):
+            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector with the updated broker environment before applying CPU allocation units.", 409)
         expire_tasks(current)
         pending = ConnectorTask.objects.filter(connection=current, state__in=["queued", "running"])
         if pending.filter(kind="configure").exists() or pending.count() >= 4:
@@ -167,7 +170,8 @@ def configure(request, connection_id):
         "remote_root": initial_root, "root_error": root_error, "task": task,
         "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
         "derived": derive_cluster_configuration(connection.discovery_snapshot, connection.configuration.get("site_profile", {})),
-        "connector_ready": "personal_setup_v1" in connection.worker.connector_features})
+        "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
+        "cpu_allocation_ready": "personal_cpu_allocation_v1" in connection.worker.connector_features})
 
 
 def authenticated_connection(request, document):
@@ -187,7 +191,7 @@ def tasks(request):
         defaults_deferred = False
         if document.get("hello") is True:
             features = document.get("features", ["personal_setup_v1"])
-            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1"} for item in features):
+            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1"} for item in features):
                 raise BrokerError("INVALID_FEATURES", "Unsupported connector setup capabilities.")
             worker.connector_features = list(dict.fromkeys(features))
             worker.save(update_fields=["connector_features"])

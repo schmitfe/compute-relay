@@ -12,6 +12,7 @@ from django.utils import timezone
 from compute_broker.backends.preparation import BackendError
 from compute_broker.backends.environments import validate_environment_config, render_environment, EnvironmentProfileError
 from compute_broker.domain.cluster_configuration import validate_cluster_configuration, ClusterConfigurationError
+from compute_broker.domain.allocation import allocated_cpus
 from . import services
 from .auth import new_token, token_hash, require_credential_actor
 from .errors import BrokerError
@@ -64,7 +65,7 @@ def resource_plan(connection, policy=None):
         raise BrokerError("CHECK_GPU_ROUNDING", "This connection's allocation rounding cannot provide a CPU-only diagnostic. Use an appropriate CPU connection.", 409)
     limits = policy.get("per_job_limits", {}) if policy else {}
     cpus = min(2, profile["maximum_cpus"], limits.get("cpu_cores", 1024))
-    effective = max(cpus, profile.get("allocated_cpus", cpus))
+    effective = allocated_cpus(cpus, profile)
     duration = 60
     if (cpus < 1 or effective > min(profile["maximum_cpus"], limits.get("cpu_cores", 1024))
             or min(profile["maximum_memory_mib"], limits.get("memory_mib", 16777216)) < 128

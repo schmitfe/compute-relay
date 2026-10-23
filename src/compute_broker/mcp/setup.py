@@ -1,6 +1,7 @@
 """Create a private, project-local stdio MCP connection without contacting a broker."""
 
 import getpass
+import hashlib
 from contextlib import contextmanager
 import json
 import os
@@ -214,16 +215,21 @@ def _configuration(client, before, server, reuse_key):
     return after
 
 
-def _workflow_instructions(before, client):
-    from .workflow import BLOCK_END, BLOCK_START, instruction_block
+def _workflow_instructions(before, client, *, reuse_key=False):
+    from .workflow import BLOCK_END, BLOCK_START, instruction_block, legacy_instruction_block
     text = (before or b"").decode("utf-8")
     block = instruction_block(client)
     if BLOCK_START in text or BLOCK_END in text:
         if (text.count(BLOCK_START) != 1 or text.count(BLOCK_END) != 1
-                or text.find(BLOCK_START) > text.find(BLOCK_END)
-                or text[text.find(BLOCK_START):text.find(BLOCK_END) + len(BLOCK_END)] != block.rstrip("\n")):
+                or text.find(BLOCK_START) > text.find(BLOCK_END)):
             raise ValueError("The existing managed compute workflow instructions differ; review them before initializing.")
-        return before
+        start, end = text.find(BLOCK_START), text.find(BLOCK_END) + len(BLOCK_END)
+        current = text[start:end]
+        if current == block.rstrip("\n"):
+            return before
+        if reuse_key and current == legacy_instruction_block(client).rstrip("\n"):
+            return (text[:start] + block.rstrip("\n") + text[end:]).encode("utf-8")
+        raise ValueError("The existing managed compute workflow instructions differ; review them or use --reuse-key for an unchanged older generated block.")
     return (text + ("\n\n" if text else "") + block).encode("utf-8")
 
 
@@ -301,21 +307,29 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
     if metadata_before is not None and _json_document(metadata_before, "broker workspace metadata") != metadata:
         raise ValueError("The existing broker workspace metadata belongs to another location or broker; review it before initializing.")
     changes.append((project / CONNECTION_PATH, metadata_before, metadata_before or (json.dumps(metadata, indent=2) + "\n").encode()))
+    from .workflow import USAGE_PATH, usage_guide
+    usage_path = project / USAGE_PATH
+    usage_before = _read_regular(usage_path)
+    usage_after = usage_guide(project, interpreter)
+    if usage_before is not None and usage_before != usage_after:
+        raise ValueError("The existing local helper guide differs; initialization never overwrites a user guide.")
+    changes.append((usage_path, usage_before, usage_after))
     if with_workflow:
-        from .workflow import CLIENTS, skill_bytes
+        from .workflow import CLIENTS, LEGACY_SKILL_SHA256, skill_bytes
         source = skill_bytes()
         for selected in clients:
             skill_relative, instruction_relative = CLIENTS[selected]
             path = project / skill_relative
             before = _read_regular(path)
-            if before is not None and before != source:
+            if (before is not None and before != source
+                    and not (reuse_key and hashlib.sha256(before).hexdigest() in LEGACY_SKILL_SHA256)):
                 raise ValueError("An existing compute skill differs; initialization never overwrites a skill.")
             if before is None:
                 private_paths.append(skill_relative)
             changes.append((path, before, source))
             instructions = project / instruction_relative
             before = _read_regular(instructions)
-            changes.append((instructions, before, _workflow_instructions(before, selected)))
+            changes.append((instructions, before, _workflow_instructions(before, selected, reuse_key=reuse_key)))
     ignore_before = _read_regular(ignore_path)
     ignore_text = (ignore_before or b"").decode("utf-8")
     ignore_paths = ["/.compute-broker/", "/.compute-broker/project.key",
@@ -385,6 +399,8 @@ def main(args):
     except KeyboardInterrupt:
         raise SystemExit("MCP setup cancelled.") from None
     print(f"Compute Broker MCP connection created in {project}")
+    from .workflow import USAGE_PATH
+    print(f"Local helper commands: {project / USAGE_PATH}")
     client = getattr(args, "client", "codex")
     if client == "codex":
         print("The API key is private and Git exclusions are installed. Start a new trusted Codex chat in this project.")

@@ -1,9 +1,11 @@
 """Client portability preserves credentials, project guidance and path boundaries."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import stat
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -14,6 +16,8 @@ from compute_broker.mcp import setup, workflow
 
 
 TOKEN = "cbp_synthetic_portable_project_credential_123456789"
+# Frozen released bytes from 9be0c5a; migration evidence, not a maintained skill.
+LEGACY_SKILL = Path(__file__).resolve().parents[1] / "fixtures/mcp/compute-skill-v1.md"
 
 
 def test_both_clients_share_one_private_key_and_identical_packaged_skill(tmp_path):
@@ -33,8 +37,9 @@ def test_both_clients_share_one_private_key_and_identical_packaged_skill(tmp_pat
         assert (project / skill).read_bytes() == workflow.skill_bytes()
         assert workflow.BLOCK_START in (project / instructions).read_text()
     for relative in (setup.CONFIG_PATH, setup.CLAUDE_CONFIG_PATH, setup.CONNECTION_PATH,
-                     Path("AGENTS.md"), Path("CLAUDE.md")):
+                     workflow.USAGE_PATH, Path("AGENTS.md"), Path("CLAUDE.md")):
         assert TOKEN not in (project / relative).read_text()
+    assert stat.S_IMODE((project / workflow.USAGE_PATH).stat().st_mode) == 0o600
 
 
 def test_claude_only_configuration_is_project_scoped_and_workflow_is_opt_in(tmp_path):
@@ -146,7 +151,7 @@ def test_existing_different_skill_or_managed_block_is_never_overwritten(tmp_path
     assert not (tmp_path / ".compute-broker").exists()
 
 
-@pytest.mark.parametrize("relative", [".mcp.json", ".claude", ".agents", "AGENTS.md", "CLAUDE.md", ".compute-broker/connection.json"])
+@pytest.mark.parametrize("relative", [".mcp.json", ".claude", ".agents", "AGENTS.md", "CLAUDE.md", ".compute-broker/connection.json", ".compute-broker/USAGE.md"])
 def test_new_setup_paths_reject_symlinks_before_prompting(tmp_path, monkeypatch, relative):
     project = tmp_path / "project"
     project.mkdir()
@@ -184,7 +189,7 @@ def test_git_exclusions_cover_both_clients_even_after_prior_negations(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / ".gitignore").write_text("/.mcp.json\n!/.mcp.json\n")
     setup.initialize(tmp_path, api_key=TOKEN, client="both")
-    for relative in (setup.CONFIG_PATH, setup.CLAUDE_CONFIG_PATH, setup.KEY_PATH, setup.CONNECTION_PATH):
+    for relative in (setup.CONFIG_PATH, setup.CLAUDE_CONFIG_PATH, setup.KEY_PATH, setup.CONNECTION_PATH, workflow.USAGE_PATH):
         assert subprocess.run(["git", "-C", str(tmp_path), "check-ignore", "--", str(relative)], capture_output=True).returncode == 0
 
 
@@ -219,3 +224,107 @@ def test_cli_exposes_portable_options_without_auto_approval_or_raw_key_arguments
     for option in ("--api-key", "--auto-approve", "--skip-permissions"):
         with pytest.raises(SystemExit):
             parser.parse_args(["init-mcp", option, TOKEN])
+
+
+@pytest.mark.parametrize("client", ["codex", "claude", "both"])
+def test_usage_guide_records_shell_quoted_module_commands_without_assuming_console_scripts(tmp_path, client):
+    project = tmp_path / "science project 'quoted'"
+    interpreter = tmp_path / "broker environment 'quoted'" / "bin/python"
+    setup.initialize(project, api_key=TOKEN, client=client, with_workflow=True, python=interpreter)
+    guide = (project / workflow.USAGE_PATH).read_text()
+    commands = [line for block in guide.split("```sh\n")[1:] for line in block.split("\n```", 1)[0].splitlines()]
+    assert commands
+    actions = set()
+    for command in commands:
+        words = shlex.split(command)
+        assert words[:4] == [str(interpreter), "-m", "compute_broker.cli", "files"]
+        assert not words[0].endswith("compute-broker")
+        if "--directory" in words:
+            assert words[words.index("--directory") + 1] == str(project)
+        actions.add(words[4])
+    assert {"--help", "stage", "prepare", "fetch"} <= actions
+    assert TOKEN not in guide and "BROKER_PROJECT_TOKEN=" not in guide
+    selected = ("codex", "claude") if client == "both" else (client,)
+    for name in selected:
+        skill_path, instructions_path = workflow.CLIENTS[name]
+        assert ".compute-broker/USAGE.md" in (project / skill_path).read_text()
+        assert ".compute-broker/USAGE.md" in (project / instructions_path).read_text()
+    assert json.loads((project / setup.CONNECTION_PATH).read_text()) == {
+        "schema_version": "1.0", "broker_url": setup.DEFAULT_BROKER_URL, "workspace_root": str(project)}
+
+
+def old_workflow_project(project):
+    setup.initialize(project, api_key=TOKEN, client="both", with_workflow=True)
+    old = LEGACY_SKILL.read_bytes()
+    assert hashlib.sha256(old).hexdigest() in workflow.LEGACY_SKILL_SHA256
+    for name, (skill_path, instructions_path) in workflow.CLIENTS.items():
+        (project / skill_path).write_bytes(old)
+        (project / instructions_path).write_text("# Existing project conventions\nKeep our workflow.\n\n"
+            + workflow.legacy_instruction_block(name) + "\n## Local notes\nPreserve these too.\n")
+    (project / workflow.USAGE_PATH).unlink()
+    return project
+
+
+def test_explicit_reuse_upgrades_exact_old_generated_skills_and_managed_blocks_idempotently(tmp_path, monkeypatch):
+    project = old_workflow_project(tmp_path / "science")
+    key_before = (project / setup.KEY_PATH).read_bytes()
+    config_before = {path: (project / path).read_bytes() for path in (setup.CONFIG_PATH, setup.CLAUDE_CONFIG_PATH, setup.CONNECTION_PATH)}
+    monkeypatch.setattr(setup.getpass, "getpass", lambda _prompt: pytest.fail("Upgrade must reuse the saved key"))
+    setup.initialize(project, client="both", with_workflow=True, reuse_key=True)
+    for skill_path, instructions_path in workflow.CLIENTS.values():
+        assert (project / skill_path).read_bytes() == workflow.skill_bytes()
+        instructions = (project / instructions_path).read_text()
+        assert instructions.startswith("# Existing project conventions\nKeep our workflow.\n\n")
+        assert instructions.endswith("\n## Local notes\nPreserve these too.\n")
+        assert ".compute-broker/USAGE.md" in instructions
+        assert instructions.count(workflow.BLOCK_START) == 1
+    assert (project / workflow.USAGE_PATH).is_file()
+    assert (project / setup.KEY_PATH).read_bytes() == key_before
+    assert all((project / path).read_bytes() == before for path, before in config_before.items())
+    monkeypatch.setattr(setup, "_write", lambda *args: pytest.fail("Identical upgrade must not rewrite files"))
+    setup.initialize(project, client="both", with_workflow=True, reuse_key=True)
+
+
+@pytest.mark.parametrize("conflict", ["guide", "skill", "instructions"])
+def test_customized_guide_or_old_workflow_is_refused_without_partial_upgrade(tmp_path, monkeypatch, conflict):
+    project = old_workflow_project(tmp_path / "science")
+    if conflict == "guide":
+        (project / workflow.USAGE_PATH).write_text("My own helper instructions")
+    elif conflict == "skill":
+        with (project / workflow.CLIENTS["claude"][0]).open("ab") as stream:
+            stream.write(b"\nUser-specific changes\n")
+    else:
+        instructions = project / "CLAUDE.md"
+        instructions.write_text(instructions.read_text().replace("Keep API keys", "User-specific rule: keep API keys"))
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    monkeypatch.setattr(setup.getpass, "getpass", lambda _prompt: pytest.fail("No key prompt during conflict preflight"))
+    with pytest.raises(ValueError):
+        setup.initialize(project, client="both", with_workflow=True, reuse_key=True)
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+def test_failed_old_workflow_upgrade_rolls_back_guidance_and_removes_only_new_guide(tmp_path, monkeypatch):
+    project = old_workflow_project(tmp_path / "science")
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    original_write = setup._write
+    def fail_last_instructions(path, *args):
+        if path == project / "CLAUDE.md":
+            raise OSError("Synthetic final guidance failure")
+        return original_write(path, *args)
+    monkeypatch.setattr(setup, "_write", fail_last_instructions)
+    with pytest.raises(OSError):
+        setup.initialize(project, client="both", with_workflow=True, reuse_key=True)
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+    assert not (project / workflow.USAGE_PATH).exists()
+
+
+def test_existing_user_guide_is_preserved_before_prompt_or_mutation(tmp_path, monkeypatch):
+    private = tmp_path / ".compute-broker"
+    private.mkdir(mode=0o700)
+    guide = tmp_path / workflow.USAGE_PATH
+    guide.write_text("Human-authored guide, keep unchanged")
+    monkeypatch.setattr(setup.getpass, "getpass", lambda _prompt: pytest.fail("Guide conflict must precede key prompt"))
+    with pytest.raises(ValueError, match="never overwrites a user guide"):
+        setup.initialize(tmp_path, client="both", with_workflow=True)
+    assert guide.read_text() == "Human-authored guide, keep unchanged"
+    assert not (tmp_path / setup.KEY_PATH).exists() and not (tmp_path / ".gitignore").exists()

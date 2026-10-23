@@ -1392,7 +1392,7 @@ def execute(config, request):
                                          if line.split("=", 1)[0].strip() in setting_names)
         user = pwd.getpwuid(os.getuid()).pw_name
         return {"version": query("sinfo", ["--version"]),
-                "nodes": query("sinfo", ["-N", "-h", "-o", "%N|%P|%c|%m|%G|%t"]),
+                "nodes": query("sinfo", ["-N", "-h", "-o", "%N|%P|%c|%m|%G|%t|%X|%Y|%Z"]),
                 "partitions": query("scontrol", ["show", "partition", "-o"]),
                 "settings": settings,
                 "software": software_discovery(config),

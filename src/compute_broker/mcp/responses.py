@@ -42,10 +42,26 @@ def _accounting(value):
     value = _object(value)
     result = _fields(value, ("final", *_USAGE, "elapsed_seconds"))
     for name, fields in (("requested", ("cpu_cores", "gpu_devices", "time_limit_seconds")),
-        ("allocated", ("cpu_cores", "gpu_devices")), ("reservation", _USAGE), ("reservation_difference", _USAGE)):
+        ("allocated", ("cpu_cores", "gpu_devices")), ("prediction", ("cpu_cores", "gpu_devices", "allocation_exceeded")),
+        ("reservation", _USAGE), ("reservation_difference", _USAGE)):
         if isinstance(value.get(name), dict):
             result[name] = _fields(value[name], fields)
     return result
+
+
+def compact_allowance(payload):
+    """Refresh shared budget and admission counts without repeating discovery."""
+    if not isinstance(payload, dict):
+        raise ValueError("Expected a broker allowance object.")
+    result = {"response_mode": "budget", **_fields(payload,
+        ("project_id", "mode", "paused", "policy_revision", "admission_expires_at"))}
+    for name in ("limit", "spent", "reserved", "reserved_awaiting_approval", "available", "debt"):
+        if isinstance(payload.get(name), dict):
+            result[name] = _fields(payload[name], _USAGE)
+    if isinstance(payload.get("jobs"), dict):
+        result["jobs"] = _fields(payload["jobs"],
+            ("limit", "admitted", "remaining", "active", "active_limit", "awaiting_approval"))
+    return deepcopy(result)
 
 
 def compact_job(payload, *, broker_url=None):
@@ -57,7 +73,7 @@ def compact_job(payload, *, broker_url=None):
     """
     if not isinstance(payload, dict):
         raise ValueError("Expected a broker job object.")
-    result = _fields(payload, ("id", "name", "state", "manifest_sha256"))
+    result = {"response_mode": "compact", **_fields(payload, ("id", "name", "state", "manifest_sha256"))}
     manifest = _object(payload.get("manifest"))
     if isinstance(manifest.get("reservation"), dict):
         result["reservation"] = _fields(manifest["reservation"], _USAGE)

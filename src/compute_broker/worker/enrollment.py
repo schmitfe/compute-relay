@@ -29,7 +29,7 @@ _SITE_FIELDS = {
     "automatic_execution_allowed",
     "partitions", "accounts", "qos", "termination_margin_seconds",
     "overtime_margin_seconds", "cleanup_margin_seconds", "allocated_cpus",
-    "allocated_gpus", "maximum_cpus", "maximum_gpus", "maximum_memory_mib",
+    "allocated_gpus", "cpu_allocation_quantum", "maximum_cpus", "maximum_gpus", "maximum_memory_mib",
     "maximum_time_limit_seconds",
 }
 _RUNTIME_FIELDS = {
@@ -93,6 +93,8 @@ def profile_metadata(alias: str, profile: dict) -> dict:
                     or any(not isinstance(item, str) or not _ALIAS.fullmatch(item) for item in value)):
                 raise EnrollmentError("INVALID_CREDENTIAL_PROFILE")
         elif type(value) is not int or not 0 <= value <= 2**53 - 1:
+            raise EnrollmentError("INVALID_CREDENTIAL_PROFILE")
+        elif key == "cpu_allocation_quantum" and not 1 <= value <= 1024:
             raise EnrollmentError("INVALID_CREDENTIAL_PROFILE")
     try:
         fingerprint = hashlib.sha256(canonical_json_bytes(profile)).hexdigest()

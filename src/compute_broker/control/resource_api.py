@@ -3,6 +3,7 @@
 from django.utils import timezone
 
 from compute_broker.domain.resource_limits import allocation_violations, effective_resource_limits
+from compute_broker.domain.allocation import allocated_cpus
 
 from .auth import connection_allowed
 from .execution_policy import approval_requirements
@@ -14,7 +15,7 @@ SITE_RESOURCES = dict(zip(PROJECT_RESOURCES,
     ("maximum_cpus", "maximum_gpus", "maximum_memory_mib", "maximum_time_limit_seconds")))
 RESOURCE_LABELS = {"cpu_cores": "CPU allocation", "gpu_devices": "GPU allocation",
     "memory_mib": "Memory", "time_limit_seconds": "Walltime"}
-PUBLIC_PROFILE_FIELDS = {"partitions", "accounts", "qos", "allocated_cpus", "allocated_gpus",
+PUBLIC_PROFILE_FIELDS = {"partitions", "accounts", "qos", "allocated_cpus", "allocated_gpus", "cpu_allocation_quantum",
     "automatic_execution_allowed", *SITE_RESOURCES.values()}
 
 
@@ -69,7 +70,7 @@ def violations_for_connection(resources, allocation, configuration):
 
 def planned_allocation(resources, configuration):
     profile = configuration.get("site_profile", {})
-    return {"cpu_cores": max(resources["cpus"], profile.get("allocated_cpus", resources["cpus"])),
+    return {"cpu_cores": allocated_cpus(resources["cpus"], profile),
             "gpu_devices": max(resources["gpus"], profile.get("allocated_gpus", resources["gpus"])),
             "time_limit_seconds": resources["time_limit_seconds"]}
 

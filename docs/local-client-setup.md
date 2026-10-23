@@ -35,6 +35,12 @@ both, sharing one private `.compute-broker/project.key`. Private
 the file helper, without key contents. Git exclusions cover the selected client
 configurations and private directory. Initialization preserves unrelated
 configuration and refuses conflicting existing broker configuration or keys.
+It also writes `.compute-broker/USAGE.md`: a secret-free, ignored guide with
+the actual installed Python interpreter and workspace paths, shell-quoted for
+direct use even when they contain spaces. Its commands use absolute
+`python -m compute_broker.cli` invocations and do not depend on a console script
+being on `PATH`. Initialization prints the guide's path. The same interpreter
+can initialize a project through `-m compute_broker.cli init-mcp` if needed.
 The key is never printed or passed as a command-line argument. Initialization
 does not contact the broker; the MCP adapter verifies the key and resolves its
 project when the client connects. The broker retains only the key's hash.
@@ -60,14 +66,19 @@ project `AGENTS.md`/`CLAUDE.md` files. Existing instructions and permission
 settings are preserved. No client-wide settings, hooks or automatic approvals
 are installed. The secret-free workflow files can be reviewed and committed.
 Existing different skills or managed blocks require review instead of overwrite.
+Explicit `--reuse-key --with-workflow` can safely refresh unchanged earlier
+generated skills and managed blocks to link the usage guide. Exact known
+versions are recognized; user edits and conflicting user guides remain untouched.
 
-For sources and outputs, use the workspace helper so chat receives bounded
-receipts rather than large file contents:
+For sources and outputs, copy the complete commands from
+`.compute-broker/USAGE.md`, which is linked by the shared skill and project
+guidance. The helper keeps chat responses to bounded receipts. Its general syntax
+is shown below; the guide supplies the actual interpreter path:
 
 ```sh
-compute-broker files stage --directory /path/to/science-project --manifest source-bundle.json
-compute-broker files prepare --directory /path/to/science-project --bundle BUNDLE_ID --request job.json --idempotency-key RUN_STAGE
-compute-broker files fetch --directory /path/to/science-project --attempt-id ATTEMPT_UUID --output results/RUN
+/absolute/path/to/python -m compute_broker.cli files stage --directory /path/to/science-project --manifest source-bundle.json
+/absolute/path/to/python -m compute_broker.cli files prepare --directory /path/to/science-project --bundle BUNDLE_ID --request job.json --idempotency-key RUN_STAGE
+/absolute/path/to/python -m compute_broker.cli files fetch --directory /path/to/science-project --attempt-id ATTEMPT_UUID --output results/RUN
 ```
 
 Stage only explicit relative paths; the source manifest contains

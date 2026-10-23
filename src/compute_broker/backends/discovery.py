@@ -10,8 +10,10 @@ def parse_discovery(response: dict, connection: dict) -> dict:
     nodes = []
     for line in response.get("nodes", {}).get("stdout", "").splitlines():
         parts = line.split("|")
-        if len(parts) == 6:
+        if len(parts) in {6, 9}:
             node = dict(zip(("name", "partition", "cpus", "memory_mib", "gres", "state"), parts))
+            if len(parts) == 9:
+                node.update(dict(zip(("sockets", "cores_per_socket", "threads_per_core"), parts[6:])))
             node["partition"] = node["partition"].removesuffix("*")
             nodes.append(node)
     partitions = []

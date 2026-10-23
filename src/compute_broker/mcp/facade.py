@@ -1,13 +1,15 @@
 """Official SDK stdio server forwarding a project's bounded API operations."""
 
 import base64
+import json
 import os
 import re
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 from compute_broker.worker.client import JsonClient, environment_token
-from .responses import compact_job
+from .implementation import adapter_metadata
+from .responses import compact_allowance, compact_job
 
 
 def _uuid(value: str) -> str:
@@ -44,7 +46,7 @@ class ProjectFacade:
         context = self.client.request("GET", "/api/v1/context")
         if _uuid(context["project"]["id"]) != self.project_id:
             raise ValueError("API key project changed; reconnect the MCP adapter")
-        return context
+        return {**context, "adapter": adapter_metadata()}
 
     def project_request(self, request: dict):
         """Fill internal routing identity without changing the caller's document."""
@@ -62,8 +64,9 @@ class ProjectFacade:
     def list_compute_targets(self):
         return self.client.request("GET", "/api/v1/connections")
 
-    def get_project_allowance(self):
-        return self.client.request("GET", f"/api/v1/projects/{self.project_id}/allowance")
+    def get_project_allowance(self, detail: bool = False):
+        result = self.client.request("GET", f"/api/v1/projects/{self.project_id}/allowance")
+        return {**result, "response_mode": "detail"} if detail else compact_allowance(result)
 
     def upload_job_file(self, path: str, content_base64: str):
         # The facade never opens a caller-supplied local path or reads a URL.
@@ -95,7 +98,7 @@ class ProjectFacade:
 
     def get_job(self, job_id: str, detail: bool = False):
         result = self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}")
-        return result if detail else compact_job(result, broker_url=getattr(self.client, "base_url", None))
+        return {**result, "response_mode": "detail"} if detail else compact_job(result, broker_url=getattr(self.client, "base_url", None))
 
     def get_job_logs(self, attempt_id: str, stream: str = "stdout", cursor: int = 0,
                      limit: int = 8192):
@@ -161,6 +164,10 @@ def create_server(facade: ProjectFacade):
                 raise
 
     server = BrokerMCP("Compute Broker", instructions=(
+        "Loaded local stdio adapter: " + json.dumps(adapter_metadata(), separators=(",", ":")) + ". "
+        "This identifies this adapter process, not the broker service. Context includes this same "
+        "adapter metadata. Job responses identify response_mode=compact by default or detail "
+        "when explicitly requested. The allowance refresh defaults to response_mode=budget. "
         "Before planning work, call get_project_context once: it already contains "
         "permitted compute targets, environments, effective limits and shared allowance. "
         "The separate target and allowance tools are optional focused refreshes; do not "
@@ -187,7 +194,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=readonly)
     def get_project_context() -> dict:
-        """Single discovery call: project, permitted clusters/environments, active limits, shared allowance, scopes and review preference. Requires no project ID. Refresh before planning; separate discovery tools are optional."""
+        """Single discovery call: project, clusters/environments, active limits, allowance, scopes and review preference; adapter metadata identifies this loaded local MCP process. Requires no project ID. Refresh before planning; separate discovery tools are optional."""
         return facade.get_project_context()
 
     @server.tool(annotations=readonly)
@@ -201,9 +208,9 @@ def create_server(facade: ProjectFacade):
         return facade.list_compute_targets()
 
     @server.tool(annotations=readonly)
-    def get_project_allowance() -> dict:
-        """Optional focused refresh of resource limits, shared funds and reservations. get_project_context already contains the allowance and target effective_limits."""
-        return facade.get_project_allowance()
+    def get_project_allowance(detail: bool = False) -> dict:
+        """Optional budget/submission refresh: balances, reservations, debt, expiry and job counts. No repeated target catalog by default. get_project_context contains effective resource limits and discovery; detail=True returns full allowance metadata."""
+        return facade.get_project_allowance(detail=detail)
 
     @server.tool(annotations=write)
     def upload_job_file(path: str, content_base64: str) -> dict:

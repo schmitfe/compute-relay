@@ -39,11 +39,16 @@ uncertain, run a bounded pilot within the user's authorization and record what
 was measured, the extrapolation and its uncertainty before expanding the work.
 
 Independent cluster CPU/GPU/RAM maxima may refer to different nodes or partitions.
-Use the target's effective project/cluster ceilings and allocation floors, the
+Use the target's effective project/cluster ceilings, allocation floors and CPU
+allocation unit, the
 selected partition and the matching cluster environment. Requested walltime
 determines the reservation; actual allocated elapsed runtime determines the
 final charge and may exceed it. Storage estimates remain advisory unless the
 filesystem independently enforces quotas.
+If reported allocation exceeds the prepared prediction, keep actual accounting
+and flag the cluster configuration for review. A minimum allocation floor does
+not model odd CPU requests rounding up to whole cores. Never change cluster
+configuration or assume one observed allocation proves a general rounding rule.
 
 ## Prepare and execute a bounded workload
 
@@ -54,14 +59,12 @@ checks. Reuse a stable idempotency key when retrying the same operation; changed
 content or a deliberate new attempt needs a new key. A transport timeout or
 missing queue record is not permission to resubmit an uncertain job.
 
-Use the workspace file helper to stage explicit source/input files and fetch
-declared outputs outside the conversation:
-
-```sh
-compute-broker files stage --directory /absolute/project --manifest source-bundle.json
-compute-broker files prepare --directory /absolute/project --bundle BUNDLE_ID --request job.json --idempotency-key KEY
-compute-broker files fetch --directory /absolute/project --attempt-id ATTEMPT_UUID --output results/RUN
-```
+Read [the project-local helper guide](../../../.compute-broker/USAGE.md) before
+staging sources or fetching outputs. It records the installed interpreter's exact
+absolute `python -m compute_broker.cli files ...` commands and workspace path.
+Use those commands; do not assume `compute-broker` is on PATH or look for an
+adjacent console script. The guide contains no credential contents. If it is
+missing, ask the user to refresh project initialization with `--reuse-key`.
 
 The source manifest lists explicit files, for example `{"files":["main.py","src/util.py"]}`.
 Staging returns a bundle ID; preparation merges its stored file descriptors into

@@ -12,8 +12,9 @@ from mcp.server.fastmcp.exceptions import ToolError
 import pytest
 
 from compute_broker.mcp.facade import ProjectFacade, create_server
+from compute_broker.mcp import implementation
 from compute_broker.mcp.requests import JobRequest, client_job_schema
-from compute_broker.mcp.responses import compact_job
+from compute_broker.mcp.responses import compact_allowance, compact_job
 from test_mcp import ClientSpy
 
 
@@ -46,6 +47,7 @@ def job_payload(job_request):
 def test_summary_keeps_latest_review_reservation_and_next_action_without_duplicate_context(job_payload):
     original = deepcopy(job_payload)
     summary = compact_job(job_payload, broker_url="https://broker.example")
+    assert summary["response_mode"] == "compact"
     assert summary["id"] == job_payload["id"]
     assert summary["latest_execution"]["budget_reservation"]["state"] == "held"
     assert summary["reservation"] == {"cpu_core_seconds": 60, "gpu_device_seconds": 0}
@@ -124,8 +126,80 @@ def test_get_job_full_metadata_is_explicit_and_uses_no_extra_http_calls(job_payl
     client = Client();facade = ProjectFacade(client, client.project_id)
     summary = facade.get_job(job_payload["id"])
     detail = facade.get_job(job_payload["id"], detail=True)
-    assert "manifest" not in summary and detail == job_payload
+    assert summary["response_mode"] == "compact"
+    assert "manifest" not in summary and detail == {**job_payload, "response_mode": "detail"}
     assert len(client.calls) == 2 and all(call[0] == "GET" for call in client.calls)
+
+
+def test_adapter_metadata_identifies_the_loaded_client_and_does_not_reread_sources(monkeypatch):
+    client = ClientSpy()
+    original = {"schema_version": "1.0", "project": {"id": client.project_id},
+        "adapter": {"implementation": "synthetic-remote-spoof"}}
+    client.request = lambda *args, **kwargs: original
+    expected = implementation.adapter_metadata()
+    assert expected["implementation"] == "compute-broker-stdio-mcp"
+    assert expected["schema_version"] == "1.0"
+    assert len(expected["source_sha256"]) == 64
+    assert expected["default_job_response_mode"] == "compact"
+    assert expected["default_allowance_response_mode"] == "budget"
+
+    def forbidden_read(path):
+        raise AssertionError("A running adapter must keep its import-time fingerprint.")
+    monkeypatch.setattr(implementation.Path, "read_bytes", forbidden_read)
+    facade = ProjectFacade(client, client.project_id)
+    context = facade.get_project_context()
+    assert context["adapter"] == expected
+    assert original["adapter"]["implementation"] == "synthetic-remote-spoof"
+    context["adapter"]["implementation"] = "locally changed"
+    assert facade.get_project_context()["adapter"] == expected
+
+
+def test_source_fingerprint_explicitly_reports_unavailable_packaged_sources(monkeypatch):
+    original = implementation.adapter_metadata()
+    def unavailable(path):
+        raise OSError("Synthetic source archive does not expose ordinary files.")
+    monkeypatch.setattr(implementation.Path, "read_bytes", unavailable)
+    assert implementation._source_fingerprint() is None
+    assert implementation.adapter_metadata() == original
+
+
+@pytest.fixture
+def allowance_payload():
+    return {"project_id": str(uuid4()), "mode": "approval_required", "paused": False,
+        "policy_revision": "synthetic-revision", "admission_expires_at": "2099-01-01T00:00:00Z",
+        "per_job_limits": {"cpu_cores": 8, "gpu_devices": 0, "memory_mib": 4096, "time_limit_seconds": 3600},
+        "limit": {"cpu_core_seconds": 1000, "gpu_device_seconds": 0},
+        "spent": {"cpu_core_seconds": 100, "gpu_device_seconds": 0},
+        "reserved": {"cpu_core_seconds": 120, "gpu_device_seconds": 0},
+        "reserved_awaiting_approval": {"cpu_core_seconds": 60, "gpu_device_seconds": 0},
+        "available": {"cpu_core_seconds": 780, "gpu_device_seconds": 0},
+        "debt": {"cpu_core_seconds": 0, "gpu_device_seconds": 0},
+        "jobs": {"limit": 10, "admitted": 2, "remaining": 8, "active": 1,
+            "active_limit": 2, "awaiting_approval": 1},
+        "compute": {"connections": [{"id": str(uuid4()), "catalog": "repeated-discovery" * 1000}]}}
+
+
+def test_allowance_summary_keeps_budget_and_submission_limits_without_repeated_compute(allowance_payload):
+    original = deepcopy(allowance_payload)
+    summary = compact_allowance(allowance_payload)
+    assert summary["response_mode"] == "budget"
+    assert summary["jobs"] == allowance_payload["jobs"]
+    assert summary["reserved_awaiting_approval"]["cpu_core_seconds"] == 60
+    assert summary["available"]["cpu_core_seconds"] == 780
+    assert summary["admission_expires_at"] == allowance_payload["admission_expires_at"]
+    assert "compute" not in summary and "per_job_limits" not in summary
+    assert len(json.dumps(summary)) * 10 < len(json.dumps(allowance_payload))
+    summary["available"]["cpu_core_seconds"] = 0
+    assert allowance_payload == original
+
+
+def test_allowance_detail_preserves_full_metadata_without_mutating_rest_payload(allowance_payload):
+    client = ClientSpy()
+    client.request = lambda *args, **kwargs: allowance_payload
+    facade = ProjectFacade(client, client.project_id)
+    assert facade.get_project_allowance()["response_mode"] == "budget"
+    assert facade.get_project_allowance(detail=True) == {**allowance_payload, "response_mode": "detail"}
+    assert "response_mode" not in allowance_payload
 
 
 def test_client_schema_exposes_nested_job_fields_without_remote_references(job_request):
@@ -165,7 +239,9 @@ def test_sdk_tool_schema_and_normal_json_calls_support_codex_and_claude(job_requ
     schema = tools["prepare_job"].inputSchema
     assert "resources" in json.dumps(schema) and "partition" in json.dumps(schema)
     assert tools["get_job"].inputSchema["properties"]["detail"]["default"] is False
+    assert tools["get_project_allowance"].inputSchema["properties"]["detail"]["default"] is False
     assert "get_project_context once" in server.instructions
+    assert implementation.adapter_metadata()["source_sha256"] in server.instructions
     asyncio.run(server.call_tool("prepare_job", {"request": deepcopy(job_request), "idempotency_key": "plain-json"}))
     assert client.calls[0][2] == {**job_request, "project_id": client.project_id}
     client.calls.clear()
@@ -289,3 +365,57 @@ def test_stdio_protocol_and_sdk_stderr_do_not_echo_invalid_argument_values(tmp_p
                         assert "XSAFE" not in text and "input_value" not in text
     asyncio.run(scenario())
     assert "XSAFE" not in log.read_text()
+
+
+def test_real_stdio_defaults_are_compact_with_explicit_adapter_and_response_modes(job_payload, allowance_payload):
+    """Exercise client defaults against this adapter without credentials or a broker."""
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    project_id = allowance_payload["project_id"]
+    job_payload["files"] = [{"path": "main.py", "text": "synthetic-source" * 1200}]
+    context = {"schema_version": "1.0", "project": {"id": project_id},
+        "allowance": deepcopy(allowance_payload), "compute": deepcopy(allowance_payload["compute"])}
+    # Passing fixed synthetic fixtures directly avoids any real token, service,
+    # project filesystem, or institutional cluster access in this protocol test.
+    program = "\n".join((
+        "from compute_broker.mcp.facade import ProjectFacade, create_server",
+        f"job = {job_payload!r}", f"allowance = {allowance_payload!r}", f"context = {context!r}",
+        "class Client:",
+        "    def request(self, method, path, *args, **kwargs):",
+        "        if path == '/api/v1/context': return context",
+        "        if path.endswith('/allowance'): return allowance",
+        "        return job",
+        f"create_server(ProjectFacade(Client(), {project_id!r})).run(transport='stdio')",
+    ))
+    async def scenario():
+        parameters = StdioServerParameters(command=sys.executable, args=["-c", program],
+            env={"PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")})
+        async with stdio_client(parameters) as (read, write):
+            async with ClientSession(read, write) as client:
+                initialized = await client.initialize()
+                expected = implementation.adapter_metadata()
+                assert expected["source_sha256"] in initialized.instructions
+                assert "not the broker service" in initialized.instructions
+                async def tool(name, **arguments):
+                    response = await client.call_tool(name, arguments)
+                    assert not response.isError, response
+                    return json.loads("".join(item.text for item in response.content if item.type == "text"))
+                discovered = await tool("get_project_context")
+                assert discovered["adapter"] == expected
+                assert discovered["compute"] == context["compute"]
+                assert discovered["allowance"] == context["allowance"]
+                summary = await tool("get_job", job_id=job_payload["id"])
+                explicit_summary = await tool("get_job", job_id=job_payload["id"], detail=False)
+                detail = await tool("get_job", job_id=job_payload["id"], detail=True)
+                assert summary == explicit_summary
+                assert summary["response_mode"] == "compact" and detail["response_mode"] == "detail"
+                assert not {"request", "manifest", "files", "attempts", "execution_requests"} & summary.keys()
+                assert detail["files"] == job_payload["files"]
+                assert len(json.dumps(summary)) < 4096 and len(json.dumps(detail)) > 10774
+                budget = await tool("get_project_allowance")
+                budget_detail = await tool("get_project_allowance", detail=True)
+                assert budget["response_mode"] == "budget" and "compute" not in budget
+                assert budget_detail["response_mode"] == "detail" and budget_detail["compute"] == allowance_payload["compute"]
+                assert budget["jobs"] == allowance_payload["jobs"]
+    asyncio.run(scenario())

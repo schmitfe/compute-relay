@@ -8,6 +8,8 @@ This module must remain usable by a worker without Django/controller imports.
 from copy import deepcopy
 import re
 
+from .allocation import allocated_cpus, cpu_allocation_candidate
+
 
 RESOURCE_BOUNDS = {
     "maximum_cpus": (1, 1024), "maximum_gpus": (0, 16),
@@ -17,7 +19,7 @@ ALLOWLIST_FIELDS = ("partitions", "accounts", "qos")
 # Accepted only when reading old configuration. New canonical profiles omit
 # these fields; reservations use requested walltime and settle actual usage.
 TIMING_FIELDS = ("termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds")
-SAFETY_FIELDS = ("allocated_cpus", "allocated_gpus", "automatic_execution_allowed")
+SAFETY_FIELDS = ("allocated_cpus", "allocated_gpus", "cpu_allocation_quantum", "automatic_execution_allowed")
 _FIELDS = set(RESOURCE_BOUNDS) | set(ALLOWLIST_FIELDS) | set(SAFETY_FIELDS) | set(TIMING_FIELDS)
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}\Z")
 _UNLIMITED = {"UNLIMITED", "INFINITE"}
@@ -229,6 +231,7 @@ def derive_cluster_configuration(snapshot, current_profile=None):
     if any(item["unknowns"] for item in partitions):
         warnings.add("Some partition limits are unknown; aggregate known maxima do not apply to every partition.")
     return {"site_profile": profile, "discovered_limits": discovered, "partitions": partitions,
+        "allocation_candidates": {"cpu_allocation_quantum": cpu_allocation_candidate(snapshot, current.get("partitions"))},
         "unknowns": unknowns, "unknown_reasons": {field: _UNKNOWN_REASONS[field] for field in unknowns},
         "warnings": sorted(warnings)}
 
@@ -259,11 +262,13 @@ def validate_cluster_configuration(profile, *, require_limits=True):
             if type(value) is not bool:
                 raise ClusterConfigurationError("Automatic execution requires an explicit boolean setting.")
         else:
-            minimum, maximum = ((1, 1024) if field == "allocated_cpus" else
+            minimum, maximum = ((1, 1024) if field in {"allocated_cpus", "cpu_allocation_quantum"} else
                 (0, 16) if field == "allocated_gpus" else (0, 604800))
             if type(value) is not int or not minimum <= value <= maximum:
                 raise ClusterConfigurationError("A retained allocation or timing setting is invalid.")
     for field, floor in (("maximum_cpus", "allocated_cpus"), ("maximum_gpus", "allocated_gpus")):
         if field in result and floor in result and result[field] < result[floor]:
             raise ClusterConfigurationError("Resource ceilings cannot be lower than retained allocation rounding.")
+    if "maximum_cpus" in result and allocated_cpus(1, result) > result["maximum_cpus"]:
+        raise ClusterConfigurationError("The smallest rounded CPU allocation exceeds the CPU ceiling.")
     return result

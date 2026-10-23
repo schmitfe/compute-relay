@@ -16,6 +16,7 @@ from typing import Mapping
 from uuid import UUID
 
 from .environments import EnvironmentProfileError, render_environment
+from compute_broker.domain.allocation import allocated_cpus
 
 
 class BackendError(ValueError):
@@ -132,7 +133,11 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         if connection.get("backend") == "fake":
             profile = {"partitions": ["debug", "cpu", "gpu"], "accounts": ["broker", "research"],
                        "qos": [], **profile}
-        max_cpus = max(cpus, positive_int(profile.get("allocated_cpus", cpus), "allocated CPU count", maximum=1024))
+        try:
+            max_cpus = allocated_cpus(cpus, profile)
+        except ValueError as exc:
+            raise BackendError(str(exc)) from None
+        positive_int(max_cpus, "rounded CPU allocation", maximum=1024)
         max_gpus = max(gpus, positive_int(profile.get("allocated_gpus", gpus), "allocated GPU count", minimum=0, maximum=16))
         max_memory = positive_int(profile.get("allocated_memory_mib", memory), "allocated memory", maximum=16777216)
         if max_memory != memory:

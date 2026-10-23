@@ -81,6 +81,17 @@ def effective_resource_limits(project_policy, connection_configuration, *, backe
         elif limits[resource] is not None and floor > limits[resource]:
             reasons.append(f"The cluster allocation floor for {resource} ({floor}) exceeds the effective ceiling ({limits[resource]}).")
 
+    unit = _integer(profile.get("cpu_allocation_quantum", 1), minimum=1, maximum=1024)
+    maximum_request_cpus = None
+    if unit is None:
+        unknowns.append("allocation_quantum.cpu_cores")
+        required_unknown = True
+    elif floors["cpu_cores"] is not None and limits["cpu_cores"] is not None:
+        minimum_allocation = ((floors["cpu_cores"] + unit - 1) // unit) * unit
+        maximum_request_cpus = (limits["cpu_cores"] // unit) * unit
+        if minimum_allocation > limits["cpu_cores"] and floors["cpu_cores"] <= limits["cpu_cores"]:
+            reasons.append("The smallest rounded CPU allocation exceeds the effective CPU ceiling.")
+
     if limits["time_limit_seconds"] is not None:
         limits["time_limit_seconds"] -= limits["time_limit_seconds"] % 60
     for resource, minimum in (("memory_mib", 128), ("time_limit_seconds", 60)):
@@ -89,6 +100,10 @@ def effective_resource_limits(project_policy, connection_configuration, *, backe
     return {
         "per_job_limits": limits,
         "allocation_floors": floors,
+        "allocation_quantum": {"cpu_cores": unit},
+        "maximum_request_cpus": maximum_request_cpus,
+        "allocation_prediction": {"basis": "configured_unit" if "cpu_allocation_quantum" in profile else "request_and_configured_floor_only",
+            "scheduler_verified": False},
         "minimum_request": deepcopy(_MINIMUM_REQUEST),
         "feasible": False if reasons else None if required_unknown else True,
         "blocking_reasons": reasons,
@@ -100,6 +115,7 @@ def effective_resource_limits(project_policy, connection_configuration, *, backe
             "These are per-job configured ceilings, not a reservation or a statement of live cluster capacity.",
             "Independent maxima may come from different nodes or partitions; account/QoS limits and current availability are not established here.",
             "Reservations use requested walltime; final settlement uses actual allocated elapsed time and can exceed the reservation.",
+            "CPU allocations round up to complete configured units. Without an explicit unit, scheduler rounding is unverified; a minimum floor alone does not model 3 CPUs rounding to 4.",
             "Current project allowance, concurrent-job limits and admission checks still apply at execution.",
         ],
     }

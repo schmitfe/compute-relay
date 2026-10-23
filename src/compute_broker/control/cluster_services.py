@@ -16,7 +16,7 @@ from .services import audit, digest
 
 PUBLIC_CONFIG_FIELDS = {"backend", "credential_profile", "ssh", "remote_root", "profile_revision", "site_profile", "credential_profile_revision_sha256"}
 PROFILE_FIELDS = {"alias", "backend", "revision_sha256", "allowed_hosts", "allowed_users", "allowed_ports", "remote_root_prefixes", "site_profile"}
-SITE_FIELDS = {"partitions", "accounts", "qos", "termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds", "allocated_cpus", "allocated_gpus", "maximum_cpus", "maximum_gpus", "maximum_memory_mib", "maximum_time_limit_seconds", "automatic_execution_allowed"}
+SITE_FIELDS = {"partitions", "accounts", "qos", "termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds", "allocated_cpus", "allocated_gpus", "cpu_allocation_quantum", "maximum_cpus", "maximum_gpus", "maximum_memory_mib", "maximum_time_limit_seconds", "automatic_execution_allowed"}
 
 
 def publish_profiles(worker, document):
@@ -41,6 +41,9 @@ def publish_profiles(worker, document):
             raise BrokerError("INVALID_PROFILES", "Invalid site profile.")
         if "automatic_execution_allowed" in profile["site_profile"] and type(profile["site_profile"]["automatic_execution_allowed"]) is not bool:
             raise BrokerError("INVALID_PROFILES", "Invalid automatic execution setting.")
+        unit = profile["site_profile"].get("cpu_allocation_quantum", 1)
+        if type(unit) is not int or not 1 <= unit <= 1024:
+            raise BrokerError("INVALID_PROFILES", "Invalid CPU allocation unit.")
         for field in ("allowed_hosts", "allowed_users", "allowed_ports", "remote_root_prefixes"):
             if not isinstance(profile[field], list) or not 1 <= len(profile[field]) <= 100:
                 raise BrokerError("INVALID_PROFILES", "Invalid worker target scope.")
