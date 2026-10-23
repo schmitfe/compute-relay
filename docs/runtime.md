@@ -18,7 +18,8 @@ Python 3.12/3.13, Django 5.2, SQLite or PostgreSQL, system OpenSSH, the official
 | `python -m compute_broker.worker` | Protected-worker process; reads only its configured connection/token and journal |
 | `BROKER_WORKER_ASYNC=1 python -m compute_broker.worker` | Opt-in asynchronous core Slurm runner; requires protected owner configuration and no enabled extensions |
 | `python -m compute_broker.mcp` | Project stdio MCP facade; has no SSH, approval, or project-administration tools |
-| `compute-broker init-mcp` | Initialize the current science project's local TOML/key files and Git ignore rules; prompts privately for the project API key |
+| `compute-broker init-mcp --client both --with-workflow` | Initialize project Codex/Claude Code configs, shared optional skill and ignored private key; prompts privately for the project API key |
+| `compute-broker files stage/prepare/fetch` | Transfer explicit workspace files with hash receipts, prepare from a reusable bundle and fetch retained results without conversation-visible bytes |
 | `compute-broker connectors add NAME --state-directory PATH` | Save a private shortcut to an already paired personal connector; stores only a name and path |
 | `compute-broker connectors start NAME --verbose` | Start that connector in the foreground with local SSH/MFA prompts and sanitized activity messages |
 | `compute-broker connectors start --all` | Authenticate saved connectors sequentially, then run them together in one labeled foreground group |
@@ -34,6 +35,13 @@ Worker variables are `BROKER_CONTROL_URL`, `BROKER_WORKER_CONFIG`, `BROKER_WORKE
 MCP configuration needs only `BROKER_CONTROL_URL` and `BROKER_PROJECT_TOKEN_FILE`. Save the one-time project API key in a private file outside version control and configure its absolute path; do not paste its contents into the conversation. The adapter authenticates with `GET /api/v1/context` at startup and derives the project from the key. It inserts `project_id` into job and workflow-node requests internally, so the agent can omit it too. A supplied project ID must match; optional legacy `BROKER_PROJECT_ID` is an assertion checked against the authenticated project, never a selector. Invalid, expired, revoked or unauthorized keys fail startup. The read-only `get_project_context` tool refreshes project identity, key scopes and the key's execution-mode preference; effective approval still follows project/site policy. Other requests continue to authenticate independently, so startup discovery does not bypass later revocation or policy checks.
 
 The [stdio configuration example](../examples/mcp-stdio.json) supplies generic server-launch fields for clients that accept a local stdio server. Remote HTTPS MCP transport for hosted clients remains future work; this alpha does not implement an HTTP MCP endpoint. HTTPS is mandatory outside loopback unless `BROKER_ALLOW_INSECURE_HTTP=1` explicitly enables the isolated development network.
+
+See the [portable compute workflow](portable-compute-workflow.md) for client
+setup, one-call context discovery, compact default status and explicit detail
+access. The same MCP server serves both clients. Workspace helpers transfer
+bounded files through project-owned APIs; they do not execute local source or
+grant filesystem access to the server. Portal System/Light/Dark preference is
+browser-local and does not change project/account settings.
 
 Control variables include `BROKER_DATA_DIR`, `BROKER_DB_PATH`, `BROKER_ARTIFACT_ROOT`, `BROKER_SECRET_KEY_FILE`, `BROKER_HOST`, `BROKER_PORT`, and `BROKER_ALLOWED_HOSTS`. Its random Django secret is generated once in its data directory with mode 0600. The service currently accepts only `BROKER_PROFILE=development`. Selecting a protected profile fails closed because its installation acceptance is incomplete. Django's development server is for these local tests; it is not the hosted service deployment.
 

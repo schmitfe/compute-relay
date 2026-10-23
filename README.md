@@ -45,6 +45,13 @@ It prompts privately for the project's API key and writes the local MCP setup
 and Git ignore rules. No project UUID is required. See [local client setup](docs/local-client-setup.md)
 for project initialization and named connector shortcuts.
 
+Use `compute-broker init-mcp --client both --with-workflow` for Codex and Claude
+Code with one shared compute skill. Existing workspaces can add `--reuse-key`.
+The [portable compute workflow](docs/portable-compute-workflow.md) explains compact
+MCP status, explicit workspace file staging and checksummed result downloads,
+supported clients and the remaining placement/planning work. The portal header
+also offers System, Light and Dark themes, with a browser-local preference.
+
 Development mode does not protect secrets from another process running as your account. A real deployment requires a separate service identity or server that the agent cannot administer. An agent that controls Docker can inspect containers and their secrets.
 
 ## Design decisions

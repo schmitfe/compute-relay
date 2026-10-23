@@ -14,6 +14,13 @@ Enter the science project directory and run:
 compute-broker init-mcp
 ```
 
+The default is Codex. For Claude Code, use `--client claude`; for both clients and
+shared compute guidance, use:
+
+```sh
+compute-broker init-mcp --client both --with-workflow
+```
+
 Paste the project API key at the hidden terminal prompt. The default broker is
 `http://127.0.0.1:8768`. To use a different broker or directory:
 
@@ -22,19 +29,53 @@ compute-broker init-mcp --directory /path/to/science-project \
   --broker-url https://broker.example.org
 ```
 
-The command creates `.codex/config.toml` and the private
-`.compute-broker/project.key`, and adds ignore rules for the local configuration
-and private directory to the project's `.gitignore`. It preserves unrelated
+The command creates `.codex/config.toml` for Codex, `.mcp.json` for Claude Code, or
+both, sharing one private `.compute-broker/project.key`. Private
+`.compute-broker/connection.json` records the broker origin and workspace root for
+the file helper, without key contents. Git exclusions cover the selected client
+configurations and private directory. Initialization preserves unrelated
 configuration and refuses conflicting existing broker configuration or keys.
 The key is never printed or passed as a command-line argument. Initialization
 does not contact the broker; the MCP adapter verifies the key and resolves its
 project when the client connects. The broker retains only the key's hash.
 
-Start a fresh Codex chat in that project and enable/trust its MCP configuration.
-The `get_project_context`, `list_compute_targets` and `get_project_allowance`
-tools let the agent inspect the project before preparing any work. No project
+Start a fresh client session in that project and enable/trust its MCP configuration.
+`get_project_context` provides the key's permitted compute targets, current limits
+and allowance when its scope includes `jobs:read`. Refresh narrower tools as
+needed before preparing/admitting work. No project
 UUID or credential contents belong in the prompt. This setup configures the
 local stdio adapter; HTTP MCP and OAuth remain separate future work.
+
+To add the other client or workflow to an already initialized project, explicitly
+reuse its key; retain the original `--broker-url` for a remote service:
+
+```sh
+compute-broker init-mcp --client both --reuse-key --with-workflow
+```
+
+The opt-in workflow copies the same provider-neutral skill to Codex's
+`.agents/skills/compute/SKILL.md` and Claude Code's
+`.claude/skills/compute/SKILL.md`, and appends a small managed block to selected
+project `AGENTS.md`/`CLAUDE.md` files. Existing instructions and permission
+settings are preserved. No client-wide settings, hooks or automatic approvals
+are installed. The secret-free workflow files can be reviewed and committed.
+Existing different skills or managed blocks require review instead of overwrite.
+
+For sources and outputs, use the workspace helper so chat receives bounded
+receipts rather than large file contents:
+
+```sh
+compute-broker files stage --directory /path/to/science-project --manifest source-bundle.json
+compute-broker files prepare --directory /path/to/science-project --bundle BUNDLE_ID --request job.json --idempotency-key RUN_STAGE
+compute-broker files fetch --directory /path/to/science-project --attempt-id ATTEMPT_UUID --output results/RUN
+```
+
+Stage only explicit relative paths; the source manifest contains
+`{"files":["main.py","src/util.py"]}`. Prepare uses a job request without `files`
+or `project_id` and does not execute it. Fetch selects a fresh project output
+directory and verifies artifact hashes. Run these commands on the device holding
+the initialized workspace. See [portable MCP setup](mcp-setup.md) for safeguards,
+key reuse, client formats and the separate manual Claude Desktop configuration.
 
 ## Save connector shortcuts
 

@@ -20,6 +20,7 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `GET /api/v1/connections` | Project read | Assigned connections, safe capabilities, authentication state and current effective project/cluster resource limits |
 | `POST /api/v1/connections/{id}/refresh` | Human connection owner/admin | Queue bounded discovery; agents read cached snapshots rather than flood schedulers |
 | `POST /api/v1/projects/{id}/objects` | Upload scope | Stream one regular file; return immutable digest/size descriptor after verification |
+| `POST /api/v1/projects/{id}/objects/lookup` | `objects:write` | Implemented bounded content lookup; at most 100 SHA-256/size pairs, only this project's verified stored objects, no source bytes or foreign existence disclosure |
 | `POST /api/v1/jobs` | `jobs:submit` | Create immutable revision from the job-request schema; does not execute |
 | `POST /api/v1/jobs/{id}/prepare` | `jobs:submit` | Queue preparation; return `202` with operation ID and job link |
 | `GET /api/v1/jobs/{id}` | `jobs:read` | Preparation, decision, attempt and accounting states, safe explanation/actions |
