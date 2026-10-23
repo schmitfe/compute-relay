@@ -28,6 +28,16 @@ The allowance API includes `jobs: {limit, admitted, remaining, active, active_li
 
 Agents supply `request.name`, a 1–80 character name using letters, digits, underscores, dots or hyphens. This becomes the displayed name and Slurm job name. Jobs show their project, owning user, submitting API key, latest execution state and creation date. The owner is the project owner, not an assertion that a human personally submitted the job. Every project has its own job table; the dashboard shows the latest 100 accessible jobs. Preparing an immutable package does not mean execution is still pending: the portal derives Completed, Rejected and other states from the latest execution request/attempt.
 
+The dashboard, project, job review and cluster pages refresh their status sections
+automatically every four seconds while visible. New review requests appear without
+reloading the page. Review comments and settings being edited stay in place; if
+another reviewer decides a request, its buttons become disabled and any unsent
+comment remains available to copy. Cluster status refreshes use saved broker data;
+discovery and catalog refresh still require their explicit actions. Polling pauses
+in hidden tabs, backs off during connection problems, and stops when access is
+withdrawn. The read-only `/ui/live/` routes require a current human session and
+recheck project roles on every request. They never contact a scheduler or worker.
+
 ## One-time API keys
 
 Create separate named keys for each client. Select scopes, expiry, cluster access and execution confirmation. Cluster access either inherits the project's clusters or restricts them to a subset; selecting an empty restricted subset denies every cluster.

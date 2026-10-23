@@ -85,7 +85,7 @@ def resource_validation(job, *, policy=None, connection=None):
     if connection is None:
         connection = Connection.objects.filter(id=job.request.get("connection_id")).first()
     effective = effective_resource_limits(policy, connection.configuration, backend=connection.backend) if connection else None
-    allocation = job.manifest.get("maximum_allocation")
+    allocation = (job.manifest or {}).get("maximum_allocation")
     if not allocation:
         return {"valid": None, "violations": [], "effective_limits": effective,
                 "project_envelope_human_override_allowed": policy.get("mode") == "mixed"}

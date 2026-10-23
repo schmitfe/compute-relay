@@ -189,3 +189,12 @@ def test_cluster_prepare_failure_reports_all_caps_before_creating_prepared_packa
     assert not job.manifest and job.state != "prepared"
     assert not ExecutionRequest.objects.exists()
     no_admission(broker)
+
+
+def test_unprepared_job_has_unknown_resource_validation_instead_of_crashing(broker):
+    draft = resource_revision(broker)
+    assert draft.manifest is None
+    response = client(broker).get(f"/api/v1/jobs/{draft.id}")
+    assert response.status_code == 200
+    assert response.json()["resource_validation"]["valid"] is None
+    assert response.json()["resource_validation"]["violations"] == []

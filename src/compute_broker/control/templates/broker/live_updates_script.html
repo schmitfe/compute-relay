@@ -1,0 +1,111 @@
+<script>
+(() => {
+  const page = document.querySelector('[data-live-page]');
+  if (!page) return;
+  const endpoint = new URL(page.dataset.liveUrl, location.href);
+  if (endpoint.origin !== location.origin || !endpoint.pathname.startsWith('/ui/live/')) return;
+  const status = page.querySelector('[data-live-status]');
+  const normalDelay = 4000;
+  let delay = normalDelay, timer = null, controller = null, stopped = false;
+  function announce(message) { if (status && status.textContent !== message) status.textContent = message; }
+  function incomingElement(html, attribute, identifier) {
+    const parsed = document.createElement('template');
+    parsed.innerHTML = html;
+    const element = parsed.content.firstElementChild;
+    return element && element.getAttribute(attribute) === identifier ? element : null;
+  }
+  function mergeExecutions(items) {
+    const container = document.querySelector('[data-live-executions]');
+    if (!container || !Array.isArray(items)) return;
+    for (const item of items) {
+      const next = incomingElement(item.html, 'data-live-review-request', item.id);
+      if (!next) continue;
+      const current = Array.from(container.children).find(node => node.dataset.liveReviewRequest === item.id);
+      if (!current) { container.append(next); continue; }
+      if (current.dataset.executionState === item.state) continue;
+      const form = current.querySelector('form');
+      const comment = form && form.querySelector('textarea[name="comment"]');
+      const dirty = current.dataset.liveDirty === 'true' || Boolean(form && form.contains(document.activeElement)) || Boolean(comment && comment.value !== comment.defaultValue);
+      if (dirty && form) {
+        for (const selector of ['.execution-status', '.execution-outcome']) {
+          const target = current.querySelector(selector), source = next.querySelector(selector);
+          if (target && source) target.innerHTML = source.innerHTML;
+        }
+        current.dataset.executionState = item.state;
+        if (item.state !== 'awaiting_approval') {
+          for (const button of form.querySelectorAll('button')) button.disabled = true;
+          if (!current.querySelector('[data-live-preserved-comment]')) {
+            const note = document.createElement('p');
+            note.dataset.livePreservedComment = '';
+            note.className = 'notice';
+            note.textContent = 'This request already has a decision. Your unsent comment is preserved below; copy it before leaving this page.';
+            form.before(note);
+          }
+        }
+      } else current.replaceWith(next);
+    }
+  }
+  function mergeAttempts(items) {
+    const container = document.querySelector('[data-live-attempts]');
+    if (!container || !Array.isArray(items)) return;
+    // The response contains the newest attempts first. Insert from oldest to
+    // newest so an arriving attempt appears above the existing history.
+    for (const item of items.slice().reverse()) {
+      const next = incomingElement(item.html, 'data-live-attempt', item.id);
+      if (!next) continue;
+      const current = Array.from(container.children).find(node => node.dataset.liveAttempt === item.id);
+      if (!current) container.prepend(next);
+      else if (current.innerHTML !== next.innerHTML && !current.contains(document.activeElement)) current.replaceWith(next);
+    }
+  }
+  function apply(payload) {
+    for (const [identifier, html] of Object.entries(payload.fragments || {})) {
+      const target = document.getElementById(identifier);
+      if (target && target.hasAttribute('data-live-fragment') && !target.contains(document.activeElement) && target.innerHTML !== html) target.innerHTML = html;
+    }
+    mergeExecutions(payload.execution_requests);
+    mergeAttempts(payload.attempts);
+  }
+  document.addEventListener('input', event => {
+    const form = event.target.closest('[data-live-review-request] form');
+    if (form) form.closest('[data-live-review-request]').dataset.liveDirty = 'true';
+  });
+  async function poll() {
+    clearTimeout(timer);
+    if (stopped || document.hidden || controller) return;
+    controller = new AbortController();
+    const activeController = controller;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; activeController.abort(); }, 15000);
+    try {
+      const response = await fetch(endpoint.href, {credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal, headers: {'Accept': 'application/json'}});
+      if ([401, 403, 404].includes(response.status)) {
+        stopped = true;
+        announce('Live updates stopped. Sign in again or reopen this page to check your access.');
+        return;
+      }
+      if (!response.ok) throw new Error('Live status unavailable');
+      apply(await response.json());
+      delay = normalDelay;
+      announce('Live updates on · Job states and review requests refresh automatically.');
+    } catch (error) {
+      if (error.name !== 'AbortError' || timedOut) {
+        delay = Math.min(delay * 2, 60000);
+        announce('Live updates are temporarily unavailable; retrying automatically.');
+      }
+    } finally {
+      clearTimeout(timeout);
+      controller = null;
+      if (!stopped && !document.hidden) timer = setTimeout(poll, delay);
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(timer);
+    if (document.hidden) { if (controller) controller.abort(); }
+    else poll();
+  });
+  window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); if (controller) controller.abort(); });
+  window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; poll(); } });
+  poll();
+})();
+</script>

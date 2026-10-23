@@ -1,0 +1,6 @@
+{% autoescape on %}<section aria-labelledby="cluster-status-title"><h2 id="cluster-status-title">Saved cluster status</h2>
+<p>Access: <strong>{% if cluster.enabled %}Enabled{% else %}Disabled{% endif %}</strong> · Authentication: <strong>{{ cluster.auth_state }}</strong> · Discovery: <strong>{{ cluster.discovery_state }}</strong></p>
+<p>Worker: {{ cluster.worker.name }} · {% if cluster.worker.revoked %}<strong>Revoked</strong>{% else %}Last reported contact: {{ cluster.worker.last_seen_at|default:"Not yet reported" }}{% endif %}</p>
+{% if not cluster.setup_complete %}<p class="notice">{% if cluster.discovery_state == "ready" and not cluster.configuration_confirmed %}Discovery completed. Confirm cluster configuration before submitting jobs.{% else %}Identification is required. This cluster remains unavailable to project execution until discovery and configuration finish.{% endif %}</p>{% endif %}
+{% if cluster.discovery_error %}<p class="error">{{ cluster.discovery_error }}. Check the connector's settings and authentication. Complete SSH or MFA login in its local terminal.</p>{% endif %}
+<p><small>This status reads the broker's saved records. To refresh the resource and software catalogs after discovery, reload this page. Polling does not query the scheduler.</small></p></section>{% endautoescape %}

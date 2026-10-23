@@ -1,0 +1,3 @@
+{% autoescape on %}<section aria-labelledby="pending-review-title"><h2 id="pending-review-title">Awaiting your review{% if pending_count %} · {{ pending_count }}{% endif %}</h2>
+{% if pending_count %}<p>{{ pending_count }} execution request{{ pending_count|pluralize }} need{{ pending_count|pluralize:"s," }} a decision. Open the exact package to approve or reject it.</p><ul>{% for execution in pending %}<li><a href="/review/{{ execution.job_id }}/">{{ execution.job.name }}</a> · {{ execution.job.project.name }}</li>{% endfor %}</ul>{% if pending_count > 20 %}<p>The oldest 20 requests are shown here.</p>{% endif %}
+{% else %}<p>No execution requests are awaiting your review.</p>{% endif %}</section>{% endautoescape %}

@@ -1,14 +1,14 @@
 {% extends "broker/base.html" %}{% block content %}
 <p><a href="/clusters/">Clusters</a> / {{ cluster.name }}</p>
 <h1 data-discovery-state="{{ cluster.discovery_state }}" data-configuration-confirmed="{{ cluster.configuration_confirmed|yesno:'true,false' }}">{{ cluster.name }}</h1>
+<p class="helptext" data-live-page data-live-url="/ui/live/cluster/{{ cluster.id }}/"><span data-live-status role="status">Saved connector and discovery status update automatically while this page is visible.</span></p>
+<div id="live-cluster-status" data-live-fragment>{% include "broker/live_cluster_status.html" %}</div>
 <nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a>{% if personal_configuration %}<a href="/clusters/{{ cluster.id }}/configuration/">Cluster configuration</a><a href="/clusters/{{ cluster.id }}/directories/">Working directory</a>{% endif %}</nav>
 {% if cluster.owner_id == user.id %}<p><a href="/clusters/{{ cluster.id }}/remove/">Remove cluster configuration</a></p>{% endif %}
 {% if cluster.owner_id == user.id %}<p><a class="button" href="/clusters/{{ cluster.id }}/test/">Test cluster</a></p>{% endif %}
-<p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }} · Discovery: <strong>{{ cluster.discovery_state }}</strong></p>
+<p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }}</p>
 <p>Job directory: <code>{{ cluster.configuration.remote_root|default:"Legacy configuration" }}</code></p>
 <details><summary>Advanced connection details</summary><p>Worker: <a href="/workers/{{ cluster.worker_id }}/">{{ cluster.worker.name }}</a> · Credential profile: {{ cluster.configuration.credential_profile|default:"Legacy configuration" }}</p></details>
-{% if not cluster.setup_complete %}<p class="notice">Worker connected · {% if cluster.discovery_state == "ready" and not cluster.configuration_confirmed %}Discovery completed. Confirm cluster configuration before submitting jobs.{% else %}Identification required. This cluster remains unavailable to project execution until its first discovery succeeds.{% endif %}</p>{% endif %}
-{% if cluster.discovery_error %}<p class="error">{{ cluster.discovery_error }}. Check the connector's settings and authentication. Reconnect through its local terminal or trusted operator channel when SSH or MFA login is required.</p>{% endif %}
 {% if personal_connector_allowed %}
 <section><h2>Personal connector</h2>
 <p>Run this cluster's connector on your device. SSH authentication, key passphrases and second-factor prompts remain local; no manual worker registration is required.</p>
@@ -24,7 +24,7 @@
 <form method="post" action="/clusters/{{ cluster.id }}/toggle/">{% csrf_token %}{% if cluster.enabled %}<input type="hidden" name="enabled" value="false"><button class="reject">Disable new access</button>{% else %}<input type="hidden" name="enabled" value="true"><button>Enable cluster</button>{% endif %}</form>
 <a href="/clusters/{{ cluster.id }}/">Reload saved discovery</a>
 </div>
-<p>Run discovery queues an asynchronous worker query. Reloading this page only reads the saved snapshot; it does not query the scheduler. Reload after discovery finishes to see the new observation.</p>
+<p>Run discovery queues an asynchronous worker query. Its saved progress updates automatically. Reload after discovery finishes to view the refreshed resource and software catalogs.</p>
 <p>Grant this cluster in project settings. A key can further restrict its project's clusters. Disabling new access preserves accounting for submitted jobs.</p>
 </section>
 {% if cluster.discovery_snapshot %}

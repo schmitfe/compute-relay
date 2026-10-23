@@ -8,11 +8,14 @@ from . import personal_connectors
 from . import cluster_removal
 from . import connector_setup
 from . import cluster_checks
+from . import live_updates
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
     path("", views.dashboard), path("login/", views.signin), path("logout/", views.signout),
     path("review/<uuid:job_id>/", views.review),
+    path("ui/live/dashboard/", live_updates.snapshot, {"kind": "dashboard"}),
+    path("ui/live/<str:kind>/<uuid:object_id>/", live_updates.snapshot),
     path("projects/new/", management.project_new), path("projects/<uuid:project_id>/", management.project_detail),
     path("projects/<uuid:project_id>/keys/new/", management.key_new),
     path("projects/<uuid:project_id>/keys/<uuid:key_id>/rotate/", management.key_rotate),
