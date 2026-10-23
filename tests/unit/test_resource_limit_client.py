@@ -148,8 +148,14 @@ def test_official_mcp_tool_error_surfaces_numeric_limits_without_remote_prose():
     client = failing_client(json.dumps(resource_error()).encode())
     facade = ProjectFacade(client, "608ef015-5813-4e8f-a6ab-7ec182f406d7")
     server = create_server(facade)
+    request = {"schema_version": "1.0", "name": "bounded-task", "connection_id": "608ef015-5813-4e8f-a6ab-7ec182f406d7",
+        "environment": {"id": "608ef015-5813-4e8f-a6ab-7ec182f406d7", "revision_sha256": "e" * 64},
+        "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
+        "resources": {"nodes": 1, "cpus": 4, "gpus": 0, "memory_mib": 4096, "time_limit_seconds": 60},
+        "slurm": {"partition": "cpu"}, "files": [{"path": "main.py", "sha256": "a" * 64,
+            "size_bytes": 10, "executable": False}], "outputs": []}
     with pytest.raises(ToolError) as caught:
-        asyncio.run(server.call_tool("prepare_job", {"request": {"name": "bounded-task"}}))
+        asyncio.run(server.call_tool("prepare_job", {"request": request}))
     message = str(caught.value)
     assert "RESOURCE_LIMIT" in message and "effective 4 cores, limit 2 cores" in message
     assert "Memory: effective 4096 MiB, limit 2048 MiB" in message

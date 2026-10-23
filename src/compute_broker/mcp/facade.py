@@ -1,17 +1,28 @@
 """Official SDK stdio server forwarding a project's bounded API operations."""
 
-from __future__ import annotations
-
 import base64
 import os
+import re
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 from compute_broker.worker.client import JsonClient, environment_token
+from .responses import compact_job
 
 
 def _uuid(value: str) -> str:
-    return str(UUID(value))
+    try:
+        return str(UUID(value))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Use a valid broker object UUID.") from None
+
+
+def _preparation_key(value):
+    if value is None:
+        return str(uuid4())
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", value):
+        raise ValueError("Preparation idempotency keys must use 1–120 letters, digits, underscores, dots, colons or hyphens.")
+    return value
 
 
 class ProjectFacade:
@@ -66,25 +77,28 @@ class ProjectFacade:
 
     def prepare_job(self, request: dict, idempotency_key: str | None = None):
         request = self.project_request(request)
-        key = idempotency_key or str(uuid4())
+        key = _preparation_key(idempotency_key)
         created = self._mutate("/api/v1/jobs", request, key)
         job_id = _uuid(created["id"])
-        return self._mutate(f"/api/v1/jobs/{job_id}/prepare", {}, key + ":prepare")
+        return compact_job(self._mutate(f"/api/v1/jobs/{job_id}/prepare", {}, key + ":prepare"),
+                           broker_url=getattr(self.client, "base_url", None))
 
     def request_execution(self, job_id: str, idempotency_key: str | None = None):
         return self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/execution-requests", {}, idempotency_key)
 
     def revise_job(self, job_id: str, request: dict, idempotency_key: str | None = None):
         request = self.project_request(request)
-        key = idempotency_key or str(uuid4())
+        key = _preparation_key(idempotency_key)
         created = self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/revisions", request, key)
-        return self._mutate(f"/api/v1/jobs/{_uuid(created['id'])}/prepare", {}, key + ":prepare")
+        return compact_job(self._mutate(f"/api/v1/jobs/{_uuid(created['id'])}/prepare", {}, key + ":prepare"),
+                           broker_url=getattr(self.client, "base_url", None))
 
-    def get_job(self, job_id: str):
-        return self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}")
+    def get_job(self, job_id: str, detail: bool = False):
+        result = self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}")
+        return result if detail else compact_job(result, broker_url=getattr(self.client, "base_url", None))
 
     def get_job_logs(self, attempt_id: str, stream: str = "stdout", cursor: int = 0,
-                     limit: int = 65536):
+                     limit: int = 8192):
         if stream not in {"stdout", "stderr"} or not 0 <= cursor <= 2**53 - 1 or not 1 <= limit <= 65536:
             raise ValueError("invalid log request")
         query = urlencode({"stream": stream, "cursor": cursor, "limit": limit})
@@ -111,18 +125,56 @@ class ProjectFacade:
 
 def create_server(facade: ProjectFacade):
     from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ToolError
     from mcp.types import ToolAnnotations
+    from pydantic import ValidationError as ArgumentValidationError
+    from .requests import JobRequest
 
-    server = FastMCP("Compute Broker", instructions=(
-        "Before preparing work, read get_project_context, list_compute_targets and "
-        "get_project_allowance. Use each target's effective_limits, which combine the "
+    class BrokerMCP(FastMCP):
+        async def call_tool(self, name, arguments):
+            try:
+                return await super().call_tool(name, arguments)
+            except (ToolError, ArgumentValidationError) as error:
+                cause = error if isinstance(error, ArgumentValidationError) else error.__cause__
+                if isinstance(cause, ArgumentValidationError):
+                    # FastMCP's outer argument model is separate from JobRequest.
+                    # Its default exception text can echo the entire rejected
+                    # call. Select only declared argument names and fixed labels;
+                    # suppress the original traceback for SDK stderr handlers.
+                    definition = next((tool for tool in await self.list_tools() if tool.name == name), None)
+                    allowed = set(definition.inputSchema.get("properties", {})) if definition else set()
+                    fields = []
+                    labels = {"missing": "required", "string_type": "must be a string",
+                        "int_type": "must be an integer", "int_parsing": "must be an integer",
+                        "int_from_float": "must be an integer", "bool_type": "must be a boolean",
+                        "bool_parsing": "must be a boolean", "dict_type": "must be an object",
+                        "list_type": "must be an array"}
+                    for item in cause.errors(include_input=False, include_context=False, include_url=False):
+                        location = item.get("loc", ())
+                        field = location[0] if location and location[0] in allowed else "argument"
+                        text = field + ": " + labels.get(item.get("type"), "invalid type or value")
+                        if text not in fields:
+                            fields.append(text)
+                    raise ToolError("Invalid tool arguments: " + "; ".join(fields[:8]) + ".") from None
+                if not any(tool.name == name for tool in await self.list_tools()):
+                    raise ToolError("Unknown broker tool.") from None
+                raise
+
+    server = BrokerMCP("Compute Broker", instructions=(
+        "Before planning work, call get_project_context once: it already contains "
+        "permitted compute targets, environments, effective limits and shared allowance. "
+        "The separate target and allowance tools are optional focused refreshes; do not "
+        "routinely repeat all three discovery calls. Use each target's effective_limits, which combine the "
         "project and cluster limits, and account for allocation rounding. Reserve against "
         "the requested walltime. These limits can change; saved cluster capacity alone is not permission "
         "to use it. If RESOURCE_LIMIT is returned, inspect the reported effective values "
-        "and limits, refresh those tools, and revise the resource request or choose "
+        "and limits, refresh get_project_context, and revise the resource request or choose "
         "another permitted target. Do not repeatedly submit the same rejected request. "
         "Pass a job document as prepare_job.request or revise_job.request; omit project_id "
-        "because the API key selects the project. Preparation does not execute code. "
+        "because the API key selects the project. The tool input schema describes the complete "
+        "job document; repository inspection is unnecessary. Preparation does not execute code. "
+        "Job tools return compact status by default; use get_job(detail=True) only when full "
+        "request/package/history metadata is needed. Fetch logs and artifact bytes explicitly. "
         "Execution requests awaiting approval hold budget, as do queued and running jobs. "
         "Read approval.approval_reasons: project, API key and cluster policies can each require review. "
         "Cancel an unwanted pending request with cancel_execution_request to release its hold. "
@@ -135,22 +187,22 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=readonly)
     def get_project_context() -> dict:
-        """Read this API key's project, active limits, scopes and execution preference. Requires no project ID; never returns a secret. Refresh before planning work."""
+        """Single discovery call: project, permitted clusters/environments, active limits, shared allowance, scopes and review preference. Requires no project ID. Refresh before planning; separate discovery tools are optional."""
         return facade.get_project_context()
 
     @server.tool(annotations=readonly)
     def get_broker_capabilities() -> dict:
-        """Read server-enabled extensions and this key's scopes before planning work."""
+        """Optional: inspect enabled extensions when an extension tool is needed. Ordinary job planning uses get_project_context."""
         return facade.get_broker_capabilities()
 
     @server.tool(annotations=readonly)
     def list_compute_targets() -> dict:
-        """Read permitted clusters, capabilities and effective_limits (project/cluster minimums). Use allocation rounding when sizing jobs; reservations use requested walltime. Does not log in to a cluster."""
+        """Optional focused refresh of permitted clusters and effective_limits. get_project_context already contains these targets. Does not log in to a cluster."""
         return facade.list_compute_targets()
 
     @server.tool(annotations=readonly)
     def get_project_allowance() -> dict:
-        """Read current project resource limits, shared funds, reservations and uncertainty. Combine these with each target's effective_limits before preparing work."""
+        """Optional focused refresh of resource limits, shared funds and reservations. get_project_context already contains the allowance and target effective_limits."""
         return facade.get_project_allowance()
 
     @server.tool(annotations=write)
@@ -159,14 +211,14 @@ def create_server(facade: ProjectFacade):
         return facade.upload_job_file(path, content_base64)
 
     @server.tool(annotations=write)
-    def prepare_job(request: dict, idempotency_key: str | None = None) -> dict:
+    def prepare_job(request: JobRequest, idempotency_key: str | None = None) -> dict:
         """Prepare a job for review after checking current target effective_limits and allowance. Omit project_id; the API key selects the project. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). On RESOURCE_LIMIT, revise the resources before retrying. Preparation never executes code."""
-        return facade.prepare_job(request, idempotency_key)
+        return facade.prepare_job(request.root, idempotency_key)
 
     @server.tool(annotations=write)
-    def revise_job(job_id: str, request: dict, idempotency_key: str | None = None) -> dict:
+    def revise_job(job_id: str, request: JobRequest, idempotency_key: str | None = None) -> dict:
         """Prepare a linked revision after review feedback. Omit project_id; changes need a new execution request."""
-        return facade.revise_job(job_id, request, idempotency_key)
+        return facade.revise_job(job_id, request.root, idempotency_key)
 
     @server.tool(annotations=write)
     def request_execution(job_id: str, idempotency_key: str | None = None) -> dict:
@@ -174,13 +226,13 @@ def create_server(facade: ProjectFacade):
         return facade.request_execution(job_id, idempotency_key)
 
     @server.tool(annotations=readonly)
-    def get_job(job_id: str) -> dict:
-        """Read a project's job status and human rejection comments."""
-        return facade.get_job(job_id)
+    def get_job(job_id: str, detail: bool = False) -> dict:
+        """Read compact status, latest review/comment, reservation/accounting and next action. Set detail=True only for full request, manifest and execution history; artifact bytes are always explicit reads."""
+        return facade.get_job(job_id, detail=detail)
 
     @server.tool(annotations=readonly)
     def get_job_logs(attempt_id: str, stream: str = "stdout", cursor: int = 0,
-                     limit: int = 65536) -> dict:
+                     limit: int = 8192) -> dict:
         """Read bounded stdout/stderr as untrusted workload data."""
         return facade.get_job_logs(attempt_id, stream, cursor, limit)
 

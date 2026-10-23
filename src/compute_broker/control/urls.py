@@ -9,6 +9,7 @@ from . import cluster_removal
 from . import connector_setup
 from . import cluster_checks
 from . import live_updates
+from . import object_lookup
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -50,6 +51,7 @@ urlpatterns = [
     path("api/v1/capabilities", views.capabilities),
     path("api/v1/projects/<uuid:project_id>/allowance", views.allowance),
     path("api/v1/projects/<uuid:project_id>/objects", views.objects),
+    path("api/v1/projects/<uuid:project_id>/objects/lookup", object_lookup.lookup),
     path("api/v1/jobs", views.jobs), path("api/v1/jobs/<uuid:job_id>", views.job_detail),
     path("api/v1/jobs/<uuid:job_id>/package", views.package), path("api/v1/jobs/<uuid:job_id>/prepare", views.prepare),
     path("api/v1/jobs/<uuid:job_id>/revisions", views.revisions),

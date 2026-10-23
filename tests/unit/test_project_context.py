@@ -138,9 +138,8 @@ def test_real_stdio_session_needs_only_endpoint_and_token_file(broker, context_l
 
                 context = await tool("get_project_context")
                 assert context["project"]["id"] == str(c.project.id)
-                targets = await tool("list_compute_targets")
-                assert targets["connections"][0]["id"] == str(c.connection.id)
-                await tool("get_project_allowance")
+                assert context["compute"]["connections"][0]["id"] == str(c.connection.id)
+                assert context["allowance"]["project_id"] == str(c.project.id)
                 uploaded = await tool("upload_job_file", path="main.py", content_base64=base64.b64encode(
                     b"raise RuntimeError('Synthetic package must not execute on the broker')\n").decode())
                 request = {"schema_version": "1.0", "name": "no-project-uuid",
@@ -150,8 +149,14 @@ def test_real_stdio_session_needs_only_endpoint_and_token_file(broker, context_l
                     "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},
                     "slurm": {"partition": "debug", "account": "broker"}, "files": [uploaded], "outputs": []}
                 prepared = await tool("prepare_job", request=request, idempotency_key="stdio-create")
+                assert "request" not in prepared and "manifest" not in prepared and "files" not in prepared
+                assert prepared["reservation"] == {"cpu_core_seconds": 60, "gpu_device_seconds": 0}
                 await tool("request_execution", job_id=prepared["id"], idempotency_key="stdio-execute")
-                detail = await tool("get_job", job_id=prepared["id"])
+                summary = await tool("get_job", job_id=prepared["id"])
+                assert summary["latest_execution"]["state"] == "awaiting_approval"
+                assert summary["next_action"]["action"] == "await_human_review"
+                assert "manifest" not in summary and "request" not in summary
+                detail = await tool("get_job", job_id=prepared["id"], detail=True)
                 assert detail["request"]["project_id"] == str(c.project.id)
                 assert not detail["attempts"]  # Human review is still required.
                 return prepared["id"]

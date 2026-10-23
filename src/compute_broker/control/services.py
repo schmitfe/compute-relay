@@ -349,7 +349,26 @@ def cancel_execution_request(execution):
 
 
 def serialize_attempt(attempt):
-    return {"id": str(attempt.id), "state": attempt.state, "accounting_state": attempt.accounting_state, "native_identity": attempt.native_identity, "error_code": attempt.error_code}
+    from .job_diagnostics import build_attempt_diagnostics
+    diagnostics = build_attempt_diagnostics(attempt)
+    final = attempt.accounting_state in {"settled", "released"}
+    cpu = 0 if attempt.accounting_state == "released" else diagnostics["cpu_core_seconds"] if final else None
+    gpu = 0 if attempt.accounting_state == "released" else diagnostics["gpu_device_seconds"] if final else None
+    resources = attempt.job.request.get("resources", {})
+    def integer(value):
+        return value if type(value) is int and 0 <= value <= 2**53 - 1 else None
+    return {"id": str(attempt.id), "execution_request_id": str(attempt.execution_request_id),
+        "state": attempt.state, "accounting_state": attempt.accounting_state,
+        "native_identity": attempt.native_identity, "error_code": attempt.error_code,
+        "native_state": diagnostics["native_state"], "exit_code": diagnostics["exit_code"],
+        "accounting": {"final": final, "cpu_core_seconds": cpu, "gpu_device_seconds": gpu,
+            "elapsed_seconds": diagnostics["elapsed_seconds"],
+            "requested": {"cpu_cores": integer(resources.get("cpus")), "gpu_devices": integer(resources.get("gpus")),
+                          "time_limit_seconds": integer(resources.get("time_limit_seconds"))},
+            "allocated": {"cpu_cores": diagnostics["allocated_cpus"], "gpu_devices": diagnostics["allocated_gpus"]},
+            "reservation": {"cpu_core_seconds": attempt.reservation_cpu, "gpu_device_seconds": attempt.reservation_gpu},
+            "reservation_difference": {"cpu_core_seconds": cpu - attempt.reservation_cpu if cpu is not None else None,
+                                       "gpu_device_seconds": gpu - attempt.reservation_gpu if gpu is not None else None}}}
 
 
 def serialize_job(job, *, package=False):
@@ -367,7 +386,7 @@ def serialize_job(job, *, package=False):
               "submitted_using": {"id": str(job.credential_id), "name": job.credential.name} if job.credential_id else None,
               "state": job.display_state, "package_state": job.state, "request": job.request,
               "manifest_sha256": job.manifest_sha256, "execution_requests": executions,
-              "attempts": [serialize_attempt(a) for a in job.attempts.order_by("created_at")]}
+              "attempts": [serialize_attempt(a) for a in job.attempts.select_related("connection").order_by("created_at")]}
     result["approval"] = approval
     result["resource_validation"] = resource_validation(job)
     if package or job.manifest:

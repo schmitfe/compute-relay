@@ -30,7 +30,7 @@ compute-broker = "compute_broker.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-compute_broker = ["schemas/*.json", "control/templates/broker/*.html", "extensions/*/templates/*/*.html", "extensions/*/schemas/*.json"]
+compute_broker = ["schemas/*.json", "control/templates/broker/*.html", "extensions/*/templates/*/*.html", "extensions/*/schemas/*.json", "mcp/resources/*.md"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "compute_broker.control.test_settings"

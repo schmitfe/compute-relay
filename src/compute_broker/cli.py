@@ -138,6 +138,8 @@ def main():
     from compute_broker.connector_profiles import register_commands
     register_parser(sub)
     register_commands(sub)
+    from compute_broker.workspace import register_commands as register_file_commands
+    register_file_commands(sub)
     boot = sub.add_parser("bootstrap-demo", help="Create synthetic demo credentials and apply migrations")
     boot.add_argument("--output", required=True)
     boot.add_argument("--backend", choices=["fake", "slurm"], default="fake")

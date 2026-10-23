@@ -169,7 +169,9 @@ def control_probe():
                "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},
                "slurm": {"partition": "debug", "account": "broker"}, "files": [uploaded], "outputs": ["result.json"]}
     prepared = tool("prepare_job", {"request": request, "idempotency_key": str(uuid4())})
-    assert prepared["manifest"].get("extension_name", "") == ""
+    assert "manifest" not in prepared and "request" not in prepared
+    package = tool("get_job", {"job_id": prepared["id"], "detail": True})
+    assert package["manifest"].get("extension_name", "") == ""
     execution = tool("request_execution", {"job_id": prepared["id"], "idempotency_key": str(uuid4())})
     assert execution["attempt_id"]
     worker_config = json.loads((demo_dir / "worker.json").read_text())
@@ -184,8 +186,8 @@ def control_probe():
         if attempt.accounting_state == "settled":
             break
     detail = tool("get_job", {"job_id": prepared["id"]})
-    assert len(detail["attempts"]) == 1 and Job.objects.count() == 1
-    assert UUID(detail["attempts"][0]["id"]) == attempt.id
+    assert "attempts" not in detail and Job.objects.count() == 1
+    assert UUID(detail["latest_attempt"]["id"]) == attempt.id
     assert attempt.observation["simulation"] is True
     assert attempt.artifacts.get(path="result.json").blob.size_bytes > 0
     grant = Grant.objects.get(project_id=project_id)
