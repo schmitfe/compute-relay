@@ -1,0 +1,5 @@
+{% autoescape on %}{% if requirements %}<section class="approval-policy" data-requires-review="{{ requirements.requires_human_approval|yesno:'true,false' }}"><h2>Execution confirmation</h2>
+{% if requirements.approval_reasons %}<p>Human confirmation is required for these reasons:</p><ul>{% for reason in requirements.approval_reasons %}<li data-approval-reason="{{ reason.code }}"><strong>{{ reason.source|title }}:</strong> {{ reason.message }}</li>{% endfor %}</ul>
+{% else %}<p>These settings add no unconditional confirmation requirement. Authorization, resource limits and available compute allowance still apply.</p>{% endif %}
+{% if requirements.conditional_approval_notice %}<p>{{ requirements.conditional_approval_notice }}</p>{% endif %}
+</section>{% endif %}{% endautoescape %}

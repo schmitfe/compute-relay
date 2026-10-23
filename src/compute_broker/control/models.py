@@ -259,7 +259,21 @@ class ExecutionRequest(models.Model):
     job = models.ForeignKey(Job, related_name="execution_requests", on_delete=models.PROTECT)
     credential = models.ForeignKey(ProjectCredential, null=True, on_delete=models.PROTECT)
     state = models.CharField(max_length=30, default="awaiting_approval")
+    reservation_cpu = models.BigIntegerField(default=0)
+    reservation_gpu = models.BigIntegerField(default=0)
+    reservation_state = models.CharField(max_length=20, default="none", choices=[
+        ("none", "No approval reservation"), ("held", "Reserved for approval"),
+        ("converted", "Converted to execution"), ("released", "Released")])
+    approval_requirements = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(reservation_cpu__gte=0, reservation_gpu__gte=0),
+                name="nonnegative_approval_reservation"),
+            models.CheckConstraint(condition=Q(reservation_state__in=["none", "held", "converted", "released"]),
+                name="known_approval_reservation_state"),
+        ]
 
 
 class ApprovalDecision(models.Model):
@@ -300,7 +314,8 @@ class Attempt(models.Model):
 class LedgerEntry(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     grant = models.ForeignKey(Grant, related_name="entries", on_delete=models.PROTECT)
-    attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT)
+    attempt = models.ForeignKey(Attempt, null=True, on_delete=models.PROTECT)
+    execution_request = models.ForeignKey(ExecutionRequest, null=True, related_name="budget_entries", on_delete=models.PROTECT)
     action = models.CharField(max_length=20)
     cpu = models.BigIntegerField()
     gpu = models.BigIntegerField()
@@ -308,7 +323,11 @@ class LedgerEntry(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["attempt", "action"], name="ledger_action_once")]
+        constraints = [models.UniqueConstraint(fields=["attempt", "action"], name="ledger_action_once"),
+            models.UniqueConstraint(fields=["execution_request", "action"],
+                condition=Q(execution_request__isnull=False), name="approval_ledger_action_once"),
+            models.CheckConstraint(condition=(Q(attempt__isnull=False, execution_request__isnull=True)
+                | Q(attempt__isnull=True, execution_request__isnull=False)), name="ledger_exactly_one_anchor")]
 
 
 class Artifact(models.Model):

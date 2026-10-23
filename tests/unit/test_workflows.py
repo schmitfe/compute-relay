@@ -195,9 +195,17 @@ def test_cancelling_waiting_review_prevents_later_human_approval(workflow_broker
     run = start(context)
     services.advance(run)
     producer = run.nodes.get(key="simulate")
+    context.grant.refresh_from_db()
+    assert context.grant.reserved_cpu == producer.job.manifest["reservation"]["cpu_core_seconds"]
+    assert producer.execution_request.reservation_state == "held"
+    services.cancel(run, context.credential)
     services.cancel(run, context.credential)
     producer.execution_request.refresh_from_db()
     assert producer.execution_request.state == "cancelled"
+    assert producer.execution_request.reservation_state == "released"
+    context.grant.refresh_from_db()
+    assert context.grant.reserved_cpu == context.grant.reserved_gpu == 0
+    assert producer.execution_request.budget_entries.filter(action="hold_release").count() == 1
     with pytest.raises(BrokerError):
         decide(context, producer.job, producer.execution_request)
     assert not Attempt.objects.exists()

@@ -228,12 +228,39 @@ def quiescent_and_balanced():
     require(not Attempt.objects.exclude(state__in=["succeeded", "failed", "cancelled", "expired"]).exists(),
             "Nonterminal or ambiguous attempts must be reconciled before migration; there is no unsafe override.")
     require(not Attempt.objects.exclude(accounting_state__in=["settled", "released"]).exists(), "Every attempt must have final settled or released accounting.")
+    require(not ExecutionRequest.objects.filter(reservation_state="held").exists(),
+            "Resolve or cancel held approval reservations before migration.")
     require(not ExecutionRequest.objects.filter(state="awaiting_approval").exists(), "Resolve pending execution approvals before migration.")
     require(not Attempt.objects.filter(lease_expires_at__gt=timezone.now()).exists(), "Wait for active execution leases to drain before migration.")
     require(not Connection.objects.filter(discovery_state__in=["queued", "discovering"]).exists(), "Finish or safely resolve queued/in-flight discovery before migration.")
     require(not UploadReservation.objects.exclude(state__in=["finalized", "aborted"]).exists(), "Finish or safely repair pending upload reservations before migration.")
-    require(not LedgerEntry.objects.exclude(action__in=["reserve", "settle", "release"]).exists(), "Unknown ledger actions require an explicit migration implementation.")
+    require(not LedgerEntry.objects.exclude(action__in=["reserve", "settle", "release", "hold", "hold_convert", "hold_release"]).exists(), "Unknown ledger actions require an explicit migration implementation.")
     require(Grant.objects.count() == Project.objects.count(), "Every project must have its own allowance ledger before migration.")
+    for execution in ExecutionRequest.objects.select_related("job").all():
+        entries = list(execution.budget_entries.all())
+        amounts = (execution.reservation_cpu, execution.reservation_gpu)
+        require(all(type(value) is int and 0 <= value <= 2**53 - 1 for value in amounts),
+                "Approval reservation counters are invalid.")
+        if execution.reservation_state == "none":
+            require(not entries and amounts == (0, 0), "An unreserved execution has approval budget entries or counters.")
+            continue
+        require(execution.reservation_state in {"converted", "released"}, "Approval reservation state is not final.")
+        held = [item for item in entries if item.action == "hold"]
+        final_action = "hold_convert" if execution.reservation_state == "converted" else "hold_release"
+        final = [item for item in entries if item.action == final_action]
+        require(len(entries) == 2 and len(held) == len(final) == 1
+                and (held[0].cpu, held[0].gpu) == amounts and (final[0].cpu, final[0].gpu) == (0, 0)
+                and all(item.attempt_id is None and item.execution_request_id == execution.id
+                    and item.grant_id == held[0].grant_id for item in entries)
+                and Grant.objects.filter(id=held[0].grant_id, project_id=execution.job.project_id).exists(),
+                "Approval holds and their final ledger entries are inconsistent.")
+        attempt = Attempt.objects.filter(execution_request=execution).first()
+        if execution.reservation_state == "converted":
+            require(attempt is not None and attempt.job_id == execution.job_id and attempt.grant_id == held[0].grant_id
+                    and (attempt.reservation_cpu, attempt.reservation_gpu) == amounts,
+                    "Converted approval hold does not match its execution reservation.")
+        else:
+            require(attempt is None, "Released approval hold still has an execution attempt.")
     for attempt in Attempt.objects.all():
         entries = list(attempt.ledgerentry_set.all())
         reserve = [item for item in entries if item.action == "reserve"]

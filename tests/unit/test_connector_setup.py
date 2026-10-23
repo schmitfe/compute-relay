@@ -187,6 +187,41 @@ def test_human_configuration_requires_worker_ack_and_pins_profile(personal):
     assert reply(context, task, result=result, configuration=config).status_code == 200
 
 
+def test_personal_cluster_automatic_execution_is_owner_opt_in_and_waits_for_worker_ack(personal):
+    context = personal
+    page = context.human.get(f"/clusters/{context.connection.id}/configuration/")
+    assert b'name="allow_automatic_execution"' in page.content
+    assert b"removes only this cluster" in page.content
+    response = context.human.post(f"/clusters/{context.connection.id}/configuration/",
+        configuration_fields(context, allow_automatic_execution="on"))
+    assert response.status_code == 302
+    context.connection.refresh_from_db()
+    assert context.connection.configuration["site_profile"]["automatic_execution_allowed"] is False
+    assert context.connection.setup_complete is False
+    task = lease(context)
+    assert task["request"]["site_profile"]["automatic_execution_allowed"] is True
+    protected = {**context.protected, "remote_root_prefixes": [task["request"]["remote_root"]],
+        "site_profile": task["request"]["site_profile"], "profile_revision": 2}
+    context.worker.profiles = [profile_metadata("personal-test", protected)]
+    context.worker.save(update_fields=["profiles"])
+    config = resolve_connection({**context.connection.configuration, "remote_root": task["request"]["remote_root"]},
+        {"personal-test": protected}, refresh=True)[1]
+    assert reply(context, task, result={"ok": True, "path": task["request"]["remote_root"], "writable": True},
+        configuration=config).status_code == 200
+    context.connection.refresh_from_db()
+    assert context.connection.configuration["site_profile"]["automatic_execution_allowed"] is True
+    assert context.connection.setup_complete is True
+
+
+def test_personal_confirmation_checkbox_cannot_reconfigure_a_managed_worker_profile(personal):
+    ConnectorEnrollment.objects.filter(worker=personal.worker).delete()
+    response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/",
+        configuration_fields(personal, allow_automatic_execution="on"))
+    assert response.status_code == 409 and not ConnectorTask.objects.exists()
+    personal.connection.refresh_from_db()
+    assert personal.connection.configuration["site_profile"]["automatic_execution_allowed"] is False
+
+
 def test_module_avail_is_opt_in_capability_gated_and_acknowledged(personal):
     context = personal
     path = f"/clusters/{context.connection.id}/configuration/"

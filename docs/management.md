@@ -31,6 +31,25 @@ does not delete its local state directory or any SSH key.
 
 Create a project and select its execution policy, total CPU core/GPU device hours, resource bounds, expiration, simultaneous jobs, lifetime total submission limit, allowed clusters and allowed environments. Empty cluster/environment selections deny execution. Hours become integer seconds in the authoritative ledger. Editing totals preserves spent and reserved compute and cannot reduce a total below existing commitments.
 
+Preparing a package does not reserve compute. Requesting execution does: requests
+awaiting approval hold their prepared CPU/GPU resource-seconds immediately, and
+queued or running executions keep their reservations. All keys share these
+claims. Approval transfers a pending hold to the admitted attempt without
+reserving twice; rejection or **Cancel request and release hold** releases it.
+Waiting reviews do not consume lifetime submission slots or active-job slots.
+After dispatch may have started, cancellation retains the claim until final
+scheduler accounting establishes actual usage. Pending holds remain until a
+decision or cancellation; they do not expire silently.
+
+Project, API-key and cluster confirmation settings are independent. Budgeted
+project mode permits automatic admission only when the key and cluster also
+permit it. The portal and API show every applicable reason. Personal cluster
+owners can change **Allow automatic execution on this cluster** in Cluster
+configuration; the connected worker validates and applies it. Managed worker
+profiles remain under their operator's control. Changing a policy does not
+automatically execute older review requests. Cancel an unwanted old request to
+release its hold before requesting a replacement.
+
 The total submission limit counts durable execution authorizations across the entire project. One admitted attempt consumes one slot permanently, including failures and cancellations. Each further execution of the same package needs a new slot. Preparation, revisions, rejected review requests, idempotent replay and reconciliation of the same attempt do not consume slots. All API keys share the count; adding or rotating a key cannot reset it. The cap is checked in the admission transaction, including human approval. Exhaustion returns `TOTAL_JOB_LIMIT` (409). A zero limit blocks the first execution; pause a project to stop admissions after it has history. The portal rejects a total below the existing admitted count. Policies created before this field use a finite default of 1,000.
 
 The allowance API includes `jobs: {limit, admitted, remaining, active, active_limit}` alongside compute balances. Simultaneous and lifetime limits serve separate purposes. Request-rate and draft metadata limits are future work.

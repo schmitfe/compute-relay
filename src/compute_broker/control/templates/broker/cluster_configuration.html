@@ -27,6 +27,8 @@
 <section><h2>Resource limits and scheduler access</h2>
 {% for field in form.resource_fields %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}
 <p>CPU, GPU, memory and walltime limits are per job. Project and API-key limits still apply. Reservations use the effective CPU/GPU allocation multiplied by scheduler walltime.</p></section>
+<section><h2>Execution confirmation</h2>{% include "broker/configuration_field.html" with field=form.allow_automatic_execution %}
+<p>This is your personal cluster configuration. Saving asks your connector to apply the setting under the same configuration and worker checks as other resource changes. Existing job requests retain their own review decisions.</p></section>
 <section><h2>Software discovery</h2>{% include "broker/configuration_field.html" with field=form.module_availability_enabled %}
 <p>After saving, run discovery again to refresh the module catalog using this setting.</p></section>
 <button type="submit"{% if waiting or not connector_ready %} disabled{% endif %}>Validate and save cluster configuration</button>

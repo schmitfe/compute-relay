@@ -5,6 +5,7 @@ from django.utils import timezone
 from compute_broker.domain.resource_limits import allocation_violations, effective_resource_limits
 
 from .auth import connection_allowed
+from .execution_policy import approval_requirements
 from .models import Connection, Grant
 
 
@@ -48,9 +49,7 @@ def compute_context(credential):
             "capabilities": {field: value for field, value in connection.configuration.get("site_profile", {}).items()
                              if field in PUBLIC_PROFILE_FIELDS},
             "effective_limits": effective_resource_limits(policy, connection.configuration, backend=connection.backend),
-            "requires_human_approval": policy.get("mode") == "approval_required"
-                or credential.execution_mode == "approval_required"
-                or connection.configuration.get("site_profile", {}).get("automatic_execution_allowed") is False,
+            **approval_requirements(policy, credential.execution_mode, connection.configuration),
             "connection_revision_sha256": connection.revision_sha256,
         } for connection in targets],
         "environments": [{"id": str(environment.id), "name": environment.name,
@@ -73,6 +72,23 @@ def planned_allocation(resources, configuration):
     return {"cpu_cores": max(resources["cpus"], profile.get("allocated_cpus", resources["cpus"])),
             "gpu_devices": max(resources["gpus"], profile.get("allocated_gpus", resources["gpus"])),
             "time_limit_seconds": resources["time_limit_seconds"]}
+
+
+def job_approval_requirements(job, *, credential=None, policy=None, connection=None):
+    """Explain current review settings for an already-authorized job reader."""
+    if policy is None:
+        grant = Grant.objects.filter(project_id=job.project_id).first()
+        if grant is None:
+            return None
+        policy = grant.policy
+    if connection is None:
+        connection = Connection.objects.filter(id=job.request.get("connection_id")).first()
+    allocation = (job.manifest or {}).get("maximum_allocation")
+    within = None if not allocation else not allocation_violations(
+        job.request["resources"], allocation, policy["per_job_limits"])
+    credential = credential or (job.credential if job.credential_id else None)
+    return approval_requirements(policy, credential.execution_mode if credential else "inherit",
+        connection.configuration if connection else {}, within_envelope=within)
 
 
 def resource_validation(job, *, policy=None, connection=None):

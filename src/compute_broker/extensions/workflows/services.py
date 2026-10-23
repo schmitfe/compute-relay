@@ -253,8 +253,7 @@ def cancel(run, credential):
             else:
                 node.state = "cancelled"
                 if node.execution_request_id and node.execution_request.state == "awaiting_approval":
-                    node.execution_request.state = "cancelled"
-                    node.execution_request.save(update_fields=["state"])
+                    core.cancel_execution_request(node.execution_request)
                 node.save(update_fields=["state"])
     _refresh(run)
     return serialize_run(run), 202

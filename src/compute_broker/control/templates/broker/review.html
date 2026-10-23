@@ -4,6 +4,7 @@
 <p class="notice">This preview requires a separate protected service account or server before using real secrets with an agent that controls your desktop. A human session on an agent-controlled desktop does not prove human presence.</p>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <div id="live-resource-validation" data-live-fragment>{% include "broker/resource_validation.html" with validation=detail.resource_validation %}</div>
+<div id="live-approval-requirements" data-live-fragment>{% include "broker/approval_requirements.html" with requirements=detail.approval %}</div>
 <div data-live-attempts>{% for diagnostics in attempt_diagnostics %}{% include "broker/live_attempt.html" with diagnostics=diagnostics %}{% endfor %}</div>
 <div id="live-review-allowance" data-live-fragment>{% include "broker/live_review_allowance.html" %}</div>
 {% if detail.manifest %}<section><h2>Exact prepared package</h2><p>SHA-256 <code>{{ detail.manifest_sha256 }}</code></p><p>Maximum reservation: {{ detail.manifest.reservation.cpu_core_seconds }} CPU core-seconds, {{ detail.manifest.reservation.gpu_device_seconds }} GPU device-seconds.</p>

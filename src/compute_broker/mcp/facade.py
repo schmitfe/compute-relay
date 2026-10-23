@@ -104,6 +104,10 @@ class ProjectFacade:
     def cancel_job_attempt(self, attempt_id: str, idempotency_key: str | None = None):
         return self._mutate(f"/api/v1/attempts/{_uuid(attempt_id)}/cancel", {}, idempotency_key)
 
+    def cancel_execution_request(self, job_id: str, execution_request_id: str, idempotency_key: str | None = None):
+        return self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/execution-requests/{_uuid(execution_request_id)}/cancel",
+                            {}, idempotency_key)
+
 
 def create_server(facade: ProjectFacade):
     from mcp.server.fastmcp import FastMCP
@@ -118,7 +122,11 @@ def create_server(facade: ProjectFacade):
         "and limits, refresh those tools, and revise the resource request or choose "
         "another permitted target. Do not repeatedly submit the same rejected request. "
         "Pass a job document as prepare_job.request or revise_job.request; omit project_id "
-        "because the API key selects the project. Preparation does not execute code."
+        "because the API key selects the project. Preparation does not execute code. "
+        "Execution requests awaiting approval hold budget, as do queued and running jobs. "
+        "Read approval.approval_reasons: project, API key and cluster policies can each require review. "
+        "Cancel an unwanted pending request with cancel_execution_request to release its hold. "
+        "Changing project policy does not automatically execute older pending requests."
     ))
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                idempotentHint=True, openWorldHint=True)
@@ -162,7 +170,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=write)
     def request_execution(job_id: str, idempotency_key: str | None = None) -> dict:
-        """Request approval or policy-authorized execution; returns a durable state promptly."""
+        """Request approval or policy-authorized execution and hold its budget. Returns state, approval reasons and reservation. Reuse the idempotency key on retries."""
         return facade.request_execution(job_id, idempotency_key)
 
     @server.tool(annotations=readonly)
@@ -191,6 +199,12 @@ def create_server(facade: ProjectFacade):
     def cancel_job_attempt(attempt_id: str, idempotency_key: str | None = None) -> dict:
         """Request cancellation; acknowledgement does not prove completion or release funds."""
         return facade.cancel_job_attempt(attempt_id, idempotency_key)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
+                                            idempotentHint=True, openWorldHint=True))
+    def cancel_execution_request(job_id: str, execution_request_id: str, idempotency_key: str | None = None) -> dict:
+        """Cancel an unwanted review request and release its pending hold. For an admitted job, request safe cancellation; funds remain held until final accounting when dispatch may have started."""
+        return facade.cancel_execution_request(job_id, execution_request_id, idempotency_key)
 
     from importlib import import_module
     from compute_broker.extensions import EXTENSIONS

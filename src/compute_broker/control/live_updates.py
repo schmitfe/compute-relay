@@ -12,10 +12,11 @@ from django.views.decorators.csrf import csrf_protect
 from . import services
 from .auth import human_permission
 from .errors import BrokerError
+from .execution_policy import approval_requirements
 from .identity.authority import cached_user_active
 from .job_diagnostics import build_attempt_diagnostics
-from .models import Connection, ExecutionRequest, Job, Membership, Project
-from .resource_api import resource_validation
+from .models import Connection, ExecutionRequest, Grant, Job, Membership, Project
+from .resource_api import job_approval_requirements, resource_validation
 
 
 def _projects(user, role):
@@ -66,11 +67,19 @@ def _review(request, object_id):
     human_permission(request.user, job.project, "approver")
     # Do not retrieve package files, source scripts or object-store content just
     # to update status. History queries are bounded independently of its size.
-    detail = {"manifest_sha256": job.manifest_sha256, "resource_validation": resource_validation(job)}
+    policy = Grant.objects.get(project_id=job.project_id).policy
+    connection = Connection.objects.filter(id=job.request.get("connection_id")).first()
+    detail = {"manifest_sha256": job.manifest_sha256,
+        "resource_validation": resource_validation(job, policy=policy, connection=connection),
+        "approval": job_approval_requirements(job, policy=policy, connection=connection)}
+    within = None if not (job.manifest or {}).get("maximum_allocation") else not any(
+        row["source"] == "project" for row in detail["resource_validation"]["violations"])
     executions = job.execution_requests.annotate(
         _live_updated_at=Coalesce("approvaldecision__created_at", "created_at"),
         _decision_comment=F("approvaldecision__comment"),
-    ).values("id", "state", "created_at", "_live_updated_at", "_decision_comment")
+        _credential_execution_mode=F("credential__execution_mode"),
+    ).values("id", "state", "created_at", "_live_updated_at", "_decision_comment", "_credential_execution_mode",
+        "approval_requirements", "reservation_state", "reservation_cpu", "reservation_gpu")
     recent_requests = list(executions.order_by("-_live_updated_at", "-id")[:100])
     awaiting_requests = list(executions.filter(state="awaiting_approval").order_by("created_at", "id")[:100])
     # A recent decision on an old request must update its panel too. Keep older
@@ -84,13 +93,23 @@ def _review(request, object_id):
     changing = list(attempts.filter(unresolved)[:100])
     recent = list(attempts.exclude(unresolved)[:10])
     visible_attempts = sorted(changing + recent, key=lambda attempt: (attempt.created_at, str(attempt.id)), reverse=True)
+
+    def execution_context(execution):
+        current = approval_requirements(policy, execution["_credential_execution_mode"] or "inherit",
+            connection.configuration if connection else {}, within_envelope=within)
+        return {"id": str(execution["id"]), "state": execution["state"], "comment": execution["_decision_comment"],
+            "approval": execution["approval_requirements"] or current, "approval_current": current,
+            "budget_reservation": {"state": execution["reservation_state"],
+                "cpu_core_seconds": execution["reservation_cpu"], "gpu_device_seconds": execution["reservation_gpu"]}}
+
     return {"fragments": {
         "live-job-summary": _render(request, "live_job_summary", {"job": job}),
         "live-review-allowance": _render(request, "live_review_allowance", {"allowance": services.allowance(job.project)}),
         "live-resource-validation": _render(request, "resource_validation", {"validation": detail["resource_validation"]}),
+        "live-approval-requirements": _render(request, "approval_requirements", {"requirements": detail["approval"]}),
     }, "execution_requests": [{"id": str(execution["id"]), "state": execution["state"],
         "html": _render(request, "live_execution_request", {"job": job, "detail": detail,
-            "execution": {"id": str(execution["id"]), "state": execution["state"], "comment": execution["_decision_comment"]},
+            "execution": execution_context(execution),
             "idempotency_key": str(uuid4())})}
         for execution in visible_requests],
         "attempts": [{"id": str(attempt.id), "html": _render(request, "live_attempt", {

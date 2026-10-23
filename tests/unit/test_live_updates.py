@@ -11,7 +11,7 @@ from django.utils import timezone
 import pytest
 
 from compute_broker.control import services
-from compute_broker.control.models import ApprovalDecision, Attempt, Connection, ExecutionRequest, Job, Membership
+from compute_broker.control.models import ApprovalDecision, Attempt, Connection, ExecutionRequest, Job, Membership, ProjectCredential
 from test_control import broker, execution, prepared_job
 
 
@@ -121,6 +121,59 @@ def test_review_snapshot_inserts_a_new_bound_approval_panel_without_reloading_so
     assert "uploaded source" not in response.content.decode()
 
 
+def test_live_review_uses_the_requesting_key_for_legacy_approval_fallback_and_keeps_budget_hold(broker):
+    job = prepared_job(broker)
+    broker.grant.policy["mode"] = "budgeted"
+    broker.grant.save(update_fields=["policy"])
+    other_key = ProjectCredential.objects.create(project=broker.project, issued_by=broker.owner,
+        name="Review-only request key", token_hash="b" * 64, scopes=broker.credential.scopes,
+        execution_mode="approval_required", expires_at=timezone.now() + timedelta(days=1))
+    request = execution(broker, job, credential=other_key)
+    request.approval_requirements = {}
+    request.save(update_fields=["approval_requirements"])
+    response = live(human(broker.owner), "review", job.id)
+    panel, = response.json()["execution_requests"]
+    assert "KEY_REVIEW_REQUIRED" in panel["html"]
+    assert "This API key requires confirmation" in panel["html"]
+    assert "60 CPU core-seconds" in panel["html"] and "Cancel request and release hold" in panel["html"]
+    assert "KEY_REVIEW_REQUIRED" not in response.json()["fragments"]["live-approval-requirements"]
+
+
+def test_live_review_keeps_recorded_review_reason_after_current_project_policy_changes(broker):
+    job = prepared_job(broker)
+    execution(broker, job)
+    broker.grant.policy["mode"] = "budgeted"
+    broker.grant.save(update_fields=["policy"])
+    payload = live(human(broker.owner), "review", job.id).json()
+    panel, = payload["execution_requests"]
+    assert "PROJECT_REVIEW_REQUIRED" in panel["html"]
+    assert "Current requirements for this request's API key" in panel["html"]
+    assert "These settings add no unconditional confirmation requirement" in panel["html"]
+    assert "PROJECT_REVIEW_REQUIRED" not in payload["fragments"]["live-approval-requirements"]
+
+
+def test_pending_request_displays_changed_current_key_requirements_without_changing_its_state_or_hold(broker):
+    job = prepared_job(broker)
+    broker.grant.policy["mode"] = "budgeted"
+    broker.grant.save(update_fields=["policy"])
+    broker.credential.execution_mode = "approval_required"
+    broker.credential.save(update_fields=["execution_mode"])
+    request = execution(broker, job)
+    client = human(broker.owner)
+    initial, = live(client, "review", job.id).json()["execution_requests"]
+    assert "KEY_REVIEW_REQUIRED" in initial["html"]
+    assert "data-current-request-requirements" not in initial["html"]
+    broker.credential.execution_mode = "automatic"
+    broker.credential.save(update_fields=["execution_mode"])
+    changed, = live(client, "review", job.id).json()["execution_requests"]
+    assert changed["state"] == initial["state"] == "awaiting_approval"
+    assert "KEY_REVIEW_REQUIRED" in changed["html"]
+    assert "Current requirements for this request's API key" in changed["html"]
+    assert "These settings add no unconditional confirmation requirement" in changed["html"]
+    request.refresh_from_db()
+    assert request.reservation_state == "held" and request.reservation_cpu == 60
+
+
 def test_review_snapshot_keeps_an_older_active_attempt_updating_among_many_finished_attempts(broker):
     job = prepared_job(broker)
     old = attempt(broker, job, created_at=timezone.now() - timedelta(days=1))
@@ -192,6 +245,8 @@ def test_all_snapshot_queries_are_read_only_and_do_not_contact_execution_paths(b
     job = prepared_job(broker)
     execution(broker, job)
     client = human(broker.owner)
+    before = services.allowance(broker.project)["reserved"]
+    assert before == {"cpu_core_seconds": 60, "gpu_device_seconds": 0}
     with patch("compute_broker.control.services.prepare_job", side_effect=AssertionError("No preparation")), \
             patch("compute_broker.control.services.authorize", side_effect=AssertionError("No authorization")), \
             patch("compute_broker.control.services.lease_work", side_effect=AssertionError("No worker query")):
@@ -201,7 +256,7 @@ def test_all_snapshot_queries_are_read_only_and_do_not_contact_execution_paths(b
     assert all(response.status_code == 200 for response in responses)
     assert all(query["sql"].lstrip().upper().startswith("SELECT") for query in queries)
     assert not Attempt.objects.exists()
-    assert services.allowance(broker.project)["reserved"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}
+    assert services.allowance(broker.project)["reserved"] == before
 
 
 def test_job_and_review_content_is_escaped_in_fixed_server_fragments(broker):

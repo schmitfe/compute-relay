@@ -183,6 +183,17 @@ def execution_requests(request, job_id):
     return idem(request, credential, f"{job_id}:execute", document, lambda: services.request_execution(job, credential))
 
 
+@boundary("POST")
+def cancel_execution_request(request, job_id, execution_id):
+    credential, job = scope(request, "jobs:cancel", job_id=job_id)
+    document = body(request)
+    if document:
+        raise BrokerError("INVALID_REQUEST", "Cancellation accepts an empty object.")
+    execution = job.execution_requests.get(id=execution_id)
+    return idem(request, credential, f"{execution_id}:cancel", document,
+                lambda: services.cancel_execution_request(execution))
+
+
 @boundary("POST", exempt=False)
 def decisions(request, job_id):
     # Check human authority before parsing the body or any project token.
@@ -336,11 +347,19 @@ def review(request, job_id):
         human_permission(request.user, job.project, "approver")
         error = ""
         if request.method == "POST":
+            action = request.POST.get("decision")
+            if action not in {"approve", "reject", "cancel"}:
+                raise BrokerError("INVALID_REQUEST", "Choose approval, rejection or cancellation.")
             document = {"execution_request_id": request.POST.get("execution_request_id"), "manifest_sha256": request.POST.get("manifest_sha256"),
-                        "approved": request.POST.get("decision") == "approve", "comment": request.POST.get("comment", "")}
+                        "approved": action == "approve", "comment": request.POST.get("comment", "")}
             try:
-                services.idempotent(job.project, f"{job_id}:decision:{request.user.id}", request.POST.get("idempotency_key"), document,
-                                    lambda: services.decide(job, request.user, document))
+                if action == "cancel":
+                    execution = job.execution_requests.get(id=document["execution_request_id"])
+                    services.idempotent(job.project, f"{job_id}:cancel-review:{request.user.id}",
+                        request.POST.get("idempotency_key"), document, lambda: services.cancel_execution_request(execution))
+                else:
+                    services.idempotent(job.project, f"{job_id}:decision:{request.user.id}", request.POST.get("idempotency_key"), document,
+                                        lambda: services.decide(job, request.user, document))
                 return redirect(f"/review/{job_id}/")
             except BrokerError as exc:
                 error = exc.message

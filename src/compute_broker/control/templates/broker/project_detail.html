@@ -11,6 +11,7 @@
 {% for row in target.limits|effective_resource_rows %}<tr><th>{{ row.label }} ({{ row.unit }})</th><td>{{ row.project|default_if_none:"Unknown" }}</td><td>{{ row.cluster|default_if_none:"Not configured" }}</td><td><strong>{{ row.effective|default_if_none:"Unknown" }}</strong></td></tr>{% endfor %}
 </tbody></table></div>
 <p>Minimum effective allocation: {{ target.limits.allocation_floors.cpu_cores|default_if_none:"Unknown" }} CPUs and {{ target.limits.allocation_floors.gpu_devices|default_if_none:"Unknown" }} GPUs. Walltime uses whole scheduler minutes.</p>
+{% include "broker/approval_requirements.html" with requirements=target.approval %}
 {% if target.limits.feasible == False %}<p class="error">No supported minimum request fits these configured limits.</p>{% for reason in target.limits.blocking_reasons %}<p class="error">{{ reason }}</p>{% endfor %}{% elif target.limits.feasible == None %}<p class="notice">Some required limits are unknown. Check the cluster configuration before planning a job.</p>{% endif %}
 </details>{% empty %}<p>No enabled, configured cluster belonging to your account is currently allowed by this project.</p>{% endfor %}
 {% if allowance.mode == "mixed" %}<p>This project's mixed policy allows a human reviewer to approve an exception to its per-job envelope. Cluster limits and available allowance still apply.</p>{% endif %}

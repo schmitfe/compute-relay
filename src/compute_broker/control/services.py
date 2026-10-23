@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import rfc8785
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from compute_broker.domain.validation import relative_path, validate
@@ -54,6 +54,8 @@ def allowance(project):
     job_limit = grant.policy.get("max_total_jobs", DEFAULT_MAX_TOTAL_JOBS)
     counts = Attempt.objects.filter(job__project=project).aggregate(
         admitted=Count("id"), active=Count("id", filter=~Q(state__in=TERMINAL)))
+    pending = ExecutionRequest.objects.filter(job__project=project, reservation_state="held").aggregate(
+        count=Count("id"), cpu=Sum("reservation_cpu"), gpu=Sum("reservation_gpu"))
     return {
         "project_id": str(project.id), "mode": grant.policy["mode"], "paused": project.paused,
         "per_job_limits": {field: grant.policy["per_job_limits"][field]
@@ -61,11 +63,14 @@ def allowance(project):
         "policy_revision": grant.policy["revision"], "admission_expires_at": grant.policy["admission_expires_at"],
         "limit": limit, "spent": {"cpu_core_seconds": grant.spent_cpu, "gpu_device_seconds": grant.spent_gpu},
         "reserved": {"cpu_core_seconds": grant.reserved_cpu, "gpu_device_seconds": grant.reserved_gpu},
+        "reserved_awaiting_approval": {"cpu_core_seconds": pending["cpu"] or 0,
+                                       "gpu_device_seconds": pending["gpu"] or 0},
         "available": {"cpu_core_seconds": max(0, limit["cpu_core_seconds"] - grant.spent_cpu - grant.reserved_cpu), "gpu_device_seconds": max(0, limit["gpu_device_seconds"] - grant.spent_gpu - grant.reserved_gpu)},
         "debt": {"cpu_core_seconds": max(0, grant.spent_cpu + grant.reserved_cpu - limit["cpu_core_seconds"]), "gpu_device_seconds": max(0, grant.spent_gpu + grant.reserved_gpu - limit["gpu_device_seconds"])},
         "jobs": {"limit": job_limit, "admitted": counts["admitted"],
                  "remaining": max(0, job_limit - counts["admitted"]),
-                 "active": counts["active"], "active_limit": grant.policy["max_active_jobs"]},
+                 "active": counts["active"], "active_limit": grant.policy["max_active_jobs"],
+                 "awaiting_approval": pending["count"]},
     }
 
 
@@ -148,6 +153,56 @@ def _within_envelope(job, policy):
     return not allocation_violations(job.request["resources"], job.manifest["maximum_allocation"], policy["per_job_limits"])
 
 
+def execution_approval(job, credential, policy=None, connection=None):
+    from .resource_api import job_approval_requirements
+    return job_approval_requirements(job, credential=credential, policy=policy, connection=connection)
+
+
+def execution_reservation(execution):
+    return {"state": execution.reservation_state, "cpu_core_seconds": execution.reservation_cpu,
+            "gpu_device_seconds": execution.reservation_gpu}
+
+
+def _pending_reserve(execution, grant):
+    """Hold review funds before exposing the request; caller holds project/grant."""
+    project = execution.job.project
+    if project.paused:
+        raise BrokerError("PROJECT_PAUSED", "New execution is paused.", 409)
+    policy = grant.policy
+    validate("project-policy.schema.json", policy)
+    if datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")) <= timezone.now():
+        raise BrokerError("GRANT_EXPIRED", "Project allowance has expired.", 409)
+    reservation = execution.job.manifest["reservation"]
+    cpu, gpu = reservation["cpu_core_seconds"], reservation["gpu_device_seconds"]
+    _require_budget(grant, cpu, gpu)
+    execution.reservation_cpu, execution.reservation_gpu = cpu, gpu
+    execution.reservation_state = "held"
+    execution.save(update_fields=["reservation_cpu", "reservation_gpu", "reservation_state"])
+    grant.reserved_cpu += cpu
+    grant.reserved_gpu += gpu
+    grant.save(update_fields=["reserved_cpu", "reserved_gpu"])
+    LedgerEntry.objects.create(grant=grant, execution_request=execution, action="hold", cpu=cpu, gpu=gpu)
+
+
+def _require_budget(grant, additional_cpu=0, additional_gpu=0):
+    limit = grant.policy["allowance"]
+    if (grant.spent_cpu + grant.reserved_cpu + additional_cpu > limit["cpu_core_seconds"]
+            or grant.spent_gpu + grant.reserved_gpu + additional_gpu > limit["gpu_device_seconds"]):
+        raise BrokerError("BUDGET_UNAVAILABLE", "Insufficient unreserved project allowance. Waiting approvals and queued or running executions already hold their budget.", 409)
+
+
+def _release_pending_reservation(execution, grant, reason):
+    if execution.reservation_state != "held":
+        return
+    grant.reserved_cpu -= execution.reservation_cpu
+    grant.reserved_gpu -= execution.reservation_gpu
+    grant.save(update_fields=["reserved_cpu", "reserved_gpu"])
+    execution.reservation_state = "released"
+    execution.save(update_fields=["reservation_state"])
+    LedgerEntry.objects.create(grant=grant, execution_request=execution, action="hold_release", cpu=0, gpu=0,
+        evidence={"reason": reason})
+
+
 def authorize(execution_request, *, decision=None):
     """Caller transaction serializes project/grant and consumes a decision once."""
     job = execution_request.job
@@ -191,29 +246,41 @@ def authorize(execution_request, *, decision=None):
         raise BrokerError("ACTIVE_JOB_LIMIT", "The project has reached its active job limit.", 409)
     reservation = job.manifest["reservation"]
     cpu, gpu = reservation["cpu_core_seconds"], reservation["gpu_device_seconds"]
-    if grant.spent_cpu + grant.reserved_cpu + cpu > policy["allowance"]["cpu_core_seconds"] or grant.spent_gpu + grant.reserved_gpu + gpu > policy["allowance"]["gpu_device_seconds"]:
-        raise BrokerError("BUDGET_UNAVAILABLE", "Insufficient unreserved project allowance.", 409)
+    held = execution_request.reservation_state == "held"
+    if held and (execution_request.reservation_cpu, execution_request.reservation_gpu) != (cpu, gpu):
+        raise BrokerError("RESERVATION_CHANGED", "The pending reservation does not match this package.", 409)
+    _require_budget(grant, 0 if held else cpu, 0 if held else gpu)
     if decision and (not decision.approved or decision.consumed_at or decision.manifest_sha256 != job.manifest_sha256):
         raise BrokerError("APPROVAL_CONSUMED", "Approval is invalid or already consumed.", 409)
     from compute_broker.extensions import job_hook
     job_hook(job, "validate_admission", job, credential)
     attempt = Attempt.objects.create(execution_request=execution_request, job=job, connection=connection, grant=grant, reservation_cpu=cpu, reservation_gpu=gpu)
     job_hook(job, "after_admission", attempt)
-    grant.reserved_cpu += cpu
-    grant.reserved_gpu += gpu
-    grant.save(update_fields=["reserved_cpu", "reserved_gpu"])
+    if held:
+        execution_request.reservation_state = "converted"
+        LedgerEntry.objects.create(grant=grant, execution_request=execution_request,
+            action="hold_convert", cpu=0, gpu=0, evidence={"attempt_id": str(attempt.id)})
+    else:
+        grant.reserved_cpu += cpu
+        grant.reserved_gpu += gpu
+        grant.save(update_fields=["reserved_cpu", "reserved_gpu"])
     LedgerEntry.objects.create(grant=grant, attempt=attempt, action="reserve", cpu=cpu, gpu=gpu)
     if decision:
         decision.consumed_at = timezone.now()
         decision.save(update_fields=["consumed_at"])
     execution_request.state = "authorized"
-    execution_request.save(update_fields=["state"])
+    execution_request.save(update_fields=["state", "reservation_state"])
     audit(project, "control", "attempt.authorized", attempt.id, {"reservation": reservation})
     return attempt
 
 
+@transaction.atomic
 def request_execution(job, credential):
-    Project.objects.select_for_update().get(id=job.project_id)
+    project = Project.objects.select_for_update().get(id=job.project_id)
+    job.project = project
+    credential.refresh_from_db()
+    if credential.revoked or credential.expires_at <= timezone.now():
+        raise BrokerError("AUTH_REQUIRED", "The requesting credential is no longer valid.", 403)
     require_credential_actor(credential)
     require_connection(credential, job.request["connection_id"])
     bound_environment(job.project, job.request)
@@ -222,20 +289,24 @@ def request_execution(job, credential):
     if not job.manifest:
         raise BrokerError("NOT_PREPARED", "Prepare the job before requesting execution.", 409)
     grant = Grant.objects.select_for_update().get(project=job.project)
-    execution = ExecutionRequest.objects.create(job=job, credential=credential)
-    mode = grant.policy["mode"]
-    attempt = None
-    credential.refresh_from_db()
     connection = job.project.connections.get(id=job.request["connection_id"])
-    profile_allows_automatic = connection.configuration.get("site_profile", {}).get("automatic_execution_allowed") is not False
-    if profile_allows_automatic and credential.execution_mode != "approval_required" and (mode == "budgeted" or (mode == "mixed" and _within_envelope(job, grant.policy))):
+    requirements = execution_approval(job, credential, grant.policy, connection)
+    execution = ExecutionRequest.objects.create(job=job, credential=credential, approval_requirements=requirements)
+    attempt = None
+    if not requirements["requires_human_approval"]:
         attempt = authorize(execution)
+    else:
+        _pending_reserve(execution, grant)
     audit(job.project, credential.id, "execution.requested", execution.id)
-    return {"id": str(execution.id), "state": execution.state, "attempt_id": str(attempt.id) if attempt else None}, 202
+    return {"id": str(execution.id), "state": execution.state, "attempt_id": str(attempt.id) if attempt else None,
+            "approval": requirements, "budget_reservation": execution_reservation(execution)}, 202
 
 
+@transaction.atomic
 def decide(job, user, document):
     human_permission(user, job.project, "approver")
+    Project.objects.select_for_update().get(id=job.project_id)
+    grant = Grant.objects.select_for_update().get(project_id=job.project_id)
     execution = ExecutionRequest.objects.select_for_update().filter(id=document["execution_request_id"], job=job).first()
     if execution is None:
         raise BrokerError("NOT_FOUND", "Execution request not found.", 404)
@@ -250,10 +321,31 @@ def decide(job, user, document):
     if decision.approved:
         attempt = authorize(execution, decision=decision)
     else:
+        _release_pending_reservation(execution, grant, "rejected")
         execution.state = "rejected"
         execution.save(update_fields=["state"])
     audit(job.project, user.id, "execution.approved" if decision.approved else "execution.rejected", execution.id)
     return {"id": str(execution.id), "state": execution.state, "attempt_id": str(attempt.id) if attempt else None}, 200
+
+
+def cancel_execution_request(execution):
+    """Cancel a review hold or delegate an admitted execution to safe cancellation."""
+    with transaction.atomic():
+        Project.objects.select_for_update().get(id=execution.job.project_id)
+        grant = Grant.objects.select_for_update().get(project_id=execution.job.project_id)
+        execution = ExecutionRequest.objects.select_for_update().get(id=execution.id)
+        attempt = Attempt.objects.filter(execution_request=execution).first()
+        if attempt:
+            result, _ = cancel_attempt(attempt)
+        else:
+            result = None
+            if execution.state == "awaiting_approval":
+                _release_pending_reservation(execution, grant, "cancelled_before_approval")
+                execution.state = "cancelled"
+                execution.save(update_fields=["state"])
+                audit(execution.job.project, "control", "execution.cancelled", execution.id)
+        return {"id": str(execution.id), "state": execution.state, "attempt_id": str(attempt.id) if attempt else None,
+                "attempt": result, "budget_reservation": execution_reservation(execution)}, 202
 
 
 def serialize_attempt(attempt):
@@ -263,15 +355,20 @@ def serialize_attempt(attempt):
 def serialize_job(job, *, package=False):
     from .resource_api import resource_validation
     executions = []
-    for execution in job.execution_requests.all().order_by("created_at"):
+    approval = execution_approval(job, job.credential)
+    for execution in job.execution_requests.select_related("credential").order_by("created_at"):
         decision = ApprovalDecision.objects.filter(execution_request=execution).first()
-        executions.append({"id": str(execution.id), "state": execution.state, "comment": decision.comment if decision else None})
+        executions.append({"id": str(execution.id), "state": execution.state, "comment": decision.comment if decision else None,
+            "approval": execution.approval_requirements or approval,
+            "approval_current": execution_approval(job, execution.credential),
+            "budget_reservation": execution_reservation(execution)})
     result = {"id": str(job.id), "name": job.name, "project_id": str(job.project_id),
               "project_name": job.project.name, "owner": {"id": str(job.project.owner_id), "username": job.project.owner.username},
               "submitted_using": {"id": str(job.credential_id), "name": job.credential.name} if job.credential_id else None,
               "state": job.display_state, "package_state": job.state, "request": job.request,
               "manifest_sha256": job.manifest_sha256, "execution_requests": executions,
               "attempts": [serialize_attempt(a) for a in job.attempts.order_by("created_at")]}
+    result["approval"] = approval
     result["resource_validation"] = resource_validation(job)
     if package or job.manifest:
         result["manifest"] = job.manifest

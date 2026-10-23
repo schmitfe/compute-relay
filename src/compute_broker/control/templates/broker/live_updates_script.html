@@ -14,6 +14,10 @@
     const element = parsed.content.firstElementChild;
     return element && element.getAttribute(attribute) === identifier ? element : null;
   }
+  function refreshExecutionOutcome(current, next) {
+    const target = current.querySelector('.execution-outcome'), source = next.querySelector('.execution-outcome');
+    if (target && source && target.innerHTML !== source.innerHTML && !target.contains(document.activeElement)) target.innerHTML = source.innerHTML;
+  }
   function mergeExecutions(items) {
     const container = document.querySelector('[data-live-executions]');
     if (!container || !Array.isArray(items)) return;
@@ -22,7 +26,12 @@
       if (!next) continue;
       const current = Array.from(container.children).find(node => node.dataset.liveReviewRequest === item.id);
       if (!current) { container.append(next); continue; }
-      if (current.dataset.executionState === item.state) continue;
+      if (current.dataset.executionState === item.state) {
+        // Policy/key edits can change current review requirements while this
+        // request stays pending. Its form, comment and tokens remain untouched.
+        refreshExecutionOutcome(current, next);
+        continue;
+      }
       const form = current.querySelector('form');
       const comment = form && form.querySelector('textarea[name="comment"]');
       const dirty = current.dataset.liveDirty === 'true' || Boolean(form && form.contains(document.activeElement)) || Boolean(comment && comment.value !== comment.defaultValue);

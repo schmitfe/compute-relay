@@ -79,7 +79,7 @@ def dispatch(context, attempt):
 
 @pytest.mark.parametrize("project_mode", ["budgeted", "mixed"])
 @pytest.mark.parametrize("key_mode", ["inherit", "automatic"])
-def test_unverified_site_always_waits_for_review_without_consuming_compute_or_job_slots(review_site, project_mode, key_mode):
+def test_unverified_site_holds_budget_for_review_without_consuming_compute_usage_or_job_slots(review_site, project_mode, key_mode):
     context = review_site
     context.grant.policy = {**context.grant.policy, "mode": project_mode}
     context.grant.save(update_fields=["policy"])
@@ -89,9 +89,13 @@ def test_unverified_site_always_waits_for_review_without_consuming_compute_or_jo
     assert result["attempt_id"] is None
     assert execution.state == "awaiting_approval"
     assert not Attempt.objects.exists()
-    assert not LedgerEntry.objects.exists()
+    hold = LedgerEntry.objects.get(execution_request=execution)
+    assert (hold.action, hold.cpu, hold.gpu) == ("hold", 60, 0)
+    assert hold.attempt_id is None
+    assert execution.reservation_state == "held"
+    assert (execution.reservation_cpu, execution.reservation_gpu) == (60, 0)
     allowance = services.allowance(context.project)
-    assert allowance["reserved"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}
+    assert allowance["reserved"] == {"cpu_core_seconds": 60, "gpu_device_seconds": 0}
     assert allowance["spent"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}
     assert allowance["jobs"]["admitted"] == 0
 

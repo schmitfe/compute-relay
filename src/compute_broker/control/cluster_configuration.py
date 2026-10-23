@@ -11,6 +11,9 @@ from compute_broker.domain.cluster_configuration import (
 
 
 class ClusterConfigurationForm(forms.Form):
+    allow_automatic_execution = forms.BooleanField(required=False,
+        label="Allow automatic execution on this cluster",
+        help_text="When unchecked, this cluster requires human confirmation for every execution, even in an automatic project. Checking it removes only this cluster's confirmation requirement; project policy, each API key's confirmation preference, resource limits and compute allowance still apply.")
     module_availability_enabled = forms.BooleanField(required=False, label="Also run module avail during discovery",
         help_text="Run the site's module listing through your worker, using system initialization and discovered search paths. This may evaluate site module configuration under your HPC account. No module is loaded and no compute job is submitted.")
     partitions = forms.CharField(max_length=81000, help_text="Comma-separated partition names. Discovery is visibility, not permission.")
@@ -28,6 +31,7 @@ class ClusterConfigurationForm(forms.Form):
         self.evidence = derive_cluster_configuration(snapshot, self.current_profile)
         initial = {field: ", ".join(self.evidence["site_profile"].get(field, [])) for field in ALLOWLIST_FIELDS}
         initial.update({field: self.evidence["site_profile"].get(field) for field in RESOURCE_BOUNDS})
+        initial["allow_automatic_execution"] = self.current_profile.get("automatic_execution_allowed") is True
         initial.update(kwargs.pop("initial", {}))
         super().__init__(*args, initial=initial, **kwargs)
 
@@ -45,6 +49,7 @@ class ClusterConfigurationForm(forms.Form):
             profile[field] = values
         for field in RESOURCE_BOUNDS:
             profile[field] = data[field]
+        profile["automatic_execution_allowed"] = data["allow_automatic_execution"]
         try:
             profile = validate_cluster_configuration(profile)
         except ClusterConfigurationError as exc:
@@ -56,7 +61,6 @@ class ClusterConfigurationForm(forms.Form):
             ceiling = max((item[field] for item in selected if item[field] is not None), default=None)
             if ceiling is not None and profile[field] > ceiling:
                 self.add_error(field, "This exceeds the saved discovered ceiling for the selected partitions.")
-        profile["automatic_execution_allowed"] = self.current_profile.get("automatic_execution_allowed") is True
         if not self.errors:
             self._site_profile = profile
         return data

@@ -32,6 +32,20 @@ The choice is saved for this cluster and in its local worker state. An older
 worker must restart before it can acknowledge this option. It defaults off and
 can be disabled through the same form.
 
+Under **Execution confirmation**, the owner of a personal cluster can select
+**Allow automatic execution on this cluster**. It defaults off for new clusters.
+Unchecked, the cluster requires a human decision even when its project is set to
+**Automatic within limits** and its API key follows that policy. Checking it
+removes this additional cluster requirement; project review mode, key-specific
+confirmation, resource limits, available allowance and normal authorization
+checks continue to apply. A managed worker's profile remains operator controlled.
+
+The connector applies this choice through the same owner-authenticated, revision
+checked configuration handshake as the other cluster settings. Saving the form
+queues the change; it becomes active only after the connector acknowledges the
+matching profile and configuration. Opening the page, discovery and changing a
+project's mode never enable it. Unchecking the option restores cluster review.
+
 **Cluster configuration** is the human-facing name. The internal configuration
 object remains `site_profile`, so existing packages and worker profiles retain
 their versioned field names. This guide describes the derivation/form contract;
@@ -91,17 +105,27 @@ provide one. Values must fit the supported bounds, walltime must be whole
 minutes, names must be safe scheduler names, and partition selection cannot be
 empty. Where selected partitions have known ceilings, inputs cannot exceed
 those ceilings. A lower resource ceiling cannot contradict retained allocation
-rounding. Allocation-rounding and automatic-execution fields are not editable
-through this form; forged extra fields cannot change them.
+rounding. Allocation-rounding fields are not editable through this form; forged
+extra fields cannot change them. Automatic execution changes only through the
+explicit personal-cluster checkbox described above.
 
 The form has no separate termination, overtime or cleanup section. Legacy timing
 properties do not affect new reservations or active agent limits. Actual elapsed
 allocation time can exceed requested walltime, and final charges are not capped
 at the reservation. Debt prevents new project admissions until resolved.
 
-An owner must not turn saved visibility into unattended spending without the
-separate site evidence and project authorization. Configuration review is also
-distinct from discovering a working directory or granting a project access.
+The automatic-execution checkbox is an owner choice, rather than a conclusion
+from saved resource visibility. Configuration review remains distinct from
+discovering a working directory or granting a project access.
+
+Agent target discovery, project context and allowance responses include
+`approval_reasons` alongside `requires_human_approval`. Reasons identify project,
+API-key and cluster requirements separately. Mixed projects also expose
+`conditional_approval_reasons` and `conditional_approval_notice` before a concrete
+allocation is known. A request beyond that project's envelope then records an
+explicit project-envelope review reason. These explanations grant no execution
+authority, and automatic project/key choices cannot override a cluster review
+requirement. The portal shows the same explanations on the prepared-job page.
 
 ## Integration API
 
@@ -138,5 +162,6 @@ The caller must authenticate the owner, check the current connection revision,
 reject stale/busy changes and arrange protected-worker validation/application.
 The form cannot itself change a connection, bind a worker or approve execution.
 Tests cover maxima, heterogeneous GPUs, unknowns, implementation caps, retained
-settings, requested-walltime reservations, forged automatic/rounding fields and a fresh worker-process import with Django and
+settings, requested-walltime reservations, explicit automatic-execution opt-in,
+operator-profile isolation, forged rounding fields and a fresh worker-process import with Django and
 controller imports blocked. No real cluster or compute allocation is involved.

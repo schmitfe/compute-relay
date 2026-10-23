@@ -56,6 +56,17 @@ output=store_blob(project,b'{"synthetic":true}\n');Artifact.objects.create(attem
 revised,_=services.create_job(credential,{**request,'name':'migration-rejected-revision'},previous=job)
 rejection=ExecutionRequest.objects.create(job_id=revised['id'],credential=credential,state='rejected')
 ApprovalDecision.objects.create(execution_request=rejection,approver=user,approved=False,manifest_sha256='a'*64,comment='Synthetic rejected revision')
+# Finalized approval holds have their own journal anchors and must survive
+# offline transfer without being counted again as settled usage.
+converted=attempt.execution_request
+converted.reservation_cpu=attempt.reservation_cpu;converted.reservation_gpu=attempt.reservation_gpu
+converted.reservation_state='converted';converted.approval_requirements={'project_policy':'approval_required'};converted.save()
+LedgerEntry.objects.create(grant=attempt.grant,execution_request=converted,action='hold',cpu=converted.reservation_cpu,gpu=converted.reservation_gpu)
+LedgerEntry.objects.create(grant=attempt.grant,execution_request=converted,action='hold_convert',cpu=0,gpu=0)
+rejection.reservation_cpu=120;rejection.reservation_gpu=0;rejection.reservation_state='released'
+rejection.approval_requirements={'api_key':'approval_required'};rejection.save()
+LedgerEntry.objects.create(grant=attempt.grant,execution_request=rejection,action='hold',cpu=120,gpu=0)
+LedgerEntry.objects.create(grant=attempt.grant,execution_request=rejection,action='hold_release',cpu=0,gpu=0)
 old=ProjectCredential.objects.create(project=project,name='old-key',token_hash=token_hash('synthetic-rotated-project-key'),prefix='old-public-id',expires_at=stamp+timedelta(days=1),revoked=True,replaced_by=credential)
 Membership.objects.create(project=project,user=user,roles=['viewer'])
 IdempotencyRecord.objects.create(project=project,operation='synthetic',key='migration-fixture',request_sha256='a'*64,response={'job':str(job.id)},status=201)
@@ -147,6 +158,8 @@ def test_rehearsal_preserves_all_tables_authentication_microseconds_and_through_
         assert db.execute("SELECT id FROM broker_project_connections").fetchone()[0] == 904
         assert db.execute("SELECT id FROM broker_user_groups").fetchone()[0] == 901
         assert db.execute("SELECT spent_cpu,reserved_cpu FROM broker_grant").fetchone() == (2, 0)
+        assert db.execute("SELECT count(*) FROM broker_ledgerentry WHERE execution_request_id IS NOT NULL AND attempt_id IS NULL").fetchone()[0] == 4
+        assert db.execute("SELECT reservation_cpu,reservation_state,approval_requirements FROM broker_executionrequest WHERE state='rejected'").fetchone() == (120, "released", '{"api_key": "approval_required"}')
     assert json.loads((root / "report.json").read_text())["ok"] is True
     check = r'''
 import os
@@ -180,6 +193,10 @@ print('authentication-preserved')
     ("UPDATE broker_workflows_workflowrun SET state='waiting_budget'", ()),
     ("UPDATE broker_environments_environmentbuild SET state='awaiting_finalization'", ()),
     ("UPDATE broker_storage_storageobservationlease SET state='leased'", ()),
+    ("UPDATE broker_executionrequest SET reservation_state='held' WHERE state='rejected'", ()),
+    ("DELETE FROM broker_ledgerentry WHERE action='hold_release'", ()),
+    ("UPDATE broker_ledgerentry SET cpu=999 WHERE action='hold'", ()),
+    ("UPDATE broker_ledgerentry SET cpu=1 WHERE action='hold_convert'", ()),
 ])
 def test_unsafe_or_inconsistent_source_is_never_exported(migration_source, sql, parameters):
     root, _ = migration_source

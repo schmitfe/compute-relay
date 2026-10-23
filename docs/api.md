@@ -28,6 +28,7 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `POST /api/v1/jobs/{id}/decisions` | Human approver | Approve/reject exact revision+digest, with optional comment; never accepts project keys |
 | `POST /api/v1/jobs/{id}/revisions` | `jobs:submit` | Create new revision; previous revision/decision retained, no inherited approval |
 | `POST /api/v1/attempts/{id}/cancel` | `jobs:cancel` | Idempotent cancellation request; does not imply scheduler confirmation or refund |
+| `POST /api/v1/jobs/{job}/execution-requests/{request}/cancel` | `jobs:cancel` | Release an unapproved request's hold, or request safe cancellation of its admitted attempt |
 | `GET /api/v1/attempts/{id}/logs` | `jobs:read` | Bounded UTF-8-safe stdout/stderr slices, cursor and truncation flags |
 | `GET /api/v1/attempts/{id}/artifacts` | `artifacts:read` | Authorized registered outputs, hashes, sizes, retention and download links |
 | `GET /api/v1/artifacts/{id}/content` | `artifacts:read` | Project-authorized download/range; no arbitrary filesystem path |
@@ -58,6 +59,28 @@ The connections payload also identifies `policy_revision`, project `per_job_limi
 Read `get_project_allowance` as well: available CPU/GPU seconds, debt, active jobs, lifetime submissions and expiry can block a job that fits the per-job ceilings. Reserve effective allocated resources multiplied by requested walltime. Final settlement charges actual allocated elapsed time in full, including usage beyond the reservation. No termination, overtime or cleanup interval is added to planning limits.
 
 ## Idempotency and errors
+
+Execution requests awaiting approval immediately reserve their prepared CPU/GPU
+resource-seconds in the same project transaction. Approval transfers the claim
+to an attempt without reserving twice. Rejection or cancellation before dispatch
+releases it; a job that may have reached the scheduler retains its reservation
+until final accounting. Preparation alone creates no claim. Pending reviews do
+not consume lifetime submission or active-job slots.
+
+The allowance's `reserved` totals include waiting approvals and queued/running
+attempts. `reserved_awaiting_approval` reports the pending subset, and
+`jobs.awaiting_approval` reports its request count. Execution responses and job
+details include `budget_reservation` with `state` (`none`, `held`, `converted` or
+`released`), `cpu_core_seconds` and `gpu_device_seconds`.
+
+`approval` reports `requires_human_approval`, `approval_reasons` and conditional
+mixed-policy reasons. Every reason has a stable `code`, `source` and explanatory
+`message`; sources are project, key or cluster. Execution requests retain the
+requirements at request time, and job detail also reports current requirements.
+Budgeted project mode does not override key- or cluster-required confirmation.
+Policy changes do not automatically execute older pending requests. Their holds
+can be cancelled explicitly using the route above (empty JSON body) or MCP
+`cancel_execution_request(job_id, execution_request_id, idempotency_key)`.
 
 Require `Idempotency-Key` on job creation, execution requests, decisions, grant changes and cancellation. Scope it to project and operation (human/admin operations also bind actor as appropriate), and retain it for at least the operation lifetime. The key stores the canonical request digest and durable result. Reusing it with different bytes returns `409 IDEMPOTENCY_CONFLICT`. An HTTP retry and a new execution attempt are different actions.
 

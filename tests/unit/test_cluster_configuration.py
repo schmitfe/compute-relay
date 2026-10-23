@@ -194,14 +194,28 @@ def test_form_uses_maximal_missing_defaults_and_preserves_auto_review(snapshot):
     assert "allocated_cpus" not in profile
 
 
-def test_form_does_not_change_existing_true_automatic_flag_or_verified_floor(snapshot):
-    form = ClusterConfigurationForm(form_data(), snapshot=snapshot,
+def test_form_keeps_checked_automatic_setting_and_does_not_edit_verified_floor(snapshot):
+    form = ClusterConfigurationForm(form_data(allow_automatic_execution=True), snapshot=snapshot,
         current_profile={"automatic_execution_allowed": True, "allocated_cpus": 8,
             "termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30})
     assert form.is_valid(), form.errors
     assert form.site_profile()["automatic_execution_allowed"] is True
     lower = ClusterConfigurationForm(form_data(maximum_cpus=4), snapshot=snapshot, current_profile={"allocated_cpus": 8})
     assert not lower.is_valid()
+
+
+def test_cluster_automatic_execution_is_explicit_opt_in_and_can_be_unchecked(snapshot):
+    initial = ClusterConfigurationForm(snapshot=snapshot)
+    assert initial.initial["allow_automatic_execution"] is False
+    enabled = ClusterConfigurationForm(form_data(allow_automatic_execution=True), snapshot=snapshot,
+        current_profile={"automatic_execution_allowed": False})
+    assert enabled.is_valid(), enabled.errors
+    assert enabled.site_profile()["automatic_execution_allowed"] is True
+    existing = ClusterConfigurationForm(snapshot=snapshot, current_profile=enabled.site_profile())
+    assert existing.initial["allow_automatic_execution"] is True
+    disabled = ClusterConfigurationForm(form_data(), snapshot=snapshot, current_profile=enabled.site_profile())
+    assert disabled.is_valid(), disabled.errors
+    assert disabled.site_profile()["automatic_execution_allowed"] is False
 
 
 @pytest.mark.parametrize("field, value", [("maximum_cpus", 0), ("maximum_cpus", 1025),
@@ -258,11 +272,11 @@ def test_cluster_configuration_accepts_resources_without_separate_timing_fields(
 def test_legacy_timing_is_removed_without_changing_explicit_automatic_flag(snapshot):
     current = {"termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30,
         "automatic_execution_allowed": True}
-    retained = ClusterConfigurationForm(form_data(), snapshot=snapshot, current_profile=current)
+    retained = ClusterConfigurationForm(form_data(allow_automatic_execution=True), snapshot=snapshot, current_profile=current)
     assert retained.is_valid(), retained.errors
     assert retained.site_profile()["automatic_execution_allowed"] is True
     assert not any("margin_seconds" in field for field in retained.site_profile())
-    changed = ClusterConfigurationForm(form_data(cleanup_margin_seconds=0), snapshot=snapshot, current_profile=current)
+    changed = ClusterConfigurationForm(form_data(cleanup_margin_seconds=0, allow_automatic_execution=True), snapshot=snapshot, current_profile=current)
     assert changed.is_valid(), changed.errors
     assert changed.site_profile()["automatic_execution_allowed"] is True
 

@@ -321,7 +321,7 @@ def test_changed_policy_during_human_review_denies_admission_without_consuming_a
                                              "approved": True, "comment": "Build this recipe."})
     assert not Attempt.objects.exists()
     context.grant.refresh_from_db()
-    assert context.grant.reserved_cpu == 0
+    assert context.grant.reserved_cpu == build.job.manifest["reservation"]["cpu_core_seconds"]
 
 
 def test_missing_pinned_wheel_fails_before_preparation_or_execution(context):

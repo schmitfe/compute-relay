@@ -89,13 +89,13 @@ def assert_cap(action):
 def test_last_slot_is_admitted_once_and_reported_in_allowance(capped_project):
     context = capped_project
     assert services.allowance(context.project)["jobs"] == {
-        "limit": 1, "admitted": 0, "remaining": 1, "active": 0, "active_limit": 100}
+        "limit": 1, "admitted": 0, "remaining": 1, "active": 0, "active_limit": 100, "awaiting_approval": 0}
     execute(context)
     assert_cap(lambda: execute(context))
     assert Attempt.objects.count() == 1
     assert ExecutionRequest.objects.count() == 1  # Denied admission rolled back.
     assert services.allowance(context.project)["jobs"] == {
-        "limit": 1, "admitted": 1, "remaining": 0, "active": 1, "active_limit": 100}
+        "limit": 1, "admitted": 1, "remaining": 0, "active": 1, "active_limit": 100, "awaiting_approval": 0}
     assert LedgerEntry.objects.filter(action="reserve").count() == 1
 
 
@@ -133,7 +133,11 @@ def test_waiting_and_denied_reviews_do_not_consume_slots_and_approval_cannot_ove
     decide(context, first)
     assert_cap(lambda: decide(context, waiting))
     waiting.refresh_from_db()
-    assert waiting.state == "awaiting_approval"
+    denied.refresh_from_db();first.refresh_from_db();context.grant.refresh_from_db()
+    assert waiting.state == "awaiting_approval" and waiting.reservation_state == "held"
+    assert denied.reservation_state == "released" and first.reservation_state == "converted"
+    assert context.grant.reserved_cpu == 120
+    assert services.allowance(context.project)["jobs"]["awaiting_approval"] == 1
     assert not ApprovalDecision.objects.filter(execution_request=waiting).exists()
     assert ApprovalDecision.objects.filter(approved=True, consumed_at__isnull=False).count() == 1
     assert Attempt.objects.count() == 1
@@ -146,7 +150,7 @@ def test_cancelled_attempt_refunds_compute_but_never_refunds_submission_slot(cap
     context.grant.refresh_from_db()
     assert context.grant.reserved_cpu == 0
     jobs = services.allowance(context.project)["jobs"]
-    assert jobs == {"limit": 1, "admitted": 1, "remaining": 0, "active": 0, "active_limit": 100}
+    assert jobs == {"limit": 1, "admitted": 1, "remaining": 0, "active": 0, "active_limit": 100, "awaiting_approval": 0}
     assert_cap(lambda: execute(context))
 
 
@@ -275,9 +279,18 @@ with ThreadPoolExecutor(max_workers=4) as executor:
     outcomes=list(executor.map(reserve,range(4)))
 grant.refresh_from_db()
 assert outcomes.count("authorized")==1 and outcomes.count("TOTAL_JOB_LIMIT")==3,outcomes
-assert grant.reserved_cpu==60 and Attempt.objects.count()==2
+expected_reserved=240 if mode=="approval_required" else 60
+expected_waiting=3 if mode=="approval_required" else 0
+assert grant.reserved_cpu==expected_reserved and Attempt.objects.count()==2
 assert LedgerEntry.objects.filter(action="reserve").count()==1
-assert services.allowance(project)["jobs"]=={"limit":2,"admitted":2,"remaining":0,"active":1,"active_limit":100}
+assert ExecutionRequest.objects.filter(reservation_state='held').count()==expected_waiting
+if mode=='approval_required':
+    assert ExecutionRequest.objects.filter(reservation_state='held',reservation_cpu=60,reservation_gpu=0,state='awaiting_approval').count()==3
+    assert ExecutionRequest.objects.filter(reservation_state='converted').count()==1
+    assert LedgerEntry.objects.filter(action='hold').count()==4
+    assert LedgerEntry.objects.filter(action='hold_convert').count()==1
+    assert not LedgerEntry.objects.filter(action='hold_release').exists()
+assert services.allowance(project)["jobs"]=={"limit":2,"admitted":2,"remaining":0,"active":1,"active_limit":100,"awaiting_approval":expected_waiting}
 print(json.dumps({"authorized":1,"admitted":2,"reserved_cpu":grant.reserved_cpu}))
 '''
     environment = dict(os.environ, DJANGO_SETTINGS_MODULE="compute_broker.control.settings",
@@ -286,4 +299,5 @@ print(json.dumps({"authorized":1,"admitted":2,"reserved_cpu":grant.reserved_cpu}
         BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"), BROKER_PROFILE="development")
     result = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == {"authorized": 1, "admitted": 2, "reserved_cpu": 60}
+    assert json.loads(result.stdout.splitlines()[-1]) == {
+        "authorized": 1, "admitted": 2, "reserved_cpu": 240 if mode == "approval_required" else 60}

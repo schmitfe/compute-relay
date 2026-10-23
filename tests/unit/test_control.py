@@ -160,7 +160,10 @@ def test_rejection_comment_returns_to_agent_without_authorizing_execution(broker
     assert serialized["execution_requests"][0]["comment"] == "Use a smaller CPU test first."
     assert serialized["execution_requests"][0]["state"] == "rejected"
     assert not Attempt.objects.exists()
-    assert not LedgerEntry.objects.exists()
+    assert list(request.budget_entries.order_by("created_at").values_list("action", flat=True)) == ["hold", "hold_release"]
+    broker.grant.refresh_from_db()
+    assert broker.grant.reserved_cpu == broker.grant.reserved_gpu == 0
+    assert not LedgerEntry.objects.filter(attempt__isnull=False).exists()
     with pytest.raises(BrokerError, match="already has a decision"):
         decide(broker, job, request)
 

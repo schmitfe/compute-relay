@@ -54,6 +54,7 @@ urlpatterns = [
     path("api/v1/jobs/<uuid:job_id>/package", views.package), path("api/v1/jobs/<uuid:job_id>/prepare", views.prepare),
     path("api/v1/jobs/<uuid:job_id>/revisions", views.revisions),
     path("api/v1/jobs/<uuid:job_id>/execution-requests", views.execution_requests),
+    path("api/v1/jobs/<uuid:job_id>/execution-requests/<uuid:execution_id>/cancel", views.cancel_execution_request),
     path("api/v1/jobs/<uuid:job_id>/decisions", views.decisions),
     path("api/v1/attempts/<uuid:attempt_id>/cancel", views.cancel), path("api/v1/attempts/<uuid:attempt_id>/logs", views.logs),
     path("api/v1/attempts/<uuid:attempt_id>/artifacts", views.artifacts), path("api/v1/artifacts/<uuid:artifact_id>/content", views.artifact_content),

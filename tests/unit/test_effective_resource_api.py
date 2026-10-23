@@ -139,6 +139,28 @@ def test_context_without_job_read_scope_reveals_only_key_identity_not_compute_or
     no_admission(broker)
 
 
+def test_budgeted_target_explains_its_cluster_and_key_confirmation_requirements(broker):
+    profile(broker, automatic_execution_allowed=False)
+    policy(broker, mode="budgeted")
+    target = client(broker).get("/api/v1/connections").json()["connections"][0]
+    assert target["requires_human_approval"] is True
+    assert [reason["code"] for reason in target["approval_reasons"]] == ["CLUSTER_REVIEW_REQUIRED"]
+    assert target["conditional_approval_reasons"] == []
+    broker.credential.execution_mode = "approval_required"
+    broker.credential.save(update_fields=["execution_mode"])
+    target = client(broker).get("/api/v1/connections").json()["connections"][0]
+    assert [reason["code"] for reason in target["approval_reasons"]] == ["KEY_REVIEW_REQUIRED", "CLUSTER_REVIEW_REQUIRED"]
+
+
+def test_mixed_target_reports_conditional_review_before_the_allocation_is_known(broker):
+    profile(broker, automatic_execution_allowed=True)
+    policy(broker, mode="mixed")
+    target = client(broker).get("/api/v1/connections").json()["connections"][0]
+    assert target["requires_human_approval"] is False and target["approval_reasons"] == []
+    assert target["conditional_approval_reasons"][0]["code"] == "PROJECT_ENVELOPE_REVIEW_REQUIRED"
+    assert "outside" in target["conditional_approval_notice"]
+
+
 def test_project_envelope_failure_reports_every_exceeded_resource_without_consuming_admission(broker):
     job = resource_revision(broker, cpus=4, gpus=2, memory_mib=1024, time_limit_seconds=120)
     services.prepare_job(job)

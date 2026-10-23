@@ -78,7 +78,7 @@ def test_prepare_uses_finite_dedicated_approval_project_and_exact_normal_package
     assert job.execution_requests.get().state == "awaiting_approval"
     assert not Attempt.objects.filter(job=job).exists()
     config.project.grant.refresh_from_db()
-    assert config.project.grant.reserved_cpu == config.project.grant.spent_cpu == 0
+    assert config.project.grant.reserved_cpu == 120 and config.project.grant.spent_cpu == 0
     assert job.request["environment"]["id"] == str(config.environment_id)
 
 
@@ -310,7 +310,7 @@ def test_core_lifetime_and_budget_checks_still_reject_diagnostic_approval(diagno
             services.decide(job, diagnostic.owner, {"execution_request_id": str(job.execution_requests.get().id),
                 "manifest_sha256": job.manifest_sha256, "approved": True})
     grant.refresh_from_db()
-    assert grant.reserved_cpu == 0 and not Attempt.objects.filter(job=job).exists()
+    assert grant.reserved_cpu == 120 and not Attempt.objects.filter(job=job).exists()
     grant.policy["max_total_jobs"] = 20
     grant.policy["allowance"]["cpu_core_seconds"] = 1
     grant.save(update_fields=["policy"])

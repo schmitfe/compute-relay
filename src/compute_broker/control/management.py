@@ -182,9 +182,11 @@ def project_detail(request, project_id):
             error = exc.message
     from uuid import uuid4
     from compute_broker.domain.resource_limits import effective_resource_limits
+    from .execution_policy import approval_requirements
     policy = Grant.objects.get(project=project).policy
     resource_targets = [{"cluster": connection,
-        "limits": effective_resource_limits(policy, connection.configuration, backend=connection.backend)}
+        "limits": effective_resource_limits(policy, connection.configuration, backend=connection.backend),
+        "approval": approval_requirements(policy, "inherit", connection.configuration)}
         for connection in project.connections.filter(owner=request.user, enabled=True, archived=False,
             setup_complete=True, worker__revoked=False, id__in=policy["allowed_connection_ids"]).order_by("name", "id")]
     return render(request, "broker/project_detail.html", {"project": project, "form": form, "error": error,
