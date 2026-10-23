@@ -12,11 +12,20 @@ The shipped migrations upgrade existing development databases. Stop the control 
 | `/projects/{id}/keys/{key}/rotate/` and `/revoke/` | POST-only rotation or revocation |
 | `/clusters/`, `/clusters/new/`, `/clusters/{id}/` | Owned cluster inventory and enrollment |
 | `/clusters/setup/{id}/`, `/edit/`, `/bind/`, `/worker-config/` | Saved cluster setup, later worker/profile binding, and an inert configuration template |
-| `/workers/new/`, `/workers/{id}/` | Human worker registration with one-time token issuance and safe metadata |
+| `/workers/new/`, `/workers/{id}/`, `/workers/{id}/remove/` | Human worker registration, safe metadata and owner-confirmed removal |
 | `/clusters/{id}/discover/` and `/toggle/` | POST-only discovery refresh or admission enable/disable |
 | `/clusters/{id}/environments/` and `/clusters/{id}/environments/new/` | List/create immutable recipes for that cluster |
 
 Worker profile advertisements use `/internal/v1/worker/profiles`; leased discovery reports use `/internal/v1/connections/{id}/report`. These require worker credentials and do not accept project bearer keys. The general REST administration endpoints described in the target API document are not implemented substitutes for these human forms.
+
+**Remove worker** is available in the Clusters worker list and on a worker's
+detail page. Removal revokes its broker credential, disables its cluster
+connections, and invalidates unfinished pairing/setup operations. Any execution
+with unsettled accounting blocks removal, including terminal jobs still awaiting
+final usage. Jobs, artifacts, ledger entries and saved cluster configurations
+remain available. To reuse a saved personal cluster, explicitly pair a replacement
+connector, run discovery and confirm its configuration again. Removing a worker
+does not delete its local state directory or any SSH key.
 
 ## Projects and jobs
 

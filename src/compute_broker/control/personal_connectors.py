@@ -153,6 +153,11 @@ def enroll(request):
             # Re-check after the dispatch lock: no already leased job may be
             # moved to a new identity, even if it appeared idle before locking.
             check_idle(registration)
+            if connection.auth_state == "worker_removed":
+                # Replacing a deliberately removed worker is an explicit human
+                # pairing action; discovery and configuration confirmation are
+                # still required before this connection can execute new jobs.
+                connection.enabled = True
             connection.worker = worker
             connection.configuration, connection.revision_sha256 = configuration, digest(configuration)
             connection.setup_complete, connection.discovery_state, connection.auth_state = False, "queued", "discovery_required"

@@ -131,8 +131,8 @@ and symbolic links are refused. Creating a folder does not change the selected
 baseline: select **Use this working directory**, then save the configuration.
 An older running connector needs a restart before it offers folder creation.
 
-Select a baseline directory or edit its path, then confirm resource limits and explicit
-accounting bounds. The worker validates access without creating files, saves its
+Select a baseline directory or edit its path, then confirm resource limits and the
+execution review policy. The worker validates access without creating files, saves its
 new protected scope locally and acknowledges it before job access is enabled.
 Changes are refused while execution or accounting is unsettled. Project/key
 permissions, environment recipes and execution review still apply afterward.
@@ -175,6 +175,27 @@ state directory to reconcile their native identities and accounting; creating a
 new job or deleting local state is not a recovery procedure. Uncertain
 submissions retain their reservations until reconciled. Use the broker's normal
 cancel operation if you want a submitted job cancelled.
+
+## Remove a worker
+
+In **Clusters → Protected workers**, select **Remove worker**, or open a worker's
+status page and use its removal button. The confirmation lists the affected
+cluster configurations. Removing a worker withdraws its broker credential and
+hides it from the active worker list. Its linked clusters cannot receive new jobs,
+and pending setup operations and unused pairing files are invalidated.
+
+Removal requires the worker's owner to have current account verification. It is
+blocked while any linked execution still needs submission, monitoring,
+reconciliation or final accounting, including jobs that already finished on the
+scheduler. Keep that worker running until those records settle.
+
+Saved cluster configurations, jobs, outputs and accounting records remain. To
+connect a replacement, download a fresh personal connector setup from the saved
+cluster and start it with a new private state directory. Re-pairing reuses the
+cluster configuration, then requires discovery and configuration confirmation
+before execution becomes available again. Removing a worker in the portal does
+not remove its local state directory or its named CLI shortcut; manage those
+locally after accounting has finished.
 
 ## Remove a cluster configuration
 

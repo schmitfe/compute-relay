@@ -1,8 +1,9 @@
 {% extends "broker/base.html" %}{% block content %}
 <h1>{{ worker.name }}</h1>
-<p>Worker identifier: {{ worker.id }}<br>Status: {% if worker.revoked %}Revoked{% elif worker.last_seen_at %}Connected before{% else %}Waiting for first connection{% endif %}</p>
+<p>Worker identifier: {{ worker.id }}<br>Status: {% if worker.revoked %}Removed{% elif worker.last_seen_at %}Connected before{% else %}Waiting for first connection{% endif %}</p>
 {% if worker.last_seen_at %}<p>Last contact: {{ worker.last_seen_at }}</p>{% endif %}
 <p>Advertised cluster profiles: {{ worker.profiles|length }}</p>
 <p>The registration token cannot be retrieved. No cluster connection is created by viewing this page.</p>
+{% if worker.revoked %}<p>This worker's access to the broker has been withdrawn. Recorded jobs and cluster configurations are retained. Download a new connector setup from a cluster to connect a replacement worker.</p>{% else %}<p><a class="button secondary" href="/workers/{{ worker.id }}/remove/">Remove worker</a></p>{% endif %}
 {% if setup %}<p><a href="/clusters/setup/{{ setup.id }}/">Continue {{ setup.name }} setup</a></p>{% else %}<p><a href="/clusters/">Return to clusters</a></p>{% endif %}
 {% endblock %}

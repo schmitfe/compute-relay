@@ -154,9 +154,10 @@ def test_worker_details_are_owned_read_only_and_escaped(enrollment):
     response = post(enrollment.client, {"name": "<script>alert('worker')</script>", "submission_id": str(uuid4())})
     secret = issued(response)
     worker = WorkerIdentity.objects.get()
-    assert b"&lt;script&gt;" in response.content and b"<script>" not in response.content
+    assert b"&lt;script&gt;" in response.content and b"<script>alert('worker')</script>" not in response.content
     detail = enrollment.client.get(f"/workers/{worker.id}/")
     assert detail.status_code == 200 and b"&lt;script&gt;" in detail.content
+    assert b"<script>alert('worker')</script>" not in detail.content
     assert post(enrollment.client, {}, path=f"/workers/{worker.id}/").status_code == 405
     assert enrollment.client.get(f"/workers/{worker.id}/?setup={enrollment.foreign.id}").status_code == 404
     enrollment.client.force_login(enrollment.outsider)

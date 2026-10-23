@@ -38,6 +38,7 @@ urlpatterns = [
     path("clusters/<uuid:connection_id>/remove/", cluster_removal.connection),
     path("workers/new/", worker_management.worker_new),
     path("workers/<uuid:worker_id>/", worker_management.worker_detail),
+    path("workers/<uuid:worker_id>/remove/", worker_management.worker_remove),
     path("clusters/<uuid:connection_id>/", management.cluster_detail),
     path("clusters/<uuid:connection_id>/discover/", management.cluster_discover),
     path("clusters/<uuid:connection_id>/toggle/", management.cluster_toggle),

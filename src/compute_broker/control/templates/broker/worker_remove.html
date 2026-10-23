@@ -1,0 +1,24 @@
+{% extends "broker/base.html" %}
+{% block content %}
+<h1>Remove {{ worker.name }}?</h1>
+{% if worker.revoked %}
+<p>This worker has already been removed. Its credentials cannot access the broker.</p>
+{% else %}
+<p>Removing this worker withdraws its access to the broker and stops new jobs on its connected clusters. It disappears from your active worker list.</p>
+<p>Cluster configurations, recorded jobs, results and accounting history are retained. Download a new connector setup from a cluster when you want to connect a replacement worker.</p>
+{% if clusters %}
+<section><h2>Affected cluster configurations</h2>
+<ul>{% for cluster in clusters %}<li><a href="/clusters/{{ cluster.id }}/">{{ cluster.name }}</a>{% if cluster.archived %} (previously removed){% endif %}</li>{% endfor %}</ul>
+</section>
+{% else %}<p>This worker has no cluster configurations in your account.</p>{% endif %}
+{% if other_cluster_count %}<p>{{ other_cluster_count }} additional cluster configuration{{ other_cluster_count|pluralize }} linked to this worker will also lose its connection.</p>{% endif %}
+{% if busy %}<p class="error">This worker still has executions or accounting to finish. Finish or reconcile them before removing it so monitoring can continue.</p>{% endif %}
+<form method="post">
+{% csrf_token %}
+<input type="hidden" name="confirmation" value="{{ confirmation }}">
+<button type="submit"{% if busy %} disabled{% endif %}>Remove worker</button>
+<a href="/workers/{{ worker.id }}/">Cancel</a>
+</form>
+{% endif %}
+{% if worker.revoked %}<p><a href="/clusters/">Return to clusters</a></p>{% endif %}
+{% endblock %}
