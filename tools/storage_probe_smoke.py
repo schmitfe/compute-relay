@@ -33,10 +33,36 @@ def validate_demo(demo):
         require(str(UUID(demo[field])) == demo[field], "Fixture metadata contains a noncanonical identifier")
 
 
+class ParagraphText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.paragraphs, self.active = [], None
+        self.suppressed = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style"}:
+            self.suppressed = True
+        if tag == "p":
+            self.active = []
+
+    def handle_data(self, text):
+        if self.active is not None and not self.suppressed:
+            self.active.append(text)
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style"}:
+            self.suppressed = False
+        if tag == "p" and self.active is not None:
+            self.paragraphs.append(" ".join("".join(self.active).split()))
+            self.active = None
+
+
 def validate_cluster_page(page):
-    # Fail closed if the actual selected cluster differs from the demo file.
-    # A matching fixture name in an arbitrary paragraph is insufficient.
-    require(b"<p>slurm \xc2\xb7 brokerjob@slurm-fixture \xc2\xb7 Discovery:" in page,
+    # Discovery status is rendered separately and may update independently.
+    # Require the exact backend/user/host identity, never a substring mention.
+    parsed = ParagraphText()
+    parsed.feed(page.decode("utf-8"))
+    require("slurm · brokerjob@slurm-fixture" in parsed.paragraphs,
             "Selected connection is not the disposable SSH fixture")
 
 
@@ -116,14 +142,15 @@ def run(base_url, demo_file, timeout):
     require("storage" in agent.request("GET", "/api/v1/capabilities").get("enabled_extensions", []),
             "Storage extension is not enabled on control")
 
-    page = human.request("GET", "/storage/targets/new/?connection=" + demo["connection_id"], binary=True)
+    settings_path = f"/projects/{project_id}/storage/"
+    target_path = settings_path + "targets/new/"
+    page = human.request("GET", target_path + "?connection=" + demo["connection_id"], binary=True)
     roots = options(page, "root_alias")
     require(len(roots) == 1 and roots[0]["text"].strip() == "staging-root-0 — /home/brokerjob/jobs",
             "Fixture does not advertise the exact expected protected storage root")
-    human.request("POST", "/storage/targets/new/", {"name": "Disposable metadata target " + suffix,
+    human.request("POST", target_path, {"name": "Disposable metadata target " + suffix,
         "connection": demo["connection_id"], "root_alias": roots[0]["value"], "pool": ""}, form=True, binary=True)
-    require(urllib.parse.urlsplit(human.last_url).path == "/storage/targets/", "Storage target enrollment failed")
-    settings_path = f"/projects/{project_id}/storage/"
+    require(urllib.parse.urlsplit(human.last_url).path == settings_path, "Project storage target enrollment failed")
     page = human.request("GET", settings_path + "?connection=" + demo["connection_id"], binary=True)
     targets = options(page, "results")
     require(len(targets) == 1, "Expected one current fixture result-location choice")
@@ -134,9 +161,10 @@ def run(base_url, demo_file, timeout):
     inventory_path = f"/api/v1/projects/{project_id}/storage"
     snapshot = agent.request("GET", inventory_path)
     selected = next((item for item in snapshot["targets"] if item["id"] == target_id), None)
-    require(selected is not None and selected["connection_id"] == demo["connection_id"], "Approved target selection was not saved")
+    require(snapshot.get("project_id") == project_id and selected is not None
+            and selected["connection_id"] == demo["connection_id"], "Approved project target selection was not saved")
     pool_id = selected["pool_id"]
-    toggle = f"/storage/pools/{pool_id}/probes/"
+    toggle = settings_path + f"pools/{pool_id}/probes/"
     started = datetime.now(timezone.utc)
     human.request("POST", toggle, {"enabled": "false"}, form=True, binary=True)
     human.request("POST", toggle, {"enabled": "true"}, form=True, binary=True)

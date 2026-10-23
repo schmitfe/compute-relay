@@ -36,8 +36,12 @@ def document(personal, **changes):
         "submission_id": str(uuid4()), **changes}
 
 
+def target_path(personal, suffix=""):
+    return f"/projects/{personal.project.id}/storage/targets/" + suffix
+
+
 def queue(personal, **changes):
-    response = personal.human.post("/storage/targets/new/", document(personal, **changes))
+    response = personal.human.post(target_path(personal, "new/"), document(personal, **changes))
     assert response.status_code == 302, response.content
     return StorageTargetRegistration.objects.latest("created_at")
 
@@ -62,16 +66,16 @@ def complete(personal, registration, **changes):
 def save(personal, registration, *, confirmed_root=None):
     registration.task.refresh_from_db()
     root = registration.task.result.get("path") if confirmed_root is None else confirmed_root
-    return personal.human.post(f"/storage/targets/registrations/{registration.id}/", {"confirmed_root": root or ""})
+    return personal.human.post(target_path(personal, f"registrations/{registration.id}/"), {"confirmed_root": root or ""})
 
 
 def test_personal_form_does_not_require_operator_roots_and_gets_do_not_queue_work(personal):
-    response = personal.human.get(f"/storage/targets/new/?connection={personal.connection.id}")
+    response = personal.human.get(target_path(personal, f"new/?connection={personal.connection.id}"))
     assert response.status_code == 200
     assert b"Check/create directory" in response.content and b"Browse directories" in response.content
     assert b"native quota remain unknown" in response.content
     assert not ConnectorTask.objects.exists() and not StorageTargetRegistration.objects.exists()
-    response = personal.human.get(f"/storage/targets/directories/{personal.connection.id}/")
+    response = personal.human.get(target_path(personal, f"directories/{personal.connection.id}/"))
     assert response.status_code == 200 and not ConnectorTask.objects.exists()
 
 
@@ -84,7 +88,7 @@ def test_exact_personal_directory_can_be_saved_and_used_for_advisory_project_inv
     result = {"ok": True, "path": registration.root, "parent": "/scratch/researcher", "entries": [],
         "writable": True, "created": created}
     assert complete(personal, registration, result=result).status_code == 200
-    page = personal.human.get(f"/storage/targets/registrations/{registration.id}/")
+    page = personal.human.get(target_path(personal, f"registrations/{registration.id}/"))
     assert b"Save storage location" in page.content and not StorageTarget.objects.exists()
     assert save(personal, registration).status_code == 302
     assert save(personal, registration).status_code == 302
@@ -100,17 +104,17 @@ def test_exact_personal_directory_can_be_saved_and_used_for_advisory_project_inv
     assert inventory["pools"][0]["probe_supported"] is False
     assert inventory["pools"][0]["measurement_status"] == "not_observed"
     assert "root" not in inventory["targets"][0]
-    assert personal.human.post(f"/storage/pools/{target.pool_id}/probes/", {"enabled": "true"}).status_code == 409
-    assert b"Owner-selected directory" in personal.human.get("/storage/targets/").content
+    assert personal.human.post(f"/projects/{personal.project.id}/storage/pools/{target.pool_id}/probes/", {"enabled": "true"}).status_code == 409
+    assert b"Owner-selected directory" in personal.human.get(f"/projects/{personal.project.id}/storage/").content
 
 
 def test_repeated_check_form_is_idempotent_and_different_payload_conflicts(personal):
     payload = document(personal)
-    first = personal.human.post("/storage/targets/new/", payload)
-    second = personal.human.post("/storage/targets/new/", payload)
+    first = personal.human.post(target_path(personal, "new/"), payload)
+    second = personal.human.post(target_path(personal, "new/"), payload)
     assert first.status_code == second.status_code == 302 and first.url == second.url
     assert ConnectorTask.objects.count() == StorageTargetRegistration.objects.count() == 1
-    assert personal.human.post("/storage/targets/new/", {**payload, "root_path": "/scratch/researcher/different"}).status_code == 409
+    assert personal.human.post(target_path(personal, "new/"), {**payload, "root_path": "/scratch/researcher/different"}).status_code == 409
 
 
 def test_canonical_parent_alias_resolution_is_displayed_and_explicitly_confirmed(personal):
@@ -119,7 +123,7 @@ def test_canonical_parent_alias_resolution_is_displayed_and_explicitly_confirmed
     receipt = {"ok": True, "path": resolved, "parent": "/network/home/researcher", "entries": [],
         "writable": True, "created": False}
     assert complete(personal, registration, result=receipt).status_code == 200
-    page = personal.human.get(f"/storage/targets/registrations/{registration.id}/")
+    page = personal.human.get(target_path(personal, f"registrations/{registration.id}/"))
     assert b"/home-alias/researcher/results" in page.content and resolved.encode() in page.content
     assert b"cluster resolved the parent directory" in page.content
     assert f'name="confirmed_root" value="{resolved}"'.encode() in page.content
@@ -138,7 +142,7 @@ def test_final_save_requires_the_exact_displayed_canonical_confirmation(personal
     registration = queue(personal)
     assert complete(personal, registration).status_code == 200
     payload = {} if confirmation is None else {"confirmed_root": confirmation}
-    assert personal.human.post(f"/storage/targets/registrations/{registration.id}/", payload).status_code == 409
+    assert personal.human.post(target_path(personal, f"registrations/{registration.id}/"), payload).status_code == 409
     assert not StorageTarget.objects.exists()
 
 
@@ -159,10 +163,10 @@ def test_failure_missing_parent_and_expiry_do_not_save_or_repeat_remote_work(per
     registration = queue(personal)
     assert complete(personal, registration, outcome="failed", error_code="PATH_UNAVAILABLE", result={}).status_code == 200
     assert save(personal, registration).status_code == 409
-    assert b"PATH_UNAVAILABLE" in personal.human.get(f"/storage/targets/registrations/{registration.id}/").content
+    assert b"PATH_UNAVAILABLE" in personal.human.get(target_path(personal, f"registrations/{registration.id}/")).content
     registration.task.expires_at = timezone.now() - timedelta(seconds=1)
     registration.task.save(update_fields=["expires_at"])
-    assert b"expired" in personal.human.get(f"/storage/targets/registrations/{registration.id}/").content
+    assert b"expired" in personal.human.get(target_path(personal, f"registrations/{registration.id}/")).content
     assert ConnectorTask.objects.count() == 1 and not StorageTarget.objects.exists()
 
 
@@ -198,12 +202,12 @@ def test_saved_target_becomes_stale_after_worker_repair_or_revocation(personal):
 
 def test_personal_browser_preserves_name_roles_and_selection_without_get_mutations(personal):
     payload = document(personal, action="browse_directory")
-    response = personal.human.post("/storage/targets/new/", payload)
+    response = personal.human.post(target_path(personal, "new/"), payload)
     assert response.status_code == 302 and "name=Project+results" in response.url
     assert "roles=work" in response.url and "roles=results" in response.url
     page = personal.human.get(response.url)
     assert b'value="Project results"' in page.content and not ConnectorTask.objects.exists()
-    response = personal.human.post(f"/storage/targets/directories/{personal.connection.id}/", {
+    response = personal.human.post(target_path(personal, f"directories/{personal.connection.id}/"), {
         **payload, "path": "/scratch/researcher"})
     assert response.status_code == 302 and "roles=results" in response.url
     task = ConnectorTask.objects.get()
@@ -218,18 +222,18 @@ def test_personal_browser_preserves_name_roles_and_selection_without_get_mutatio
 def test_new_human_operations_require_csrf_and_never_accept_project_keys(personal):
     client = Client(enforce_csrf_checks=True)
     client.force_login(personal.owner)
-    assert client.post("/storage/targets/new/", document(personal)).status_code == 403
-    assert client.post(f"/storage/targets/directories/{personal.connection.id}/", {"path": "/"}).status_code == 403
-    assert Client().post("/storage/targets/new/", document(personal), HTTP_AUTHORIZATION="Bearer " + personal.token).status_code == 403
+    assert client.post(target_path(personal, "new/"), document(personal)).status_code == 403
+    assert client.post(target_path(personal, f"directories/{personal.connection.id}/"), {"path": "/"}).status_code == 403
+    assert Client().post(target_path(personal, "new/"), document(personal), HTTP_AUTHORIZATION="Bearer " + personal.token).status_code == 403
     registration = queue(personal)
-    assert client.post(f"/storage/targets/registrations/{registration.id}/").status_code == 403
+    assert client.post(target_path(personal, f"registrations/{registration.id}/")).status_code == 403
     outsider = Client()
     outsider.force_login(personal.outsider)
-    assert outsider.get(f"/storage/targets/registrations/{registration.id}/").status_code == 404
-    assert outsider.get(f"/storage/targets/directories/{personal.connection.id}/").status_code == 404
+    assert outsider.get(target_path(personal, f"registrations/{registration.id}/")).status_code in {403, 404}
+    assert outsider.get(target_path(personal, f"directories/{personal.connection.id}/")).status_code in {403, 404}
     personal.owner.is_active = False
     personal.owner.save(update_fields=["is_active"])
-    assert personal.human.get(f"/storage/targets/registrations/{registration.id}/").status_code == 302
+    assert personal.human.get(target_path(personal, f"registrations/{registration.id}/")).status_code == 302
 
 
 def test_external_directory_authority_must_remain_current_before_saving(personal):
@@ -247,5 +251,5 @@ def test_external_directory_authority_must_remain_current_before_saving(personal
 
 @pytest.mark.parametrize("root", ["/", "/scratch/../secret", "/scratch//results", "/scratch/unsafe;command", "relative"])
 def test_invalid_personal_roots_never_queue_work(personal, root):
-    response = personal.human.post("/storage/targets/new/", document(personal, root_path=root))
+    response = personal.human.post(target_path(personal, "new/"), document(personal, root_path=root))
     assert response.status_code == 200 and not ConnectorTask.objects.exists()

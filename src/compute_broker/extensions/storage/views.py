@@ -5,12 +5,15 @@ from decimal import Decimal
 from uuid import UUID
 from urllib.parse import urlencode
 
+from django.db.models import Count, Q
 from django.http import HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 
-from compute_broker.control.forms import owned_connections
 from compute_broker.control.auth import worker_identity
+from compute_broker.control.errors import BrokerError
+from compute_broker.control.identity.authority import cached_user_active
 from compute_broker.control.management import human_view, managed_project
+from compute_broker.control.models import Membership, Project
 from compute_broker.control.views import body, boundary, scope
 from . import services
 from .forms import GIB, ProjectStorageForm, StorageTargetForm
@@ -23,55 +26,107 @@ from .planning import ROLES, StoragePlanningError
 def targets(request):
     if request.method != "GET":
         return HttpResponseNotAllowed(["GET"])
-    rows = StorageTarget.objects.select_related("connection__worker", "pool")
-    if not request.user.is_superuser:
-        rows = rows.filter(owner=request.user)
-    return render(request, "broker_storage/targets.html", {"targets": [{"target": target, "current": services.target_current(target),
-        "personal": StorageTargetRegistration.objects.filter(target=target).exists()}
-                                                                     for target in rows.order_by("connection__name", "name")]})
+    if not cached_user_active(request.user):
+        raise BrokerError("AUTH_REQUIRED", "Account verification is required.", 403)
+    memberships = [row.project_id for row in Membership.objects.filter(user=request.user)
+                   if "project_admin" in row.roles]
+    projects = Project.objects.all() if request.user.is_superuser else Project.objects.filter(
+        Q(owner=request.user) | Q(id__in=memberships)).distinct()
+    projects = list(projects.order_by("name", "id"))
+    counts = {row["project_id"]: row["total"] for row in StorageTarget.objects.filter(project__in=projects)
+              .values("project_id").annotate(total=Count("id"))}
+    return render(request, "broker_storage/targets.html", {"projects": [
+        {"project": project, "target_count": counts.get(project.id, 0)} for project in projects]})
+
+
+def _project_context(request, project_id):
+    document = request.POST if request.method == "POST" else request.GET
+    explicit_ids = [value for field in ("project", "project_id") for value in document.getlist(field) if value]
+    explicit = explicit_ids[0] if explicit_ids else None
+    if project_id is None:
+        if not explicit:
+            if request.method == "POST":
+                raise BrokerError("STORAGE_PROJECT_REQUIRED", "Open a project's Storage page before adding a location.", 400)
+            return None
+        try:
+            project_id = UUID(explicit)
+        except (ValueError, TypeError, AttributeError):
+            raise BrokerError("STORAGE_PROJECT_REQUIRED", "Choose a valid project from its Storage page.", 400) from None
+    if any(str(value) != str(project_id) for value in explicit_ids):
+        raise BrokerError("STORAGE_PROJECT_DENIED", "This storage form belongs to another project.", 403)
+    return managed_project(request, project_id)
+
+
+def _storage_path(project, suffix=""):
+    return f"/projects/{project.id}/storage/" + suffix
+
+
+def _setup_connections(user, project):
+    return project.connections.filter(owner=user, enabled=True, archived=False).order_by("name", "id")
 
 
 @human_view
-def target_new(request):
+def target_new(request, project_id=None):
     if request.method not in {"GET", "POST"}:
         return HttpResponseNotAllowed(["GET", "POST"])
+    project = _project_context(request, project_id)
+    if project is None:
+        return redirect("/storage/targets/")
+    if project_id is None and request.method == "GET":
+        query = request.GET.copy()
+        query.pop("project", None)
+        query.pop("project_id", None)
+        return redirect(_storage_path(project, "targets/new/") + ("?" + query.urlencode() if query else ""))
     initial = {"connection": request.GET.get("connection"), "root_path": request.GET.get("root_path", ""),
         "name": request.GET.get("name", ""), "pool": request.GET.get("pool") or None,
         "enable_probes": request.GET.get("enable_probes") == "true"}
     if request.GET.getlist("roles"):
         initial["roles"] = request.GET.getlist("roles")
+    if request.GET.get("submission_id"):
+        initial["submission_id"] = request.GET["submission_id"]
     form = StorageTargetForm(request.POST if request.method == "POST" else None, user=request.user,
-                             initial=initial)
+                             project=project, initial=initial)
     if request.method == "POST" and request.POST.get("action") == "browse_directory" and form.personal:
-        return redirect(f"/storage/targets/directories/{form.selected_connection.id}/?" +
+        return redirect(_storage_path(project, f"targets/directories/{form.selected_connection.id}/?") +
                         urlencode(_retained_selection(request.POST), doseq=True))
     if request.method == "POST" and form.is_valid():
         data = form.cleaned_data
         if form.personal:
             registration = services.queue_personal_target(request.user, data["connection"], data["root_path"],
-                data["name"], data["roles"], data["connection_revision"], data["submission_id"])
-            return redirect(f"/storage/targets/registrations/{registration.id}/")
+                data["name"], data["roles"], data["connection_revision"], data["submission_id"], project=project)
+            return redirect(_storage_path(project, f"targets/registrations/{registration.id}/"))
         services.register_target(request.user, data["connection"], data["root_alias"], data["name"],
-                                 pool=data.get("pool"), enable_probes=data["enable_probes"])
-        return redirect("/storage/targets/")
-    return render(request, "broker_storage/target_form.html", {"form": form, "cluster": form.selected_connection,
-        "clusters": owned_connections(request.user).filter(enabled=True).order_by("name")})
+                                 project=project, pool=data.get("pool"), enable_probes=data["enable_probes"])
+        return redirect(_storage_path(project))
+    return render(request, "broker_storage/target_form.html", {"project": project, "form": form, "cluster": form.selected_connection,
+        "clusters": _setup_connections(request.user, project)})
 
 
 def _retained_selection(document):
     """Retain human form choices, never credentials or arbitrary return URLs."""
     return {"name": document.get("name", "")[:100], "pool": document.get("pool", "")[:40],
         "enable_probes": "true" if document.get("enable_probes") in {"true", "on"} else "false",
-        "roles": [role for role in document.getlist("roles") if role in ROLES]}
+        "roles": [role for role in document.getlist("roles") if role in ROLES],
+        "submission_id": document.get("submission_id", "")[:40]}
 
 
 @human_view
-def target_directories(request, connection_id):
+def target_directories(request, connection_id, project_id=None):
     from compute_broker.control.connector_setup import enqueue, own_connection
     from compute_broker.control.cluster_setup import canonical_root
     from compute_broker.control.errors import BrokerError
     from compute_broker.control.models import ConnectorTask
-    connection = own_connection(request.user, connection_id)
+    project = _project_context(request, project_id)
+    if project is None:
+        return redirect("/storage/targets/")
+    if project_id is None and request.method == "GET":
+        query = request.GET.copy()
+        query.pop("project", None)
+        query.pop("project_id", None)
+        return redirect(_storage_path(project, f"targets/directories/{connection_id}/") +
+                        ("?" + query.urlencode() if query else ""))
+    connection = get_object_or_404(_setup_connections(request.user, project), id=connection_id)
+    connection = own_connection(request.user, connection.id)
     if request.method not in {"GET", "POST"}:
         return HttpResponseNotAllowed(["GET", "POST"])
     selected = _retained_selection(request.POST if request.method == "POST" else request.GET)
@@ -79,8 +134,9 @@ def target_directories(request, connection_id):
         path = request.POST.get("path", "")
         if path and not canonical_root(path) and path != "/":
             raise BrokerError("INVALID_DIRECTORY", "Choose a canonical absolute directory.")
-        task = enqueue(request.user, connection.id, "browse", {"path": path}, request.POST.get("connection_revision"))
-        return redirect(f"/storage/targets/directories/{connection.id}/?" +
+        task = enqueue(request.user, connection.id, "browse", {"path": path, "storage_project_id": str(project.id)},
+                       request.POST.get("connection_revision"))
+        return redirect(_storage_path(project, f"targets/directories/{connection.id}/?") +
                         urlencode({**selected, "task": str(task.id)}, doseq=True))
     task = None
     if request.GET.get("task"):
@@ -89,43 +145,56 @@ def target_directories(request, connection_id):
         except ValueError:
             raise BrokerError("INVALID_TASK", "Choose a valid directory request.") from None
         task = get_object_or_404(ConnectorTask, id=identifier, owner=request.user, connection=connection, kind="browse")
+        if task.request.get("storage_project_id") != str(project.id):
+            from django.http import Http404
+            raise Http404("Directory request not found.")
         from django.utils import timezone
         if task.expires_at <= timezone.now() and task.state in {"queued", "running"}:
             task.state, task.error_code = "failed", "CONNECTOR_TASK_EXPIRED"
     result = task.result if task and task.state == "succeeded" else {}
-    select_url = "/storage/targets/new/?" + urlencode({**selected, "connection": str(connection.id),
+    select_url = _storage_path(project, "targets/new/?") + urlencode({**selected, "connection": str(connection.id),
         "root_path": result.get("path", "")}, doseq=True)
-    return render(request, "broker_storage/target_directories.html", {"cluster": connection, "task": task,
+    return render(request, "broker_storage/target_directories.html", {"project": project, "cluster": connection, "task": task,
         "result": result, "selection": selected, "select_url": select_url,
         "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
         "waiting": bool(task and task.state in {"queued", "running"})})
 
 
 @human_view
-def target_registration(request, registration_id):
+def target_registration(request, registration_id, project_id=None):
     from compute_broker.control.connector_setup import own_connection
     from django.utils import timezone
     if request.method not in {"GET", "POST"}:
         return HttpResponseNotAllowed(["GET", "POST"])
     registration = get_object_or_404(StorageTargetRegistration.objects.select_related("task", "connection"),
         id=registration_id, owner=request.user)
+    if project_id is None:
+        if request.method == "GET" and registration.project_id:
+            project = managed_project(request, registration.project_id)
+            return redirect(_storage_path(project, f"targets/registrations/{registration.id}/"))
+        raise BrokerError("STORAGE_PROJECT_REQUIRED", "Open the owning project's Storage page for this directory request.", 400)
+    project = _project_context(request, project_id)
+    if registration.project_id != project.id:
+        from django.http import Http404
+        raise Http404("Storage directory request not found.")
+    get_object_or_404(_setup_connections(request.user, project), id=registration.connection_id)
     own_connection(request.user, registration.connection_id)
     if request.method == "POST":
         services.finish_personal_target(request.user, registration, confirmed_root=request.POST.get("confirmed_root"))
-        return redirect("/storage/targets/")
+        return redirect(_storage_path(project))
     task = registration.task
     expired = task.expires_at <= timezone.now() and not registration.target_id
-    return render(request, "broker_storage/target_registration.html", {"registration": registration,
+    return render(request, "broker_storage/target_registration.html", {"project": project, "registration": registration,
         "task": task, "expired": expired, "waiting": not expired and task.state in {"queued", "running"},
         "resolved_root": services.confirmed_directory_root(registration) if task.state == "succeeded" else None,
-        "retry_url": "/storage/targets/new/?" + urlencode({"connection": str(registration.connection_id),
+        "retry_url": _storage_path(project, "targets/new/?") + urlencode({"connection": str(registration.connection_id),
             "root_path": registration.root, "name": registration.name, "roles": registration.roles}, doseq=True)})
 
 
 @human_view
 def project_storage(request, project_id):
     project = managed_project(request, project_id)
-    connections = project.connections.filter(enabled=True).order_by("name", "id")
+    connections = project.connections.filter(enabled=True, archived=False).order_by("name", "id")
     selected = request.POST.get("connection_id") if request.method == "POST" else request.GET.get("connection")
     connection = None
     if selected:
@@ -154,8 +223,34 @@ def project_storage(request, project_id):
             services.save_project_storage(request.user, project, connection, form.cleaned_data)
             return redirect(f"/projects/{project.id}/storage/?connection={connection.id}")
     snapshot = services.inventory(project)
+    assigned = {item.id: item for item in project.connections.select_related("worker").order_by("name", "id")}
+    groups = {identity: {"connection": item, "assigned": True,
+        "can_add": item.owner_id == request.user.id and item.enabled and not item.archived, "targets": []}
+        for identity, item in assigned.items()}
+    targets = list(StorageTarget.objects.filter(project=project).select_related("connection__worker", "pool", "owner")
+        .order_by("connection__name", "name", "id"))
+    personal_ids = set(StorageTargetRegistration.objects.filter(target__in=targets).values_list("target_id", flat=True))
+    for target in targets:
+        group = groups.setdefault(target.connection_id, {"connection": target.connection, "assigned": False,
+            "can_add": False, "targets": []})
+        group["targets"].append({"target": target, "current": services.target_current(target),
+            "personal": target.id in personal_ids})
+    legacy = StorageTarget.objects.filter(project__isnull=True, owner=request.user,
+        connection_id__in=assigned).select_related("connection").order_by("connection__name", "name", "id")
     return render(request, "broker_storage/project_storage.html", {"project": project, "connections": connections,
-        "selected_connection": connection, "form": form, "snapshot": snapshot, "snapshot_text": json.dumps(snapshot, indent=2)})
+        "selected_connection": connection, "form": form, "snapshot": snapshot, "snapshot_text": json.dumps(snapshot, indent=2),
+        "target_groups": list(groups.values()), "legacy_targets": legacy,
+        "can_add": _setup_connections(request.user, project).exists()})
+
+
+@human_view
+def target_adopt(request, project_id, target_id):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    project = _project_context(request, project_id)
+    target = get_object_or_404(StorageTarget, id=target_id, owner=request.user, project__isnull=True)
+    services.adopt_target(request.user, project, target)
+    return redirect(_storage_path(project))
 
 
 @boundary("GET")
@@ -169,17 +264,18 @@ def storage_inventory(request, project_id):
 
 
 @human_view
-def pool_probes(request, pool_id):
+def pool_probes(request, pool_id, project_id=None):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
-    pools = StorageCapacityPool.objects.all() if request.user.is_superuser else StorageCapacityPool.objects.filter(owner=request.user)
-    pool = get_object_or_404(pools, id=pool_id)
+    project = _project_context(request, project_id)
+    pool = get_object_or_404(StorageCapacityPool.objects.filter(id=pool_id, owner=request.user,
+        storagetarget__project=project).distinct())
     value = request.POST.get("enabled")
     if value not in {"true", "false"}:
         from compute_broker.control.errors import BrokerError
         raise BrokerError("INVALID_STORAGE", "Choose whether capacity checks are enabled.")
     services.set_probe_enabled(request.user, pool, value == "true")
-    return redirect("/storage/targets/")
+    return redirect(_storage_path(project))
 
 
 @boundary("POST")

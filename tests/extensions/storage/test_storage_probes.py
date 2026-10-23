@@ -42,7 +42,8 @@ def probes(resources, tmp_path):
     resources.connection.configuration, resources.connection.revision_sha256 = public, revision
     resources.connection.backend = "slurm"
     resources.connection.save(update_fields=["configuration", "revision_sha256", "backend"])
-    target = services.register_target(resources.owner, resources.connection, "staging-root-0", "Test metadata only")
+    target = services.register_target(resources.owner, resources.connection, "staging-root-0", "Test metadata only",
+                                     project=resources.project)
     resources.target, resources.profile, resources.private, resources.public, resources.root = target, profile, private, public, root
     return resources
 
@@ -151,15 +152,16 @@ def test_probe_report_requires_owning_worker_and_new_sample_provenance(probes):
 
 
 def test_http_probe_controls_require_owner_session_csrf_and_worker_auth(probes):
-    url = f"/storage/pools/{probes.target.pool_id}/probes/"
+    project_path = f"/projects/{probes.project.id}/storage/"
+    url = project_path + f"pools/{probes.target.pool_id}/probes/"
     assert Client().post(url, {"enabled": "true"}, HTTP_AUTHORIZATION="Bearer " + probes.token).status_code == 403
     foreign = Client()
     foreign.force_login(probes.outsider)
-    assert foreign.post(url, {"enabled": "true"}).status_code == 404
+    assert foreign.post(url, {"enabled": "true"}).status_code == 403
     human = Client(enforce_csrf_checks=True)
     human.force_login(probes.owner)
     assert human.post(url, {"enabled": "true"}).status_code == 403
-    human.get("/storage/targets/")
+    human.get(project_path)
     assert human.post(url, {"enabled": "true"}, HTTP_X_CSRFTOKEN=human.cookies["csrftoken"].value).status_code == 302
     response = Client().post("/internal/v1/lease", "{}", content_type="application/json", HTTP_AUTHORIZATION="Bearer storage-worker")
     assert response.status_code == 200 and response.json()["lease"]["extension"] == "storage"

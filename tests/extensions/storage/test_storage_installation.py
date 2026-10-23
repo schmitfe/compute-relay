@@ -31,12 +31,15 @@ assert not apps.is_installed('compute_broker.extensions.storage')
 assert 'compute_broker.extensions.storage.models' not in sys.modules
 call_command('migrate', verbosity=0)
 assert not any(name.startswith('broker_storage_') for name in connection.introspection.table_names())
-try:
-    resolve('/storage/targets/')
-except Resolver404:
-    pass
-else:
-    raise AssertionError('Disabled storage route was mounted')
+for route in ('/storage/targets/', '/projects/00000000-0000-4000-8000-000000000001/storage/',
+              '/projects/00000000-0000-4000-8000-000000000001/storage/targets/new/',
+              '/api/v1/projects/00000000-0000-4000-8000-000000000001/storage'):
+    try:
+        resolve(route)
+    except Resolver404:
+        pass
+    else:
+        raise AssertionError('Disabled storage route was mounted')
 """
     result = subprocess.run([sys.executable, "-c", program], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
@@ -87,8 +90,12 @@ def test_optional_mcp_tools_are_read_only_project_scoped_and_reject_paths_before
     register(capture, facade)
     capture.functions["get_project_storage"]()
     assert client.calls[0][0] == ("GET", f"/api/v1/projects/{project_id}/storage")
-    document = {"connection_id": str(uuid4()), "estimates": [{"role": "work", "target_id": str(uuid4()),
+    data_plan = {"schema_version": "1.0", "connection_id": str(uuid4()), "estimates": [{"role": "data", "target_id": str(uuid4()),
+        "peak_bytes": 10, "peak_inodes": 1, "retained_bytes": 0, "retained_inodes": 0}]}
+    capture.functions["plan_storage"](data_plan)
+    assert client.calls[1][0] == ("POST", f"/api/v1/projects/{project_id}/storage/plan", data_plan)
+    document = {"connection_id": str(uuid4()), "estimates": [{"role": "data", "target_id": str(uuid4()),
         "peak_bytes": 10, "peak_inodes": 1, "path": "/private/elsewhere"}]}
     with pytest.raises(StoragePlanningError):
         capture.functions["plan_storage"](document)
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2

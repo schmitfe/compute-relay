@@ -5,9 +5,9 @@ that includes its package, then apply its Django migrations. It is disabled by
 default. The extension has its own application, models, migrations, URLs and
 templates; core job preparation, admission and accounting do not require it.
 
-This implementation saves approved locations, shared project byte/inode budgets,
-and a per-cluster choice of work, environment, results and scratch locations. Its
-agent API reads configuration and performs **dry-run estimates only**. It does
+This implementation saves project-owned locations, project byte/inode budgets,
+and a per-cluster choice of work, environment, data, results and scratch locations.
+Its agent API reads configuration and performs **dry-run estimates only**. It does
 not redirect existing jobs, reserve physical disk space, enforce OS quotas,
 scan retained data, build images, extract archives or delete data. Optional,
 human-enabled capacity checks read filesystem statistics through the protected
@@ -15,9 +15,18 @@ worker; they do not measure a project's actual retained usage.
 
 ## Human configuration
 
-Open `/storage/targets/` to enroll locations. For a personal connector, the cluster
-owner can enter a dedicated directory or use **Browse directories** to inspect
-directory names and access metadata through their running worker. Browsing is
+Open `/projects/<project-id>/storage/` to manage a project's locations, budgets
+and defaults. Select an assigned cluster and add its storage location at
+`/projects/<project-id>/storage/targets/new/`. Every new location belongs to that
+one project, even if another project uses the same remote directory. A project
+owner or administrator with access to their own cluster can configure it;
+belonging to the project does not grant another member's SSH identity or worker
+filesystem access. The storage location's connection owner can differ from the
+project owner.
+
+For a personal connector, the cluster owner can enter a dedicated directory or
+use **Browse directories** to inspect directory names and access metadata through
+their running worker. Browsing is
 requested by human POSTs, and GET pages only display task status. Form selections
 are retained when returning from the browser.
 
@@ -28,10 +37,11 @@ rejected. Existing directories keep their contents and permissions. The check
 expires after five minutes and does not register the location automatically.
 Review its result and select **Save storage location**. The review shows both the
 requested path and the worker's canonical directory when a parent alias resolves
-elsewhere. Saving explicitly confirms that displayed canonical path. Registration binds the
-owner, exact task and returned writable directory, worker profile fingerprint and
-connection revision. Repeating a completed form does not create another task or
-location. Replacing a worker or changing its execution configuration requires a current binding.
+elsewhere. Saving explicitly confirms that displayed canonical path. Registration
+binds the project, owner, exact task and returned writable directory, worker
+profile fingerprint and connection revision. Repeating a completed form does not
+create another task or location. Replacing a worker or changing its execution
+configuration requires a current binding.
 
 Personal directories support advisory project budgets and role selection while
 free capacity, filesystem identity and native quota remain unknown. Read-only
@@ -53,23 +63,47 @@ publication does not yet advertise that optional field. Do not broaden SSH roots
 just to enable unrelated storage: a protected storage metadata hook is the next
 integration step.
 
-Targets bind their exact worker profile fingerprint and connection revision.
+Targets bind their project, exact worker profile fingerprint and connection revision.
 Changing those bindings makes old targets unavailable for new plans. Enroll the
 new binding; historical planning records remain. A capacity pool can group
 locations on the same cluster only when their protected filesystem identities
 agree, including explicitly unknown identities. Unknown grouping is not proof
 that locations share a physical filesystem.
 
-Project owners/admins configure `/projects/<project-id>/storage/`. Budgets and
-manual retained-usage estimates apply across the whole project and all its API
-keys. Location choices are separate for each assigned cluster. An enrolled
-location is usable only by its owner's projects on the same cluster. Key cluster
-restrictions narrow the API inventory and dry-run access further.
+Budgets and manual retained-usage estimates apply across the whole project and
+all its API keys. Location choices are separate for each assigned cluster, with
+the roles `work`, `environments`, `data`, `results` and `scratch`. Enrollment fills
+empty defaults supported by the new location and preserves existing choices.
+A location is selectable only within its exact project and assigned cluster;
+matching owners, remote paths or physical filesystems do not make it selectable
+by another project. Key cluster restrictions narrow the API inventory and
+dry-run access further.
 
-Capacity checks are **off by default**, including for existing targets after
-migration. For supported protected roots, an owner can explicitly enable them while enrolling a location or
-using its enable/pause button at `/storage/targets/`. Pausing invalidates in-flight
-leases. Saving project settings does not trigger checks. Probes do not scan,
+Capacity pools describe physical storage and can be shared by compatible
+locations on the same cluster. Sharing a pool does not share project locations,
+budgets, role defaults or SSH authorization. A capacity observation describes
+the filesystem's available space; it does not attribute retained files to any
+project. Separately configured project budgets remain advisory estimates and
+do not divide or reserve that physical free space.
+
+The project-ownership migration assigns an existing location only when its
+saved role bindings and historical estimate records identify exactly one
+project. Unreferenced locations and locations referenced by multiple projects
+remain unassigned and unavailable to new plans. Unassigned pending personal
+registrations also cannot be finalized. A location's owner can explicitly assign
+preserved metadata from the intended project's settings when there are no
+references to a different project. Ambiguous historical references block that
+assignment; enroll a separate location for the intended project instead. An
+assignment still requires a current worker binding before the location becomes
+usable. Migration preserves configuration, historical records and remote files;
+it does not delete, move or scan data, or
+silently choose one project for an ambiguous location.
+
+Capacity checks are **off by default**. A preserved probe setting does not make
+unassigned or stale locations usable for capacity checks. For supported protected
+roots, an owner can explicitly enable them while enrolling a location or using
+its enable/pause button in the project's storage settings. Pausing invalidates
+in-flight leases. Saving project settings does not trigger checks. Probes do not scan,
 create or change remote files. The separate human directory-creation step above
 creates only its requested final directory. Manual usage values are labeled
 `human_estimate`, with their update time; they are not filesystem measurements.
@@ -81,7 +115,7 @@ Both routes require a valid project bearer key with `jobs:read`:
 - `GET /api/v1/projects/<project-id>/storage` returns allowed target IDs, roles,
   capabilities, selected locations, shared budgets, pending advisory estimates,
   and cached pool/quota observations. Agent responses omit absolute roots.
-- `POST /api/v1/projects/<project-id>/storage/plan` accepts up to four distinct
+- `POST /api/v1/projects/<project-id>/storage/plan` accepts up to five distinct
   role estimates. It is read-only, needs no idempotency key, and creates no jobs,
   approvals, reservations or files.
 
@@ -100,7 +134,9 @@ Both routes require a valid project bearer key with `jobs:read`:
 }
 ```
 
-The target must be the project's selected location for that role and cluster.
+The target must belong to this exact project and be its selected location for
+that role and cluster. A key cannot refer to a different project's target even
+when both projects use the same cluster or physical pool.
 Unknown fields, paths, endpoints, duplicate roles, negative/fractional counters,
 and integers above `2^53-1` are rejected. Peak estimates include simultaneous
 staging, extraction/build trees, caches and final images; roles should describe
@@ -231,12 +267,29 @@ mount is needed when using an already-running fixture project.
 
 The client refuses nonfixture demo metadata and checks the actual selected
 cluster page for `brokerjob@slurm-fixture`. It requires the exact protected
-`/home/brokerjob/jobs` choice, enrolls a target through the owner form, selects it
-for a new project, issues a `jobs:read` key, and explicitly enables capacity
-checks through the session/CSRF route. It waits for a new real byte/inode reading,
+`/home/brokerjob/jobs` choice, creates a project, enrolls a target through that
+project's owner form, selects it for the project, issues a `jobs:read` key, and
+explicitly enables capacity checks through the session/CSRF route. It waits for a new real byte/inode reading,
 checks that native quota and unpinned filesystem identity remain unknown, runs
 advisory planning, and verifies zero admitted jobs and zero compute accounting.
 It pauses the pool afterward. The client never reads SSH credentials or requests
 a remote file write, job, directory listing or retained-usage scan. Small fixture
 filesystems may correctly produce a blocked planning assessment under the
 default operational free-space floors.
+
+### Project ownership validation (2026-10-23)
+
+The PostgreSQL regression run passed 1,975 tests and 65 subtests; one optional
+scientific acceptance test was skipped because NumPy was not installed. The
+storage tests cover project and key isolation, shared-project administrators
+using their own cluster accounts, exact personal-directory receipts, legacy
+adoption, and a forward migration from storage schema `0003` to `0004` in a
+separate synthetic database. A schema drift check reported no pending model
+changes.
+
+The Docker Slurm acceptance test passed with a fresh `statvfs` observation,
+unknown native quota, unverified filesystem identity and zero admitted jobs.
+The smoke client's exact fixture-identity guard has 18 focused passing tests.
+Browser verification used a separate synthetic portal to check the project
+chooser, directory selection and confirmation, default roles and shared budget
+settings. Institutional cluster files were not used for these checks.

@@ -31,6 +31,8 @@ class StorageCapacityPool(models.Model):
 class StorageTarget(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey("broker.User", on_delete=models.PROTECT)
+    # Null identifies preserved legacy metadata awaiting explicit project adoption.
+    project = models.ForeignKey("broker.Project", on_delete=models.PROTECT, null=True, blank=True)
     connection = models.ForeignKey("broker.Connection", on_delete=models.PROTECT)
     pool = models.ForeignKey(StorageCapacityPool, on_delete=models.PROTECT)
     name = models.CharField(max_length=100)
@@ -43,7 +45,7 @@ class StorageTarget(models.Model):
     enabled = models.BooleanField(default=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["connection", "root_alias", "profile_revision_sha256", "connection_revision_sha256"], name="storage_target_binding_once")]
+        constraints = [models.UniqueConstraint(fields=["project", "connection", "root_alias", "profile_revision_sha256", "connection_revision_sha256"], name="storage_project_target_once")]
 
     def __str__(self):
         return self.name
@@ -53,6 +55,7 @@ class StorageTargetRegistration(models.Model):
     """Human-selected root and its exact, owner-requested connector operation."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey("broker.User", on_delete=models.PROTECT)
+    project = models.ForeignKey("broker.Project", on_delete=models.PROTECT, null=True, blank=True)
     connection = models.ForeignKey("broker.Connection", on_delete=models.PROTECT)
     task = models.OneToOneField("broker.ConnectorTask", on_delete=models.PROTECT)
     target = models.OneToOneField(StorageTarget, on_delete=models.PROTECT, null=True,
@@ -80,6 +83,7 @@ class ProjectStorageBinding(models.Model):
     connection = models.ForeignKey("broker.Connection", on_delete=models.PROTECT)
     work = models.ForeignKey(StorageTarget, null=True, blank=True, on_delete=models.PROTECT, related_name="work_bindings")
     environments = models.ForeignKey(StorageTarget, null=True, blank=True, on_delete=models.PROTECT, related_name="environment_bindings")
+    data = models.ForeignKey(StorageTarget, null=True, blank=True, on_delete=models.PROTECT, related_name="data_bindings")
     results = models.ForeignKey(StorageTarget, null=True, blank=True, on_delete=models.PROTECT, related_name="result_bindings")
     scratch = models.ForeignKey(StorageTarget, null=True, blank=True, on_delete=models.PROTECT, related_name="scratch_bindings")
 

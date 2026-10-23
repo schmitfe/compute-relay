@@ -17,7 +17,7 @@ from compute_broker.extensions.storage.planning import ROLES
 
 
 def enroll(resources):
-    return services.register_target(resources.owner, resources.connection, "staging-root-0", "Approved data")
+    return services.register_target(resources.owner, resources.connection, "staging-root-0", "Approved data", project=resources.project)
 
 
 def select(resources, target, **changes):
@@ -45,12 +45,12 @@ def observation(*, now=None, filesystem_id="volume:test", available_bytes=8000, 
 def test_human_enrollment_selects_only_existing_protected_roots_and_writes_no_job(resources):
     client = Client()
     client.force_login(resources.owner)
-    response = client.get(f"/storage/targets/new/?connection={resources.connection.id}")
+    response = client.get(f"/projects/{resources.project.id}/storage/targets/new/?connection={resources.connection.id}")
     assert response.status_code == 200 and b"/approved/project-space" in response.content
-    response = client.post("/storage/targets/new/", {"name": "Data", "connection": resources.connection.id,
+    response = client.post(f"/projects/{resources.project.id}/storage/targets/new/", {"name": "Data", "connection": resources.connection.id,
                                                      "root_alias": "/arbitrary/path"})
     assert response.status_code == 200 and not StorageTarget.objects.exists()
-    response = client.post("/storage/targets/new/", {"name": "Data", "connection": resources.connection.id,
+    response = client.post(f"/projects/{resources.project.id}/storage/targets/new/", {"name": "Data", "connection": resources.connection.id,
                                                      "root_alias": "staging-root-0"})
     assert response.status_code == 302
     assert StorageTarget.objects.get().root == "/approved/project-space"
@@ -60,17 +60,17 @@ def test_human_enrollment_selects_only_existing_protected_roots_and_writes_no_jo
 
 def test_human_storage_writes_require_session_csrf_and_owner_scope(resources):
     document = {"name": "Data", "connection": resources.connection.id, "root_alias": "staging-root-0"}
-    assert Client().post("/storage/targets/new/", document, **headers(resources)).status_code == 403
+    assert Client().post(f"/projects/{resources.project.id}/storage/targets/new/", document, **headers(resources)).status_code == 403
     outsider = Client()
     outsider.force_login(resources.outsider)
-    response = outsider.post("/storage/targets/new/", document)
-    assert response.status_code == 200 and not StorageTarget.objects.exists()
+    response = outsider.post(f"/projects/{resources.project.id}/storage/targets/new/", document)
+    assert response.status_code == 403 and not StorageTarget.objects.exists()
     assert outsider.get(f"/projects/{resources.project.id}/storage/").status_code == 403
     human = Client(enforce_csrf_checks=True)
     human.force_login(resources.owner)
-    assert human.post("/storage/targets/new/", document).status_code == 403
-    human.get(f"/storage/targets/new/?connection={resources.connection.id}")
-    response = human.post("/storage/targets/new/", document, HTTP_X_CSRFTOKEN=human.cookies["csrftoken"].value)
+    assert human.post(f"/projects/{resources.project.id}/storage/targets/new/", document).status_code == 403
+    human.get(f"/projects/{resources.project.id}/storage/targets/new/?connection={resources.connection.id}")
+    response = human.post(f"/projects/{resources.project.id}/storage/targets/new/", document, HTTP_X_CSRFTOKEN=human.cookies["csrftoken"].value)
     assert response.status_code == 302
 
 
@@ -248,7 +248,7 @@ def pinned_target(resources):
     resources.connection.configuration = {**resources.connection.configuration, "credential_profile_revision_sha256": profile["revision_sha256"]}
     resources.connection.revision_sha256 = digest(resources.connection.configuration)
     resources.connection.save(update_fields=["configuration", "revision_sha256"])
-    target = services.register_target(resources.owner, resources.connection, "data", "Pinned data")
+    target = services.register_target(resources.owner, resources.connection, "data", "Pinned data", project=resources.project)
     target.pool.health_policy = {**default_health_policy(), **{f"{severity}_floor_{unit}": 0
         for severity in ("warning", "stop", "emergency", "recovery") for unit in ("bytes", "inodes")}}
     target.pool.save(update_fields=["health_policy"])
@@ -301,9 +301,11 @@ def test_global_pool_plans_include_other_projects_pending_growth_without_double_
     services.record_observation(resources.worker, target.pool_id, observation())
     other = Project.objects.create(owner=resources.owner, name="Other project on the shared NAS")
     other.connections.add(resources.connection)
+    other_target = services.register_target(resources.owner, resources.connection, "data", "Other project data",
+        project=other, pool=target.pool)
     services.save_project_storage(resources.owner, other, resources.connection,
-        {"bytes_budget": 10000, "inodes_budget": 10000, "retained_bytes_estimate": 0, "retained_inodes_estimate": 0, "work": target})
-    services.reserve_estimate(other, target, uuid4(), 7500, 1)
+        {"bytes_budget": 10000, "inodes_budget": 10000, "retained_bytes_estimate": 0, "retained_inodes_estimate": 0, "work": other_target})
+    services.reserve_estimate(other, other_target, uuid4(), 7500, 1)
     result = services.plan_for_credential(resources.credential, plan(resources, target))
     assert result["status"] == "blocked"
     assert result["pools"][0]["headroom_bytes_estimate"] == 8000 - 7500 - 100 - 500

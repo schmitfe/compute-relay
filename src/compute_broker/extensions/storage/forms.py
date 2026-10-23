@@ -5,7 +5,6 @@ from uuid import UUID, uuid4
 
 from django import forms
 
-from compute_broker.control.forms import owned_connections
 from compute_broker.control.models import Connection
 from .models import StorageCapacityPool
 from .planning import ROLES, SAFE_INTEGER, StoragePlanningError, canonical_root
@@ -29,9 +28,10 @@ class StorageTargetForm(forms.Form):
     enable_probes = forms.BooleanField(required=False, initial=False, label="Enable read-only capacity checks",
         help_text="An enabled storage worker may log in and read free byte/inode statistics once per minute. No directory scan, file contents, writes or deletion.")
 
-    def __init__(self, *args, user, **kwargs):
+    def __init__(self, *args, user, project, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["connection"].queryset = owned_connections(user).filter(enabled=True)
+        self.project = project
+        self.fields["connection"].queryset = project.connections.filter(owner=user, enabled=True, archived=False)
         value = self.data.get("connection") if self.is_bound else self.initial.get("connection")
         self.selected_connection = None
         self.personal = False
@@ -45,7 +45,7 @@ class StorageTargetForm(forms.Form):
             roots = protected_roots(self.selected_connection)
             self.fields["root_alias"].choices = [(item["alias"], f"{item['alias']} — {item['path']}") for item in roots]
             self.fields["pool"].queryset = StorageCapacityPool.objects.filter(owner_id=self.selected_connection.owner_id,
-                connection=self.selected_connection, enabled=True)
+                connection=self.selected_connection, enabled=True, storagetarget__project=project).distinct()
             self.initial.setdefault("connection_revision", self.selected_connection.revision_sha256)
         if self.personal:
             self.fields["root_alias"].widget = forms.HiddenInput()
@@ -91,7 +91,7 @@ class ProjectStorageForm(forms.Form):
         for role in ROLES:
             query = selected_targets(project, connection).filter(id__in=[target.id for target in candidates if role in target.roles])
             self.fields[role] = forms.ModelChoiceField(queryset=query, required=False,
-                label={"work": "Work and staging location", "environments": "Reusable environment location", "results": "Retained result location", "scratch": "Temporary scratch location"}[role])
+                label={"data": "Input data location", "work": "Work and staging location", "environments": "Reusable environment location", "results": "Retained result location", "scratch": "Temporary scratch location"}[role])
 
     def clean(self):
         data = super().clean()

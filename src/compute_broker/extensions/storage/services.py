@@ -7,7 +7,7 @@ from datetime import timedelta
 import posixpath
 
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from compute_broker.control.auth import connection_allowed, human_permission
@@ -60,14 +60,38 @@ def confirmed_directory_root(registration):
     return root
 
 
+def _project_connection(user, project, connection):
+    if project is None or not getattr(project, "id", None):
+        raise BrokerError("STORAGE_PROJECT_REQUIRED", "Select a project for this storage location.")
+    human_permission(user, project, "project_admin")
+    if (not connection.enabled or connection.archived
+            or not project.connections.filter(id=connection.id, enabled=True, archived=False).exists()):
+        raise BrokerError("STORAGE_TARGET_DENIED", "Choose an enabled cluster assigned to this project.", 403)
+
+
+def _fill_empty_defaults(project, target):
+    """The caller holds the project lock; preserve existing choices and budgets."""
+    binding, _ = ProjectStorageBinding.objects.get_or_create(project=project, connection=target.connection)
+    fields = []
+    for role in ROLES:
+        if role in target.roles and getattr(binding, f"{role}_id") is None:
+            setattr(binding, role, target)
+            fields.append(role)
+    if fields:
+        binding.save(update_fields=fields)
+
+
 def target_current(target):
     connection = target.connection
     if (not connection.enabled or connection.archived or connection.worker.revoked
             or connection.worker.owner_id != connection.owner_id
-            or not target.enabled or not target.pool.enabled or target.owner_id != connection.owner_id
+            or target.project_id is None or not target.enabled or not target.pool.enabled
+            or target.owner_id != connection.owner_id
             or target.pool.owner_id != target.owner_id or target.pool.connection_id != connection.id
             or target.connection_revision_sha256 != connection.revision_sha256
             or target.profile_revision_sha256 != connection.configuration.get("credential_profile_revision_sha256")):
+        return False
+    if not Project.objects.filter(id=target.project_id, connections=connection).exists():
         return False
     registration = StorageTargetRegistration.objects.filter(target=target).select_related("task").first()
     if registration:
@@ -75,6 +99,7 @@ def target_current(target):
         profile = next((item for item in connection.worker.profiles if isinstance(item, dict)
             and item.get("alias") == connection.configuration.get("credential_profile")), {})
         return bool(personal(connection) and registration.owner_id == target.owner_id
+            and registration.project_id == target.project_id
             and registration.connection_id == connection.id and confirmed_directory_root(registration) == target.root
             and registration.roles == target.roles and registration.task.state == "succeeded"
             and registration.task.kind == "mkdir" and registration.task.owner_id == target.owner_id
@@ -83,13 +108,15 @@ def target_current(target):
             and registration.profile_revision_sha256 == profile.get("revision_sha256") == target.profile_revision_sha256
             and registration.connection_revision_sha256 == target.connection_revision_sha256)
     root = next((item for item in protected_roots(connection) if item["alias"] == target.root_alias), None)
-    return bool(root and root["path"] == target.root and root["roles"] == target.roles and root["capabilities"] == target.capabilities
+    return bool(root and root["path"] == target.root and isinstance(target.roles, list) and target.roles
+                and all(role in root["roles"] for role in target.roles) and root["capabilities"] == target.capabilities
                 and (target.pool.expected_filesystem_id is None or root["filesystem_id"] == target.pool.expected_filesystem_id))
 
 
-def queue_personal_target(user, connection, root, name, roles, revision, submission_id):
+def queue_personal_target(user, connection, root, name, roles, revision, submission_id, *, project):
     """Queue one existing-parent mkdir; this does not expand the worker job scope."""
     from compute_broker.control.connector_setup import enqueue, locked_connection, own_connection
+    _project_connection(user, project, connection)
     reference = own_connection(user, connection.id)
     try:
         root = canonical_root(root)
@@ -103,15 +130,20 @@ def queue_personal_target(user, connection, root, name, roles, revision, submiss
     payload = {"path": posixpath.dirname(root), "name": posixpath.basename(root)}
     with transaction.atomic():
         current, _, _ = locked_connection(reference)
+        # locked_connection already locks assigned projects before Connection.
+        # Do not acquire a new project lock after it if the assignment changed.
+        project = Project.objects.get(id=project.id)
+        _project_connection(user, project, current)
         existing = StorageTargetRegistration.objects.select_for_update().filter(id=identifier).first()
         if existing:
-            if existing.owner_id != user.id or existing.connection_id != current.id:
+            if (existing.owner_id != user.id or existing.connection_id != current.id
+                    or existing.project_id != project.id):
                 raise BrokerError("NOT_FOUND", "Storage registration not found.", 404)
             if (existing.root, existing.name, existing.roles, existing.connection_revision_sha256) != (root, name.strip(), roles, revision):
                 raise BrokerError("STORAGE_REGISTRATION_CONFLICT", "This form already identifies a different directory request. Reload it.", 409)
             return existing
         task = enqueue(user, current.id, "mkdir", payload, revision)
-        return StorageTargetRegistration.objects.create(id=identifier, owner=user, connection=current,
+        return StorageTargetRegistration.objects.create(id=identifier, owner=user, project=project, connection=current,
             task=task, name=name.strip(), root=root, roles=roles,
             profile_revision_sha256=current.configuration["credential_profile_revision_sha256"],
             connection_revision_sha256=current.revision_sha256)
@@ -122,11 +154,22 @@ def finish_personal_target(user, registration, *, confirmed_root=None):
     from compute_broker.control.connector_setup import locked_connection, own_connection
     from compute_broker.control.models import ConnectorTask
     reference = own_connection(user, registration.connection_id)
+    if registration.project_id is None:
+        raise BrokerError("STORAGE_PROJECT_REQUIRED", "This legacy registration must be assigned to a project before it can be used.", 409)
+    project = Project.objects.get(id=registration.project_id)
+    _project_connection(user, project, reference)
     with transaction.atomic():
         connection, _, _ = locked_connection(reference)
         registration = StorageTargetRegistration.objects.select_for_update().get(id=registration.id, owner=user, connection=connection)
+        if registration.project_id != project.id:
+            raise BrokerError("STORAGE_TARGET_DENIED", "The registration's project changed. Reload its configuration.", 409)
+        project = Project.objects.get(id=project.id)
+        _project_connection(user, project, connection)
         if registration.target_id:
-            return registration.target
+            target = registration.target
+            if target.project_id != project.id or target.owner_id != connection.owner_id or not target_current(target):
+                raise BrokerError("STORAGE_TARGET_DENIED", "This storage location is no longer current for this project.", 403)
+            return target
         task = ConnectorTask.objects.select_for_update().get(id=registration.task_id)
         registration.task = task
         result = task.result
@@ -144,14 +187,15 @@ def finish_personal_target(user, registration, *, confirmed_root=None):
             raise BrokerError("STORAGE_DIRECTORY_UNCONFIRMED", "The connector profile changed. Start a new directory registration.", 409)
         pool = StorageCapacityPool.objects.create(owner=user, connection=connection, name=registration.name,
             probe_root=resolved_root, expected_filesystem_id=None, probe_enabled=False)
-        target = StorageTarget.objects.create(owner=user, connection=connection, pool=pool, name=registration.name,
+        target = StorageTarget.objects.create(owner=connection.owner, project=project, connection=connection, pool=pool, name=registration.name,
             root_alias="personal-" + registration.id.hex, root=resolved_root, roles=registration.roles,
             capabilities={"visibility": "unknown", "formats": ["directory"], "quota_reporting": "unknown"},
             profile_revision_sha256=registration.profile_revision_sha256,
             connection_revision_sha256=registration.connection_revision_sha256)
         registration.target = target
         registration.save(update_fields=["target"])
-        audit(None, user.id, "storage.personal_target_enrolled", target.id,
+        _fill_empty_defaults(project, target)
+        audit(project, user.id, "storage.personal_target_enrolled", target.id,
               {"connection_id": str(connection.id), "task_id": str(task.id), "created": result["created"]})
         return target
 
@@ -161,59 +205,120 @@ def probe_supported(target):
             and not StorageTargetRegistration.objects.filter(target=target).exists())
 
 
-def register_target(user, connection, root_alias, name, *, pool=None, enable_probes=False):
+def register_target(user, connection, root_alias, name, *, project, pool=None, enable_probes=False):
+    _project_connection(user, project, connection)
     if not user.is_superuser and connection.owner_id != user.id:
         raise BrokerError("STORAGE_TARGET_DENIED", "Choose a cluster you own.", 403)
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
         raise BrokerError("INVALID_STORAGE", "Choose a storage target name.")
     with transaction.atomic():
+        project = Project.objects.select_for_update().get(id=project.id)
         connection = Connection.objects.select_for_update(of=("self",)).select_related("worker").get(id=connection.id)
+        _project_connection(user, project, connection)
         root = next((item for item in protected_roots(connection) if item["alias"] == root_alias), None)
         if root is None:
             raise BrokerError("STORAGE_ROOT_DENIED", "Choose a current root published by the protected worker.", 403)
         if pool and (pool.owner_id != connection.owner_id or pool.connection_id != connection.id or not pool.enabled
                      or pool.expected_filesystem_id != root["filesystem_id"]):
             raise BrokerError("STORAGE_POOL_DENIED", "Use a compatible pool on the same cluster.", 403)
-        existing = StorageTarget.objects.filter(connection=connection, root_alias=root_alias,
+        existing = StorageTarget.objects.filter(project=project, connection=connection, root_alias=root_alias,
             profile_revision_sha256=connection.configuration["credential_profile_revision_sha256"],
             connection_revision_sha256=connection.revision_sha256).first()
         if existing:
             if pool and existing.pool_id != pool.id:
                 raise BrokerError("STORAGE_TARGET_EXISTS", "This enrolled target already belongs to another capacity pool.", 409)
+            if not target_current(existing):
+                raise BrokerError("STORAGE_TARGET_STALE", "The saved location no longer matches the current project and protected root. Refresh its cluster configuration before enrolling it.", 409)
             if enable_probes and not existing.pool.probe_enabled:
                 set_probe_enabled(user, existing.pool, True)
+            if existing.roles != root["roles"] and target_current(existing):
+                existing.roles = root["roles"]
+                existing.save(update_fields=["roles"])
+                _fill_empty_defaults(project, existing)
+                audit(project, user.id, "storage.target_roles_refreshed", existing.id,
+                    {"connection_id": str(connection.id), "roles": root["roles"]})
             return existing
         if pool is None:
             pool = StorageCapacityPool.objects.create(owner=connection.owner, connection=connection,
                 name=name.strip(), probe_root=root["path"], expected_filesystem_id=root["filesystem_id"])
-        target = StorageTarget.objects.create(owner=connection.owner, connection=connection, pool=pool, name=name.strip(),
+        target = StorageTarget.objects.create(owner=connection.owner, project=project, connection=connection, pool=pool, name=name.strip(),
             root_alias=root_alias, root=root["path"], roles=root["roles"], capabilities=root["capabilities"],
             profile_revision_sha256=connection.configuration["credential_profile_revision_sha256"],
             connection_revision_sha256=connection.revision_sha256)
-        audit(None, user.id, "storage.target_enrolled", target.id, {"connection_id": str(connection.id), "root_alias": root_alias})
+        _fill_empty_defaults(project, target)
+        audit(project, user.id, "storage.target_enrolled", target.id, {"connection_id": str(connection.id), "root_alias": root_alias})
         if enable_probes:
             set_probe_enabled(user, pool, True)
         return target
 
 
+def adopt_target(user, project, target):
+    """Assign quarantined legacy metadata without moving or creating any files."""
+    if not user.is_superuser and target.owner_id != user.id:
+        raise BrokerError("STORAGE_TARGET_DENIED", "Only the location owner can assign legacy storage.", 403)
+    _project_connection(user, project, target.connection)
+    with transaction.atomic():
+        project = Project.objects.select_for_update().get(id=project.id)
+        connection = Connection.objects.select_for_update(of=("self",)).select_related("worker").get(id=target.connection_id)
+        _project_connection(user, project, connection)
+        target = StorageTarget.objects.select_for_update(of=("self",)).select_related("pool", "connection__worker").get(id=target.id)
+        if (target.owner_id != connection.owner_id or target.connection_id != connection.id
+                or not user.is_superuser and target.owner_id != user.id):
+            raise BrokerError("STORAGE_TARGET_DENIED", "Only the location owner can assign legacy storage.", 403)
+        if target.project_id == project.id:
+            return target
+        if target.project_id is not None:
+            raise BrokerError("STORAGE_TARGET_ASSIGNED", "This location already belongs to a project.", 409)
+        references = Q()
+        for role in ROLES:
+            references |= Q(**{f"{role}_id": target.id})
+        if (ProjectStorageBinding.objects.filter(references).exclude(project=project).exists()
+                or StorageEstimateReservation.objects.filter(target=target).exclude(project=project).exists()):
+            raise BrokerError("STORAGE_TARGET_AMBIGUOUS", "This location has references to another project and must remain unassigned.", 409)
+        registration = StorageTargetRegistration.objects.select_for_update().filter(target=target).first()
+        if registration and (registration.project_id not in {None, project.id}
+                or registration.owner_id != target.owner_id or registration.connection_id != connection.id):
+            raise BrokerError("STORAGE_TARGET_AMBIGUOUS", "This location has conflicting registration metadata and must remain unassigned.", 409)
+        collision = StorageTarget.objects.filter(project=project, connection=connection, root_alias=target.root_alias,
+            profile_revision_sha256=target.profile_revision_sha256,
+            connection_revision_sha256=target.connection_revision_sha256).exclude(id=target.id).exists()
+        if collision:
+            raise BrokerError("STORAGE_TARGET_EXISTS", "This project already has this registered location.", 409)
+        target.project = project
+        target.save(update_fields=["project"])
+        if registration:
+            registration.project = project
+            registration.save(update_fields=["project"])
+        _fill_empty_defaults(project, target)
+        audit(project, user.id, "storage.target_adopted", target.id,
+            {"connection_id": str(connection.id), "advisory_only": True})
+        return target
+
+
 def selected_targets(project, connection):
-    if not project.connections.filter(id=connection.id, enabled=True).exists():
+    if not project.connections.filter(id=connection.id, enabled=True, archived=False).exists():
         return StorageTarget.objects.none()
     return StorageTarget.objects.select_related("pool", "connection__worker").filter(
-        owner_id=project.owner_id, connection=connection, enabled=True, pool__enabled=True)
+        project=project, owner_id=connection.owner_id, connection=connection, enabled=True, pool__enabled=True)
 
 
 def save_project_storage(user, project, connection, data):
-    human_permission(user, project, "project_admin")
-    if not project.connections.filter(id=connection.id, enabled=True).exists():
-        raise BrokerError("STORAGE_TARGET_DENIED", "Choose a cluster assigned to this project.", 403)
-    for role in ROLES:
-        target = data.get(role)
-        if target and (target.owner_id != project.owner_id or target.connection_id != connection.id
-                       or role not in target.roles or not target_current(target)):
-            raise BrokerError("STORAGE_TARGET_DENIED", "Choose a current approved target for each role.", 403)
+    _project_connection(user, project, connection)
     with transaction.atomic():
-        Project.objects.select_for_update().get(id=project.id)
+        project = Project.objects.select_for_update().get(id=project.id)
+        connection = Connection.objects.select_for_update(of=("self",)).select_related("worker").get(id=connection.id)
+        _project_connection(user, project, connection)
+        choices = {}
+        for role in ROLES:
+            selected = data.get(role)
+            target = (StorageTarget.objects.select_for_update(of=("self",)).select_related("pool", "connection__worker").filter(
+                id=getattr(selected, "id", None), project=project, connection=connection,
+                owner_id=connection.owner_id).first()) if selected else None
+            if selected and (target is None or target.project_id != project.id
+                    or target.owner_id != connection.owner_id or target.connection_id != connection.id
+                    or role not in target.roles or not target_current(target)):
+                raise BrokerError("STORAGE_TARGET_DENIED", "Choose a current approved target for each role in this project.", 403)
+            choices[role] = target
         budget, _ = ProjectStorageBudget.objects.get_or_create(project=project)
         for field in ("bytes_budget", "inodes_budget"):
             setattr(budget, field, integer(data.get(field), nullable=True))
@@ -223,7 +328,7 @@ def save_project_storage(user, project, connection, data):
         budget.save()
         binding, _ = ProjectStorageBinding.objects.get_or_create(project=project, connection=connection)
         for role in ROLES:
-            setattr(binding, role, data.get(role))
+            setattr(binding, role, choices[role])
         binding.save()
         audit(project, user.id, "storage.plan_settings_updated", project.id, {"connection_id": str(connection.id), "advisory_only": True})
         return binding
@@ -245,14 +350,15 @@ def inventory(project, *, credential=None, now=None):
         "estimate_updated_at": budget.estimate_updated_at.isoformat() if budget and budget.estimate_updated_at else None,
         "estimate_source": budget.estimate_source if budget else "not_estimated"}
     bindings, targets = [], {}
-    rows = ProjectStorageBinding.objects.filter(project=project, connection__enabled=True).select_related("connection")
+    rows = ProjectStorageBinding.objects.filter(project=project, connection__enabled=True, connection__archived=False).select_related("connection")
     for row in rows:
         if not project.connections.filter(id=row.connection_id, enabled=True).exists() or credential and not connection_allowed(credential, row.connection_id):
             continue
         choices = {}
         for role in ROLES:
             target = getattr(row, role)
-            if target and target.owner_id == project.owner_id and target.connection_id == row.connection_id and role in target.roles and target_current(target):
+            if (target and target.project_id == project.id and target.owner_id == row.connection.owner_id
+                    and target.connection_id == row.connection_id and role in target.roles and target_current(target)):
                 choices[role] = str(target.id)
                 targets[str(target.id)] = target
             else:
@@ -276,7 +382,7 @@ def inventory(project, *, credential=None, now=None):
             "measurement_status": "cached" if pool.observation else "not_observed"}
     return {"schema_version": "1.0", "project_id": str(project.id), "advisory_only": True,
         "enforced_at_dispatch": False, "probe_wired": True, "budget": budget_data, "bindings": bindings,
-        "targets": [{"id": str(target.id), "name": target.name, "connection_id": str(target.connection_id),
+        "targets": [{"id": str(target.id), "project_id": str(target.project_id), "name": target.name, "connection_id": str(target.connection_id),
                      "pool_id": str(target.pool_id), "roles": target.roles, "capabilities": target.capabilities}
                     for target in targets.values()], "pools": list(pools.values()),
         "note": "Estimates and cached observations do not enforce OS quotas or change where existing jobs write."}
@@ -341,16 +447,16 @@ def reserve_estimate(project, target, reference, peak_bytes, peak_inodes):
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
         target = StorageTarget.objects.select_related("connection__worker", "pool").get(id=target.id)
+        if (target.project_id != project.id or target.owner_id != target.connection.owner_id or not target_current(target)
+                or not project.connections.filter(id=target.connection_id, enabled=True, archived=False).exists()
+                or not any(getattr(binding, f"{role}_id") == target.id for binding in ProjectStorageBinding.objects.filter(
+                    project=project, connection_id=target.connection_id) for role in ROLES)):
+            raise BrokerError("STORAGE_TARGET_DENIED", "The target is not selected for this project.", 403)
         existing = StorageEstimateReservation.objects.filter(reference=reference).first()
         if existing:
             if (existing.project_id, existing.target_id, existing.bytes_estimate, existing.inodes_estimate) != (project.id, target.id, peak_bytes, peak_inodes):
                 raise BrokerError("STORAGE_RESERVATION_CONFLICT", "The reference already identifies a different estimate.", 409)
             return existing
-        if (target.owner_id != project.owner_id or not target_current(target)
-                or not project.connections.filter(id=target.connection_id, enabled=True).exists()
-                or not any(getattr(binding, f"{role}_id") == target.id for binding in ProjectStorageBinding.objects.filter(
-                    project=project, connection_id=target.connection_id) for role in ROLES)):
-            raise BrokerError("STORAGE_TARGET_DENIED", "The target is not selected for this project.", 403)
         StorageCapacityPool.objects.select_for_update().get(id=target.pool_id)
         budget = ProjectStorageBudget.objects.filter(project=project).first()
         reserved = _reserved(StorageEstimateReservation.objects.filter(project=project))

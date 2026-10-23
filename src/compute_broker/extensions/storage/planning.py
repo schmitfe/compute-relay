@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 SAFE_INTEGER = 2**53 - 1
-ROLES = ("work", "environments", "results", "scratch")
+ROLES = ("work", "environments", "data", "results", "scratch")
 _ALIAS = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}\Z")
 
 
@@ -232,7 +232,7 @@ def validate_plan(document):
         raise StoragePlanningError("INVALID_STORAGE_PLAN", "Select a cluster identifier.") from None
     estimates, roles, normalized = document.get("estimates"), set(), []
     if not isinstance(estimates, list) or not 1 <= len(estimates) <= len(ROLES):
-        raise StoragePlanningError("INVALID_STORAGE_PLAN", "Provide one to four role estimates.")
+        raise StoragePlanningError("INVALID_STORAGE_PLAN", "Provide one to five role estimates.")
     for item in estimates:
         if not isinstance(item, dict) or set(item) - {"role", "target_id", "peak_bytes", "peak_inodes", "retained_bytes", "retained_inodes"}:
             raise StoragePlanningError("INVALID_STORAGE_PLAN", "Unexpected estimate fields; paths are not accepted.")
