@@ -18,6 +18,10 @@ Python 3.12/3.13, Django 5.2, SQLite or PostgreSQL, system OpenSSH, the official
 | `python -m compute_broker.worker` | Protected-worker process; reads only its configured connection/token and journal |
 | `BROKER_WORKER_ASYNC=1 python -m compute_broker.worker` | Opt-in asynchronous core Slurm runner; requires protected owner configuration and no enabled extensions |
 | `python -m compute_broker.mcp` | Project stdio MCP facade; has no SSH, approval, or project-administration tools |
+| `compute-broker init-mcp` | Initialize the current science project's local TOML/key files and Git ignore rules; prompts privately for the project API key |
+| `compute-broker connectors add NAME --state-directory PATH` | Save a private shortcut to an already paired personal connector; stores only a name and path |
+| `compute-broker connectors start NAME --verbose` | Start that connector in the foreground with local SSH/MFA prompts and sanitized activity messages |
+| `compute-broker connectors start --all` | Authenticate saved connectors sequentially, then run them together in one labeled foreground group |
 | `python -m compute_broker.cli discover --host user@login.example --known-hosts /absolute/pinned/known_hosts --output local/discovery.json` | Read-only Slurm capabilities snapshot; no submissions, node probes, or job execution |
 | `python tools/local_smoke.py` | Disposable native fake end-to-end acceptance and automatic process/state cleanup |
 

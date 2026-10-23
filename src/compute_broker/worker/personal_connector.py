@@ -1,6 +1,7 @@
 """Personal connector bootstrap: local SSH capability, one-use broker pairing."""
 
 import asyncio
+from contextlib import contextmanager, ExitStack
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import time
 from uuid import UUID
 
 from .client import ControlError, JsonClient, strict_json
+from .connector_status import ConnectorStatus, display_label
 from .enrollment import profile_metadata
 
 
@@ -92,7 +94,7 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     lifetime = hints.get("session_seconds", 28800)
     if type(lifetime) is not int or not 60 <= lifetime <= 86400:
         raise ValueError("Session lifetime must be 60–86400 seconds.")
-    return {"schema_version": "1.0", "owner_id": owner, "registration_id": identifier,
+    return {"schema_version": "1.0", "owner_id": owner, "registration_id": identifier, "name": setup["name"],
         "broker_url": setup["broker_url"], "connection": private, "session_seconds": lifetime,
         "allow_insecure_http": allow_insecure_http, "site_profile": setup["site_profile"],
         "module_discovery_mode": "auto", "module_availability_enabled": hints.get("module_availability_enabled", False)}
@@ -127,14 +129,15 @@ def pair(setup, state, session, *, client_factory=JsonClient):
     return {**state, "worker_id": result["worker_id"], "worker_token": result["worker_token"], "connection_id": result["connection_id"]}
 
 
-async def serve(state, session, state_directory, *, once=False, deadline=None):
+async def serve(state, session, state_directory, *, once=False, deadline=None, status=None):
     from .async_client import AsyncJsonClient
     from .personal_setup import PersonalWorker
     from .journal import Journal
+    status = status or ConnectorStatus(state)
     alias, profile = runtime_profile(state, session)
     client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
     worker = PersonalWorker(client, {}, Journal(state_directory / "journal"), credential_profiles={alias: profile},
-        extensions=[], owner_id=state["owner_id"], state=state, session=session, state_directory=state_directory)
+        extensions=[], owner_id=state["owner_id"], state=state, session=session, state_directory=state_directory, status=status)
     try:
         remaining = max(0, deadline - time.monotonic()) if deadline is not None else state["session_seconds"]
         async with asyncio.timeout(remaining):
@@ -142,33 +145,42 @@ async def serve(state, session, state_directory, *, once=False, deadline=None):
                 await worker.hello()
             except ControlError as error:
                 if error.status == 401:
-                    print("Connector access was withdrawn. Sign in to the portal before reconnecting.", file=sys.stderr)
+                    status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
                     return
                 raise
+            ready = False
             while True:
                 if not session.check():
-                    print("SSH session ended. Restart the connector to sign in again.", file=sys.stderr)
+                    status.problem("SSH session ended. Restart the connector to sign in again.")
                     return
+                if not ready:
+                    status.notice("Connected and ready; waiting for broker commands. Keep this terminal open. Use Ctrl+C to stop.")
+                    ready = True
                 try:
                     worked = await worker.setup_once() or await worker.poll_once()
                 except ControlError as error:
                     if error.status in {401, 403}:
-                        print("Connector access was withdrawn. Sign in to the portal before reconnecting.", file=sys.stderr)
+                        status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
                         return
+                    status.interrupted("broker")
                     worked = False
                 except Exception:
-                    print("Operation interrupted; retained submission state will be reconciled.", file=sys.stderr)
+                    status.interrupted("operation")
                     worked = False
+                else:
+                    status.recovered()
                 if once:
                     return
                 await asyncio.sleep(1 if worked else 2)
     except TimeoutError:
-        print("SSH session lifetime reached. Restart the connector to sign in again.", file=sys.stderr)
+        status.problem("SSH session lifetime reached. Restart the connector to sign in again.")
     finally:
         await client.close()
 
 
-def run(args):
+@contextmanager
+def connected(args):
+    """Authenticate one labeled connector, holding its local identity lock."""
     from .ssh_session import SSHSession, open_session_directory
     directory = Path(args.state_directory).expanduser().absolute()
     # Prevent two connector processes from consuming the same worker identity.
@@ -201,28 +213,67 @@ def run(args):
         # cannot be replayed to recover a lost secret. Re-pair explicitly instead.
         if setup and (directory / "pairing-pending.json").exists():
             raise ConnectorStartupError("PAIRING_UNCERTAIN")
+        status = ConnectorStatus(state, verbose=getattr(args, "verbose", False), label=getattr(args, "connector_label", None))
+        status.progress("Preparing a new connector." if setup else "Resuming your saved connector.")
         session = SSHSession(state["connection"], directory, lifetime_seconds=state["session_seconds"])
         try:
-            print("Connecting to your cluster. Complete any OpenSSH host-key, passphrase or MFA prompt in this terminal.")
+            ssh = state["connection"]["ssh"]
+            target = display_label(f"{ssh['user']}@{ssh['host']}:{ssh.get('port', 22)}")
+            status.notice(f"Connecting to {target}. Complete any OpenSSH host-key, passphrase or MFA prompt in this terminal.")
             session.start(interactive=not args.non_interactive)
+            status.progress("SSH authentication succeeded; connecting to the broker.")
             deadline = time.monotonic() + state["session_seconds"]
             if setup:
                 if not state["connection"].get("remote_root"):
                     from .personal_setup import default_work_root
+                    status.progress("Identifying the cluster's default working directory.")
                     state["connection"]["remote_root"] = asyncio.run(default_work_root(session))
                 write_private(directory / "pairing-pending.json", {"registration_id": state["registration_id"]})
                 state = pair(setup, state, session)
                 write_private(path, state)
                 (directory / "pairing-pending.json").unlink()
-                print("Connector paired automatically. Cluster identification is queued.")
-            asyncio.run(serve(state, session, directory, once=args.once, deadline=deadline))
+                status.notice("Connector paired automatically. Cluster identification is queued.")
+            yield state, session, directory, deadline, status
         finally:
             session.close()
     finally:
         os.close(fd)
 
 
-def main(args):
+def run(args):
+    with connected(args) as (state, session, directory, deadline, status):
+        asyncio.run(serve(state, session, directory, once=args.once, deadline=deadline, status=status))
+
+
+def run_many(args_list):
+    """Authenticate sequentially so human SSH/MFA prompts cannot overlap."""
+    arguments = list(args_list)
+    if not 1 <= len(arguments) <= 64:
+        raise ValueError("Select between one and 64 saved connectors.")
+    with ExitStack() as stack:
+        connections = []
+        for args in arguments:
+            lifetime = stack.enter_context(ExitStack())
+            connections.append((args, lifetime.enter_context(connected(args)), lifetime))
+
+        async def serve_one(args, connection, lifetime):
+            state, session, directory, deadline, status = connection
+            try:
+                await serve(state, session, directory, once=args.once, deadline=deadline, status=status)
+            finally:
+                # Revoke SSH capability and release this identity's lock even
+                # while the other connectors continue. ExitStack is idempotent.
+                lifetime.close()
+
+        async def serve_all():
+            async with asyncio.TaskGroup() as tasks:
+                for args, connection, lifetime in connections:
+                    tasks.create_task(serve_one(args, connection, lifetime))
+
+        asyncio.run(serve_all())
+
+
+def _main(action):
     from .file_picker import FileSelectionCancelled, FileSelectionUnavailable
     from .ssh_session import SessionStorageError
     from compute_broker.transports.openssh import TransportError
@@ -231,7 +282,7 @@ def main(args):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stopped)
     try:
-        run(args)
+        action()
     except KeyboardInterrupt:
         print("Connector stopped; submitted Slurm jobs retain their recorded state.")
     except FileSelectionCancelled as error:
@@ -257,3 +308,12 @@ def main(args):
         raise SystemExit(1) from None
     finally:
         signal.signal(signal.SIGTERM, previous)
+
+
+def main(args):
+    _main(lambda: run(args))
+
+
+def main_many(args_list):
+    """CLI boundary shared by saved-connector shortcuts; installs signals once."""
+    _main(lambda: run_many(args_list))

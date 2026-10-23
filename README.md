@@ -39,6 +39,12 @@ python -m venv .venv
 
 For an interactive dashboard and an actual disposable Slurm cluster, follow [the Docker instructions](docs/container-testing.md). The ordinary test suite never discovers or submits to a real cluster.
 
+For a science project using an already running broker, activate the installed
+broker environment, enter the project directory and run `compute-broker init-mcp`.
+It prompts privately for the project's API key and writes the local MCP setup
+and Git ignore rules. No project UUID is required. See [local client setup](docs/local-client-setup.md)
+for project initialization and named connector shortcuts.
+
 Development mode does not protect secrets from another process running as your account. A real deployment requires a separate service identity or server that the agent cannot administer. An agent that controls Docker can inspect containers and their secrets.
 
 ## Design decisions

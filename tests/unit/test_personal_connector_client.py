@@ -168,7 +168,7 @@ def pairing(monkeypatch, setup):
 @pytest.fixture
 def served(monkeypatch):
     calls = []
-    async def serve(state, session, directory, *, once, deadline):
+    async def serve(state, session, directory, *, once, deadline, status=None):
         calls.append((deepcopy(state), session, directory, once, deadline))
     monkeypatch.setattr(connector, "serve", serve)
     return calls
@@ -339,8 +339,91 @@ def test_revocation_during_startup_is_graceful_and_closes_master(tmp_path, setup
     monkeypatch.setattr(personal_setup.PersonalWorker, "hello", revoked)
     connector.main(arguments(tmp_path, setup))
     assert closed == [True] and sessions[0].closed == 1
-    output = capsys.readouterr().err
-    assert "withdrawn" in output and "private-broker-body" not in output
+    output = capsys.readouterr()
+    assert "withdrawn" in output.err and "private-broker-body" not in output.out + output.err
+    assert "Connected and ready" not in output.out
+
+
+def test_connector_identifies_cluster_before_ssh_and_reports_ready_after_broker_acceptance(
+        tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    from compute_broker.worker import personal_setup
+    async def idle():
+        return False
+    patch_async_runtime(monkeypatch, poll=idle)
+    original_start = ssh_session.SSHSession.start
+    captured = []
+    def start(self, interactive):
+        captured.append(capsys.readouterr().out)
+        assert setup["name"] in captured[-1]
+        assert "synthetic@cluster.example.invalid:2222" in captured[-1]
+        assert "Connected and ready" not in captured[-1]
+        return original_start(self, interactive)
+    monkeypatch.setattr(ssh_session.SSHSession, "start", start)
+    async def hello(self):
+        captured.append(capsys.readouterr().out)
+        assert "Connected and ready" not in captured[-1]
+    monkeypatch.setattr(personal_setup.PersonalWorker, "hello", hello)
+    connector.main(arguments(tmp_path, setup))
+    captured.append(capsys.readouterr().out)
+    text = "".join(captured)
+    assert "[Synthetic cluster] Connected and ready; waiting for broker commands" in captured[-1]
+    assert setup["pairing_token"] not in text and pairing.reply["worker_token"] not in text
+    assert setup["local"]["identity_file"] not in text
+    assert connector.read_private(tmp_path / "state/state.json")["name"] == setup["name"]
+
+
+def test_connector_verbose_startup_is_explicit_and_resume_keeps_saved_label(
+        tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    async def idle():
+        return False
+    patch_async_runtime(monkeypatch, poll=idle)
+    args = arguments(tmp_path, setup, verbose=True)
+    connector.main(args)
+    output = capsys.readouterr().out
+    assert "Preparing a new connector" in output and "SSH authentication succeeded" in output
+    args.setup = None
+    connector.main(args)
+    output = capsys.readouterr().out
+    assert "[Synthetic cluster] Resuming your saved connector" in output
+    assert pairing.reply["worker_token"] not in output and "/local/reviewed-key" not in output
+
+
+def test_retry_output_is_deduplicated_and_recovers_without_exposing_exception(
+        tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    outcomes = iter([ControlError("sensitive_broker_body", 500), ControlError("sensitive_broker_body", 500), False,
+        ControlError("sensitive_broker_body", 401)])
+    async def poll():
+        result = next(outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    patch_async_runtime(monkeypatch, poll=poll)
+    async def no_sleep(*args):
+        return None
+    monkeypatch.setattr(connector.asyncio, "sleep", no_sleep)
+    args = arguments(tmp_path, setup);args.once = False
+    connector.main(args)
+    output = capsys.readouterr()
+    assert output.err.count("Broker communication interrupted") == 1
+    assert output.out.count("Broker communication restored") == 1
+    assert output.out.count("Connected and ready") == 1
+    assert "sensitive_broker_body" not in output.out + output.err
+
+
+def test_idle_polling_does_not_repeat_waiting_message(tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    ticks = iter([False, False, False, ControlError("stop", 401)])
+    async def idle():
+        result = next(ticks)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    patch_async_runtime(monkeypatch, poll=idle)
+    async def no_sleep(*args):
+        return None
+    monkeypatch.setattr(connector.asyncio, "sleep", no_sleep)
+    args = arguments(tmp_path, setup);args.once = False
+    connector.main(args)
+    assert capsys.readouterr().out.count("waiting for broker commands") == 1
 
 
 def test_sigterm_closes_master_and_restores_previous_handler(tmp_path, setup, sessions, pairing, monkeypatch, capsys):
@@ -354,3 +437,107 @@ def test_sigterm_closes_master_and_restores_previous_handler(tmp_path, setup, se
     assert "Connector stopped" in output.out
     assert setup["pairing_token"] not in output.out + output.err
     assert pairing.reply["worker_token"] not in output.out + output.err
+
+
+def many_arguments(tmp_path, setup):
+    result = []
+    for index, name in enumerate(["agmn", "Ramses"]):
+        root = tmp_path / str(index);root.mkdir(mode=0o700)
+        result.append(arguments(root, {**setup, "name": "Original cluster name", "registration_id": str(uuid4())},
+            connector_label=name))
+    return result
+
+
+def test_many_connectors_authenticate_sequentially_before_serving_and_use_saved_names(
+        tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    args = many_arguments(tmp_path, setup)
+    events = []
+    original_start = ssh_session.SSHSession.start
+    def start(self, interactive):
+        events.append("authenticate")
+        output = capsys.readouterr().out
+        assert f"[{args[len(events) - 1].connector_label}] Connecting to" in output
+        return original_start(self, interactive)
+    monkeypatch.setattr(ssh_session.SSHSession, "start", start)
+    async def serve(state, session, directory, *, once, deadline, status):
+        assert len(sessions) == 2 and all(item.started == [False] for item in sessions)
+        events.append("serve")
+        assert status.label in {"agmn", "Ramses"}
+    monkeypatch.setattr(connector, "serve", serve)
+    connector.main_many(args)
+    assert events == ["authenticate", "authenticate", "serve", "serve"]
+    assert all(item.closed >= 1 for item in sessions)
+
+
+def test_many_connectors_serve_concurrently_and_each_reports_readiness(
+        tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    entered = 0
+    both = asyncio.Event()
+    async def poll():
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), timeout=1)
+        return False
+    closed = patch_async_runtime(monkeypatch, poll=poll)
+    connector.main_many(many_arguments(tmp_path, setup))
+    output = capsys.readouterr().out
+    assert "[agmn] Connected and ready" in output and "[Ramses] Connected and ready" in output
+    assert entered == 2 and closed == [True, True]
+    assert all(item.closed >= 1 for item in sessions)
+
+
+def test_many_connector_login_failure_closes_previous_sessions_and_releases_locks(
+        tmp_path, setup, sessions, pairing, served, monkeypatch, capsys):
+    from compute_broker.transports.openssh import TransportError
+    args = many_arguments(tmp_path, setup)
+    previous = signal.getsignal(signal.SIGTERM)
+    original_start = ssh_session.SSHSession.start
+    def start(self, interactive):
+        if len(sessions) == 2:
+            raise TransportError("secret identity path /private/key")
+        return original_start(self, interactive)
+    monkeypatch.setattr(ssh_session.SSHSession, "start", start)
+    with pytest.raises(SystemExit):
+        connector.main_many(args)
+    assert all(item.closed == 1 for item in sessions) and not served
+    assert signal.getsignal(signal.SIGTERM) is previous
+    output = capsys.readouterr()
+    assert "SSH_LOGIN_FAILED" in output.err and "/private/key" not in output.out + output.err
+    # A fresh invocation can immediately resume the first paired identity.
+    args[0].setup = None
+    connector.main(args[0])
+    assert len(served) == 1
+
+
+def test_many_connector_stop_closes_every_session_and_restores_signal_handler(
+        tmp_path, setup, sessions, pairing, monkeypatch, capsys):
+    previous = signal.getsignal(signal.SIGTERM)
+    async def serve(*args, **kwargs):
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+    monkeypatch.setattr(connector, "serve", serve)
+    connector.main_many(many_arguments(tmp_path, setup))
+    assert all(item.closed >= 1 for item in sessions)
+    assert signal.getsignal(signal.SIGTERM) is previous
+    assert "Connector stopped" in capsys.readouterr().out
+
+
+def test_finished_connector_releases_its_lock_while_another_connector_stays_running(
+        tmp_path, setup, sessions, pairing, monkeypatch):
+    args = many_arguments(tmp_path, setup)
+    checked = []
+    async def serve(state, session, directory, *, once, deadline, status):
+        if status.label == "agmn":
+            return
+        assert status.label == "Ramses" and sessions[0].closed == 1 and sessions[1].closed == 0
+        descriptor = os.open(args[0].state_directory + "/lock", os.O_RDWR)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            checked.append(True)
+        finally:
+            os.close(descriptor)
+    monkeypatch.setattr(connector, "serve", serve)
+    connector.main_many(args)
+    assert checked == [True]
+    assert all(item.closed == 1 for item in sessions)

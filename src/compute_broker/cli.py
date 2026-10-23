@@ -1,4 +1,4 @@
-"""Trusted operator entry points. Never expose these commands as agent tools."""
+"""Local client setup and trusted operator commands; not an agent tool surface."""
 
 import argparse
 import json
@@ -133,8 +133,12 @@ def discover(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compute Broker development operator CLI")
+    parser = argparse.ArgumentParser(description="Compute Broker local setup and operator CLI")
     sub = parser.add_subparsers(dest="command", required=True)
+    from compute_broker.mcp.setup import register_parser
+    from compute_broker.connector_profiles import register_commands
+    register_parser(sub)
+    register_commands(sub)
     boot = sub.add_parser("bootstrap-demo", help="Create synthetic demo credentials and apply migrations")
     boot.add_argument("--output", required=True)
     boot.add_argument("--backend", choices=["fake", "slurm"], default="fake")
@@ -159,6 +163,7 @@ def main():
     connector.add_argument("--known-hosts", help="Local known-hosts file override for first pairing")
     connector.add_argument("--non-interactive", action="store_true", help="Fail if SSH requires a prompt")
     connector.add_argument("--allow-insecure-http", action="store_true", help="Allow an explicitly selected isolated HTTP test network")
+    connector.add_argument("--verbose", action="store_true", help="Show sanitized connector activity without credentials or job contents")
     connector.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
     connector.set_defaults(run=connector_main)
     args = parser.parse_args()

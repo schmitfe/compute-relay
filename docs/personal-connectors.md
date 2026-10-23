@@ -151,6 +151,12 @@ an active execution to another directory or resource binding.
 
 ## Resume and reconnect
 
+For named local shortcuts and labeled startup/activity messages, see
+[local client setup](local-client-setup.md). Register a paired state directory
+once with `compute-broker connectors add NAME --state-directory PATH`, then use
+`compute-broker connectors start NAME`. The original command below continues
+to work and accepts `--verbose` for sanitized activity messages.
+
 Resume with the same private directory, omitting the downloaded setup:
 
 ```sh

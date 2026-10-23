@@ -4,12 +4,12 @@ from copy import deepcopy
 from importlib.resources import files
 import os
 import posixpath
-import sys
 from uuid import uuid4
 
 from compute_broker.transports.async_openssh import AsyncOpenSSHTransport
 from .async_runner import AsyncWorker
 from .client import ControlError
+from .connector_status import ConnectorStatus
 from .enrollment import resolve_connection
 
 
@@ -46,13 +46,36 @@ def save_state(directory, state):
 
 
 class PersonalWorker(AsyncWorker):
-    def __init__(self, *args, state, session, state_directory, **kwargs):
+    def __init__(self, *args, state, session, state_directory, status=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.state, self.session, self.state_directory = state, session, state_directory
+        self.status = status or ConnectorStatus(state)
+        self._observed_attempts = {}
         self._pending_task = None
         self._defer_defaults = False
         self._setup_authorized = True
         self._pending_recovery_notified = None
+
+    async def _execute(self, lease):
+        operation = lease.get("operation")
+        messages = {
+            "submit": "Handling an approved job submission.",
+            "reconcile": "Reconciling a previous job submission with Slurm.",
+            "cancel": "Handling a job cancellation request.",
+        }
+        if operation == "observe":
+            attempt = lease.get("attempt_id")
+            if attempt not in self._observed_attempts:
+                self.status.progress("Tracking a job's Slurm status and collecting its outputs when it finishes.")
+                # Bounded local display bookkeeping; it never affects execution.
+                if len(self._observed_attempts) >= 256:
+                    self._observed_attempts.pop(next(iter(self._observed_attempts)))
+                self._observed_attempts[attempt] = True
+        elif operation in messages:
+            self.status.progress(messages[operation])
+        await super()._execute(lease)
+        if operation in messages:
+            self.status.progress("Job operation reported to the broker; waiting for more commands.")
 
     async def hello(self):
         result = await self.setup_request(hello=True)
@@ -80,7 +103,7 @@ class PersonalWorker(AsyncWorker):
             if error.status != 403:
                 raise
             if self._setup_authorized:
-                print("Cluster setup is paused until account verification is current. Existing jobs will still be tracked and accounted.", file=sys.stderr)
+                self.status.problem("Cluster setup is paused until account verification is current. Existing jobs will still be tracked and accounted.")
             self._setup_authorized, self._defer_defaults = False, True
             return None
         self._setup_authorized = True
@@ -89,7 +112,7 @@ class PersonalWorker(AsyncWorker):
             updated = deepcopy(self.state);updated.pop("pending_configuration_task", None)
             self.persist(updated)
         elif pending and pending["state"] == "failed" and self._pending_recovery_notified != document.get("pending_task_id"):
-            print("Cluster configuration needs confirmation again. Open Configure cluster in the portal and save it again; the previous change will not be rolled back automatically.", file=sys.stderr)
+            self.status.problem("Cluster configuration needs confirmation again. Open Configure cluster in the portal and save it again; the previous change will not be rolled back automatically.")
             self._pending_recovery_notified = document.get("pending_task_id")
         return result
 
@@ -109,6 +132,7 @@ class PersonalWorker(AsyncWorker):
         from compute_broker.domain.cluster_configuration import derive_cluster_configuration
         from .enrollment import EnrollmentError
         report = {"lease_id": lease["id"], "generation": lease["generation"]}
+        self.status.progress("Identifying Slurm partitions, resources and available software environments.")
         try:
             connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
             snapshot = await self.backend_factory(connection).discover()
@@ -130,6 +154,9 @@ class PersonalWorker(AsyncWorker):
         await self.client.request("POST", f"/internal/v1/connections/{lease['connection_id']}/report", report)
         if report["outcome"] == "discovered":
             self.connections[lease["connection_id"]] = connection
+            self.status.progress("Cluster discovery completed and reported to the broker.")
+        else:
+            self.status.progress("Cluster discovery failed; details are available in the portal.")
 
     async def setup_once(self):
         task = self._pending_task
@@ -144,6 +171,10 @@ class PersonalWorker(AsyncWorker):
                 task = response.get("task") if response else None
         if task is None:
             return False
+        descriptions = {"browse": "Listing folders for the portal's directory browser.",
+            "mkdir": "Creating the folder requested in the portal.",
+            "configure": "Validating and applying the cluster configuration requested in the portal."}
+        self.status.progress(descriptions.get(task["kind"], "Handling a cluster setup request."))
         report = {"connection_id": self.state["connection_id"], "lease_id": task["lease_id"], "generation": task["generation"]}
         try:
             if task["kind"] == "browse":
@@ -204,9 +235,11 @@ class PersonalWorker(AsyncWorker):
             if error.status != 403:
                 raise
             self._setup_authorized, self._defer_defaults = False, True
-            print("Cluster setup confirmation is paused until account verification is current. Existing jobs will still be tracked and accounted.", file=sys.stderr)
+            self.status.problem("Cluster setup confirmation is paused until account verification is current. Existing jobs will still be tracked and accounted.")
             return True
         if task["kind"] == "configure" and report["outcome"] == "succeeded":
             updated = deepcopy(self.state);updated.pop("pending_configuration_task", None)
             self.persist(updated)
+        self.status.progress("Cluster setup request completed." if report["outcome"] == "succeeded"
+            else "Cluster setup request failed; details are available in the portal.")
         return True

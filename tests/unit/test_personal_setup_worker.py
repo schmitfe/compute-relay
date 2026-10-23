@@ -206,3 +206,43 @@ def test_new_folder_retries_use_receipt_and_do_not_repeat_mutation(runtime, monk
     assert operations == ["mkdir", "browse"]
     assert runtime.state["connection"]["remote_root"] == original_root
     assert runtime.client.calls[-1][1]["result"]["created"] is True
+
+
+def test_verbose_setup_progress_does_not_print_paths_remote_errors_or_credentials(runtime, monkeypatch, capsys):
+    from compute_broker.worker.connector_status import ConnectorStatus
+    runtime.worker.status = ConnectorStatus(runtime.state, verbose=True)
+    async def unavailable(*args, **kwargs):
+        raise ValueError("remote-secret-response")
+    monkeypatch.setattr(personal_setup, "remote_setup", unavailable)
+    runtime.client.queue = [task("browse", request={"path": "/private/research/location"})]
+    asyncio.run(runtime.worker.setup_once())
+    output = capsys.readouterr().out
+    assert "Listing folders" in output and "setup request failed" in output
+    assert "/private/research/location" not in output and "remote-secret-response" not in output
+    assert runtime.state["worker_token"] not in output and "/local/opaque-key-path" not in output
+
+
+def test_verbose_job_progress_is_meaningful_without_repeating_observation_polls(runtime, monkeypatch, capsys):
+    from compute_broker.worker.connector_status import ConnectorStatus
+    runtime.worker.status = ConnectorStatus(runtime.state, verbose=True)
+    operations = []
+    async def execute(_worker, lease):
+        operations.append(lease["operation"])
+    monkeypatch.setattr(personal_setup.AsyncWorker, "_execute", execute)
+    lease = {"operation": "observe", "attempt_id": str(uuid4()), "prepared": {"script": "private_script_body"}}
+    asyncio.run(runtime.worker._execute(lease))
+    asyncio.run(runtime.worker._execute(lease))
+    asyncio.run(runtime.worker._execute({**lease, "operation": "submit"}))
+    output = capsys.readouterr().out
+    assert output.count("Tracking a job's Slurm status") == 1
+    assert "approved job submission" in output and "reported to the broker" in output
+    assert "private_script_body" not in output
+    assert operations == ["observe", "observe", "submit"]
+
+
+def test_non_verbose_job_progress_is_quiet(runtime, monkeypatch, capsys):
+    async def execute(_worker, lease):
+        pass
+    monkeypatch.setattr(personal_setup.AsyncWorker, "_execute", execute)
+    asyncio.run(runtime.worker._execute({"operation": "submit"}))
+    assert capsys.readouterr().out == ""
