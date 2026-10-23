@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 from datetime import timedelta
+import posixpath
 
 from django.db import transaction
 from django.db.models import Sum
@@ -14,7 +15,7 @@ from compute_broker.control.errors import BrokerError
 from compute_broker.control.models import Connection, Project, WorkerIdentity
 from compute_broker.control.services import audit, digest
 from .models import (ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool,
-                     StorageEstimateReservation, StorageObservationLease, StorageTarget)
+                     StorageEstimateReservation, StorageObservationLease, StorageTarget, StorageTargetRegistration)
 from .planning import (ROLES, StoragePlanningError, assess_health, canonical_root, integer,
                        plan_storage, roots_from_metadata, timestamp, total, validate_observation)
 
@@ -41,16 +42,123 @@ def protected_roots(connection):
         return []
 
 
+def confirmed_directory_root(registration):
+    """Validate a canonical receipt, allowing the worker to resolve a parent alias."""
+    task = registration.task
+    result = task.result
+    if not isinstance(result, dict) or not isinstance(task.request, dict):
+        return None
+    try:
+        root = canonical_root(result.get("path"))
+    except StoragePlanningError:
+        return None
+    if (len(root) > 240 or result.get("ok") is not True or result.get("writable") is not True
+            or type(result.get("created")) is not bool or result.get("parent") != posixpath.dirname(root)
+            or task.request != {"path": posixpath.dirname(registration.root), "name": posixpath.basename(registration.root)}
+            or posixpath.basename(root) != task.request["name"]):
+        return None
+    return root
+
+
 def target_current(target):
     connection = target.connection
-    if (not target.enabled or not target.pool.enabled or target.owner_id != connection.owner_id
+    if (not connection.enabled or connection.archived or connection.worker.revoked
+            or connection.worker.owner_id != connection.owner_id
+            or not target.enabled or not target.pool.enabled or target.owner_id != connection.owner_id
             or target.pool.owner_id != target.owner_id or target.pool.connection_id != connection.id
             or target.connection_revision_sha256 != connection.revision_sha256
             or target.profile_revision_sha256 != connection.configuration.get("credential_profile_revision_sha256")):
         return False
+    registration = StorageTargetRegistration.objects.filter(target=target).select_related("task").first()
+    if registration:
+        from compute_broker.control.connector_setup import personal
+        profile = next((item for item in connection.worker.profiles if isinstance(item, dict)
+            and item.get("alias") == connection.configuration.get("credential_profile")), {})
+        return bool(personal(connection) and registration.owner_id == target.owner_id
+            and registration.connection_id == connection.id and confirmed_directory_root(registration) == target.root
+            and registration.roles == target.roles and registration.task.state == "succeeded"
+            and registration.task.kind == "mkdir" and registration.task.owner_id == target.owner_id
+            and registration.task.connection_id == connection.id
+            and registration.task.connection_revision == target.connection_revision_sha256
+            and registration.profile_revision_sha256 == profile.get("revision_sha256") == target.profile_revision_sha256
+            and registration.connection_revision_sha256 == target.connection_revision_sha256)
     root = next((item for item in protected_roots(connection) if item["alias"] == target.root_alias), None)
     return bool(root and root["path"] == target.root and root["roles"] == target.roles and root["capabilities"] == target.capabilities
                 and (target.pool.expected_filesystem_id is None or root["filesystem_id"] == target.pool.expected_filesystem_id))
+
+
+def queue_personal_target(user, connection, root, name, roles, revision, submission_id):
+    """Queue one existing-parent mkdir; this does not expand the worker job scope."""
+    from compute_broker.control.connector_setup import enqueue, locked_connection, own_connection
+    reference = own_connection(user, connection.id)
+    try:
+        root = canonical_root(root)
+        identifier = UUID(str(submission_id))
+    except (StoragePlanningError, ValueError, TypeError):
+        raise BrokerError("INVALID_STORAGE", "Reload the form and choose a dedicated canonical directory.") from None
+    if (len(root) > 240 or not isinstance(name, str) or not 1 <= len(name.strip()) <= 100
+            or not isinstance(roles, list) or not roles or any(role not in ROLES for role in roles)
+            or len(set(roles)) != len(roles) or len(posixpath.basename(root)) > 80):
+        raise BrokerError("INVALID_STORAGE", "Choose a name, planning uses and a directory with a final component up to 80 characters.")
+    payload = {"path": posixpath.dirname(root), "name": posixpath.basename(root)}
+    with transaction.atomic():
+        current, _, _ = locked_connection(reference)
+        existing = StorageTargetRegistration.objects.select_for_update().filter(id=identifier).first()
+        if existing:
+            if existing.owner_id != user.id or existing.connection_id != current.id:
+                raise BrokerError("NOT_FOUND", "Storage registration not found.", 404)
+            if (existing.root, existing.name, existing.roles, existing.connection_revision_sha256) != (root, name.strip(), roles, revision):
+                raise BrokerError("STORAGE_REGISTRATION_CONFLICT", "This form already identifies a different directory request. Reload it.", 409)
+            return existing
+        task = enqueue(user, current.id, "mkdir", payload, revision)
+        return StorageTargetRegistration.objects.create(id=identifier, owner=user, connection=current,
+            task=task, name=name.strip(), root=root, roles=roles,
+            profile_revision_sha256=current.configuration["credential_profile_revision_sha256"],
+            connection_revision_sha256=current.revision_sha256)
+
+
+def finish_personal_target(user, registration, *, confirmed_root=None):
+    """An explicit human POST accepts only its own exact fenced worker receipt."""
+    from compute_broker.control.connector_setup import locked_connection, own_connection
+    from compute_broker.control.models import ConnectorTask
+    reference = own_connection(user, registration.connection_id)
+    with transaction.atomic():
+        connection, _, _ = locked_connection(reference)
+        registration = StorageTargetRegistration.objects.select_for_update().get(id=registration.id, owner=user, connection=connection)
+        if registration.target_id:
+            return registration.target
+        task = ConnectorTask.objects.select_for_update().get(id=registration.task_id)
+        registration.task = task
+        result = task.result
+        resolved_root = confirmed_directory_root(registration)
+        if (registration.connection_revision_sha256 != connection.revision_sha256
+                or registration.profile_revision_sha256 != connection.configuration.get("credential_profile_revision_sha256")
+                or task.connection_revision != connection.revision_sha256 or task.connection_id != connection.id
+                or task.owner_id != user.id or task.kind != "mkdir" or task.state != "succeeded"
+                or task.expires_at <= timezone.now()
+                or resolved_root is None or confirmed_root != resolved_root):
+            raise BrokerError("STORAGE_DIRECTORY_UNCONFIRMED", "Review and confirm the worker's exact resolved writable directory under the current cluster configuration before saving.", 409)
+        profile = next((item for item in connection.worker.profiles if isinstance(item, dict)
+            and item.get("alias") == connection.configuration.get("credential_profile")), {})
+        if profile.get("revision_sha256") != registration.profile_revision_sha256:
+            raise BrokerError("STORAGE_DIRECTORY_UNCONFIRMED", "The connector profile changed. Start a new directory registration.", 409)
+        pool = StorageCapacityPool.objects.create(owner=user, connection=connection, name=registration.name,
+            probe_root=resolved_root, expected_filesystem_id=None, probe_enabled=False)
+        target = StorageTarget.objects.create(owner=user, connection=connection, pool=pool, name=registration.name,
+            root_alias="personal-" + registration.id.hex, root=resolved_root, roles=registration.roles,
+            capabilities={"visibility": "unknown", "formats": ["directory"], "quota_reporting": "unknown"},
+            profile_revision_sha256=registration.profile_revision_sha256,
+            connection_revision_sha256=registration.connection_revision_sha256)
+        registration.target = target
+        registration.save(update_fields=["target"])
+        audit(None, user.id, "storage.personal_target_enrolled", target.id,
+              {"connection_id": str(connection.id), "task_id": str(task.id), "created": result["created"]})
+        return target
+
+
+def probe_supported(target):
+    return ("storage" in target.connection.worker.supported_extensions
+            and not StorageTargetRegistration.objects.filter(target=target).exists())
 
 
 def register_target(user, connection, root_alias, name, *, pool=None, enable_probes=False):
@@ -160,7 +268,7 @@ def inventory(project, *, credential=None, now=None):
                                recovery_since=pool.recovery_since.isoformat() if pool.recovery_since else None)
         pools[str(pool.id)] = {"id": str(pool.id), "name": pool.name, "observation": pool.observation,
             "probe_enabled": pool.probe_enabled,
-            "probe_supported": "storage" in target.connection.worker.supported_extensions,
+            "probe_supported": probe_supported(target),
             "next_probe_at": pool.next_probe_at.isoformat() if pool.probe_enabled else None,
             "health_policy": pool.health_policy, "health_state": pool.health_state,
             "recovery_since": pool.recovery_since.isoformat() if pool.recovery_since else None, "health": health,
@@ -271,6 +379,8 @@ def set_probe_enabled(user, pool, enabled):
         raise BrokerError("INVALID_STORAGE", "Choose whether read-only capacity checks are enabled.")
     if not user.is_superuser and pool.owner_id != user.id:
         raise BrokerError("STORAGE_TARGET_DENIED", "Only the location owner can enable capacity checks.", 403)
+    if enabled and StorageTargetRegistration.objects.filter(target__pool=pool).exists():
+        raise BrokerError("STORAGE_PROBE_UNSUPPORTED", "This personal directory is available for advisory planning. Capacity probes require a separately published protected root and supported storage worker.", 409)
     with transaction.atomic():
         pool = StorageCapacityPool.objects.select_for_update().get(id=pool.id)
         pool.probe_enabled, pool.next_probe_at = enabled, timezone.now()
@@ -298,7 +408,7 @@ def lease_work(worker):
             connection__worker=worker, connection__enabled=True, enabled=True, probe_enabled=True,
             next_probe_at__lte=now).order_by("next_probe_at", "id")
         for pool in pools[:30]:
-            target = next((item for item in pool.storagetarget_set.select_related("pool", "connection__worker").order_by("id")
+            target = next((item for item in pool.storagetarget_set.filter(personal_registration__isnull=True).select_related("pool", "connection__worker").order_by("id")
                            if item.root == pool.probe_root and target_current(item)), None)
             if target is None:
                 pool.next_probe_at = now + timedelta(seconds=300)

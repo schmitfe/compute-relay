@@ -1,0 +1,16 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/storage/targets/">Storage locations</a> / {{ registration.name }}</p>
+<h1>Confirm storage directory on {{ registration.connection.name }}</h1>
+<p>Location: <strong>{{ registration.name }}</strong>; requested directory: <code>{{ registration.root }}</code>.</p>
+{% if resolved_root %}<p>Confirmed directory on the cluster: <strong><code>{{ resolved_root }}</code></strong>.</p>{% if resolved_root != registration.root %}<p class="notice">The cluster resolved the parent directory to this canonical path. Saving will use the confirmed directory above; the original request remains in its record.</p>{% endif %}{% endif %}
+{% if registration.target_id %}<p class="notice">This storage location is saved.</p><p><a href="/storage/targets/">View storage locations</a></p>
+{% elif expired %}<p class="error">This directory request expired. Start a new check; nothing is registered automatically.</p>
+{% elif waiting %}<p role="status">Waiting for your personal connector to check or create this directory. Keep its terminal running. This request expires after five minutes.</p><script>setTimeout(() => location.reload(), 1500);</script>
+{% elif task.state == "failed" %}<p class="error">The directory could not be confirmed: {{ task.error_code }}. Check that its parent exists, that the final name is an ordinary directory and that your HPC account has write access.</p>
+{% elif task.state == "succeeded" and resolved_root %}<p class="notice">{% if task.result.created %}The connector created the final directory component.{% else %}The directory already existed. Its contents and permissions were preserved.{% endif %} Review the confirmed directory above, then save this storage location.</p>
+<p>Capacity, filesystem identity and native quotas remain unknown. This registration does not move files, install software or change job staging.</p>
+<form method="post">{% csrf_token %}<input type="hidden" name="confirmed_root" value="{{ resolved_root }}"><button>Save storage location</button></form>
+{% elif task.state == "succeeded" %}<p class="error">The worker's directory result could not be validated against this request. Start a new check; no storage location has been saved.</p>
+{% endif %}
+{% if not registration.target_id %}<p><a href="{{ retry_url }}">Change the selection or start a new check</a></p>{% endif %}
+{% endblock %}

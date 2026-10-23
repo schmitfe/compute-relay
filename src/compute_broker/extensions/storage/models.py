@@ -49,6 +49,22 @@ class StorageTarget(models.Model):
         return self.name
 
 
+class StorageTargetRegistration(models.Model):
+    """Human-selected root and its exact, owner-requested connector operation."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey("broker.User", on_delete=models.PROTECT)
+    connection = models.ForeignKey("broker.Connection", on_delete=models.PROTECT)
+    task = models.OneToOneField("broker.ConnectorTask", on_delete=models.PROTECT)
+    target = models.OneToOneField(StorageTarget, on_delete=models.PROTECT, null=True,
+                                related_name="personal_registration")
+    name = models.CharField(max_length=100)
+    root = models.CharField(max_length=240)
+    roles = models.JSONField(default=list)
+    profile_revision_sha256 = models.CharField(max_length=64)
+    connection_revision_sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now)
+
+
 class ProjectStorageBudget(models.Model):
     project = models.OneToOneField("broker.Project", primary_key=True, on_delete=models.PROTECT)
     bytes_budget = models.BigIntegerField(null=True, blank=True)

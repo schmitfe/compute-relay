@@ -15,11 +15,35 @@ worker; they do not measure a project's actual retained usage.
 
 ## Human configuration
 
-Open `/storage/targets/` to enroll locations. A human owner chooses an owned
-cluster and one exact root already advertised by its current protected worker
-profile. There is no arbitrary-path or URL input. Existing `remote_root_prefixes`
-are supported as conservative compatibility choices with unknown visibility and
-quota capabilities. Root selection does not expand SSH staging authorization.
+Open `/storage/targets/` to enroll locations. For a personal connector, the cluster
+owner can enter a dedicated directory or use **Browse directories** to inspect
+directory names and access metadata through their running worker. Browsing is
+requested by human POSTs, and GET pages only display task status. Form selections
+are retained when returning from the browser.
+
+Select **Check/create directory** to queue one fixed connector operation. If the
+final component is missing, the worker creates that one private directory under
+an existing parent; missing parents, existing files and final symbolic links are
+rejected. Existing directories keep their contents and permissions. The check
+expires after five minutes and does not register the location automatically.
+Review its result and select **Save storage location**. The review shows both the
+requested path and the worker's canonical directory when a parent alias resolves
+elsewhere. Saving explicitly confirms that displayed canonical path. Registration binds the
+owner, exact task and returned writable directory, worker profile fingerprint and
+connection revision. Repeating a completed form does not create another task or
+location. Replacing a worker or changing its execution configuration requires a current binding.
+
+Personal directories support advisory project budgets and role selection while
+free capacity, filesystem identity and native quota remain unknown. Read-only
+capacity probes are unavailable for this provenance until the protected worker
+separately publishes a supported root. This configuration neither expands job
+staging authorization nor redirects existing jobs, and introduces no agent path,
+URL, browsing, creation or filesystem-write API.
+
+Managed workers retain the existing path: a human selects one exact root already
+advertised by the protected worker profile. Existing `remote_root_prefixes` are
+supported as conservative compatibility choices with unknown visibility and
+quota capabilities.
 
 The plugin also validates an optional `storage_roots` metadata contract for a
 future generic worker metadata extension: each entry has an `alias`, canonical
@@ -43,10 +67,11 @@ location is usable only by its owner's projects on the same cluster. Key cluster
 restrictions narrow the API inventory and dry-run access further.
 
 Capacity checks are **off by default**, including for existing targets after
-migration. An owner can explicitly enable them while enrolling a location or
+migration. For supported protected roots, an owner can explicitly enable them while enrolling a location or
 using its enable/pause button at `/storage/targets/`. Pausing invalidates in-flight
-leases. Saving project settings does not trigger checks. No storage operation
-scans, creates or changes a remote file. Manual usage values are labeled
+leases. Saving project settings does not trigger checks. Probes do not scan,
+create or change remote files. The separate human directory-creation step above
+creates only its requested final directory. Manual usage values are labeled
 `human_estimate`, with their update time; they are not filesystem measurements.
 
 ## Agent API

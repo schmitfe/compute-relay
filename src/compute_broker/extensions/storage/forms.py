@@ -1,14 +1,14 @@
-"""Human forms select approved identifiers; no arbitrary remote path field."""
+"""Human-only protected roots or personal-connector directory selections."""
 
 from decimal import Decimal, ROUND_FLOOR
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from django import forms
 
 from compute_broker.control.forms import owned_connections
 from compute_broker.control.models import Connection
 from .models import StorageCapacityPool
-from .planning import ROLES, SAFE_INTEGER
+from .planning import ROLES, SAFE_INTEGER, StoragePlanningError, canonical_root
 from .services import protected_roots, selected_targets, target_current
 
 GIB = Decimal(1024**3)
@@ -17,7 +17,13 @@ GIB = Decimal(1024**3)
 class StorageTargetForm(forms.Form):
     name = forms.CharField(max_length=100, label="Location name")
     connection = forms.ModelChoiceField(queryset=Connection.objects.none(), label="Cluster")
-    root_alias = forms.ChoiceField(choices=[], label="Operator-approved directory")
+    root_alias = forms.ChoiceField(choices=[], required=False, label="Operator-approved directory")
+    root_path = forms.CharField(max_length=240, required=False, label="Directory on this cluster",
+        help_text="Choose a writable dedicated directory. The next step checks it and creates only its final component if missing; its parent must already exist. No existing contents or permissions are changed.")
+    roles = forms.MultipleChoiceField(choices=[(role, role.title()) for role in ROLES], initial=list(ROLES),
+        required=False, widget=forms.CheckboxSelectMultiple, label="Planning uses")
+    connection_revision = forms.CharField(required=False, widget=forms.HiddenInput)
+    submission_id = forms.UUIDField(initial=uuid4, required=False, widget=forms.HiddenInput)
     pool = forms.ModelChoiceField(queryset=StorageCapacityPool.objects.none(), required=False, label="Shared capacity pool",
         help_text="Leave blank for a new pool. Group locations only when they use the same backing filesystem; identity remains unverified without a protected observation.")
     enable_probes = forms.BooleanField(required=False, initial=False, label="Enable read-only capacity checks",
@@ -28,16 +34,45 @@ class StorageTargetForm(forms.Form):
         self.fields["connection"].queryset = owned_connections(user).filter(enabled=True)
         value = self.data.get("connection") if self.is_bound else self.initial.get("connection")
         self.selected_connection = None
+        self.personal = False
         try:
             self.selected_connection = self.fields["connection"].queryset.select_related("worker").filter(id=UUID(str(getattr(value, "id", value)))).first()
         except (ValueError, TypeError, AttributeError):
             pass
         if self.selected_connection:
+            from compute_broker.control.connector_setup import personal
+            self.personal = personal(self.selected_connection)
             roots = protected_roots(self.selected_connection)
             self.fields["root_alias"].choices = [(item["alias"], f"{item['alias']} — {item['path']}") for item in roots]
             self.fields["pool"].queryset = StorageCapacityPool.objects.filter(owner_id=self.selected_connection.owner_id,
                 connection=self.selected_connection, enabled=True)
-        self.fields["root_alias"].help_text = "Only current roots advertised by this cluster's protected worker are available. No directory is scanned or created."
+            self.initial.setdefault("connection_revision", self.selected_connection.revision_sha256)
+        if self.personal:
+            self.fields["root_alias"].widget = forms.HiddenInput()
+            self.fields["pool"].widget = forms.HiddenInput()
+            self.fields["enable_probes"].disabled = True
+            self.fields["enable_probes"].help_text = "Unavailable for a personal directory selection. Advisory project estimates work without probes; filesystem identity, free capacity and native quota remain unknown."
+        else:
+            for field in ("root_path", "roles", "connection_revision", "submission_id"):
+                self.fields[field].widget = forms.HiddenInput()
+        self.fields["root_alias"].help_text = "" if self.personal else "Only current roots advertised by this cluster's protected worker are available. No directory is scanned or created."
+
+    def clean(self):
+        data = super().clean()
+        if self.personal:
+            try:
+                canonical_root(data.get("root_path"))
+            except StoragePlanningError:
+                self.add_error("root_path", "Choose a canonical absolute dedicated directory using letters, digits, dots, underscores, slashes or hyphens.")
+            if not data.get("roles"):
+                self.add_error("roles", "Choose at least one planning use.")
+            if data.get("pool"):
+                self.add_error("pool", "Personal directories use a separate unverified capacity pool.")
+            if not data.get("submission_id"):
+                self.add_error("submission_id", "Reload this form before continuing.")
+        elif self.selected_connection and not data.get("root_alias"):
+            self.add_error("root_alias", "Choose an operator-approved directory.")
+        return data
 
 
 class ProjectStorageForm(forms.Form):
