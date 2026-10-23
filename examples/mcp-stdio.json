@@ -2,8 +2,7 @@
   "command": "/ABSOLUTE/PATH/TO/.venv/bin/python",
   "args": ["-m", "compute_broker.mcp"],
   "env": {
-    "BROKER_CONTROL_URL": "http://127.0.0.1:8765",
-    "BROKER_PROJECT_ID": "REPLACE_WITH_PROJECT_UUID",
+    "BROKER_CONTROL_URL": "http://127.0.0.1:8768",
     "BROKER_PROJECT_TOKEN_FILE": "/ABSOLUTE/PATH/TO/agent-project-token"
   }
 }

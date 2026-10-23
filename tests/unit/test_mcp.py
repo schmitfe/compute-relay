@@ -1,9 +1,9 @@
 import asyncio
 import base64
-import sys
 import unittest
-from pathlib import Path
 from uuid import uuid4
+
+from mcp.server.fastmcp.exceptions import ToolError
 
 from compute_broker.mcp.facade import ProjectFacade, create_server
 
@@ -12,9 +12,12 @@ class ClientSpy:
     def __init__(self):
         self.calls = []
         self.job_id = str(uuid4())
+        self.project_id = str(uuid4())
 
     def request(self, method, path, body=None, **kwargs):
         self.calls.append((method, path, body, kwargs))
+        if path == "/api/v1/context":
+            return {"schema_version": "1.0", "project": {"id": self.project_id, "name": "synthetic"}}
         return {"id": self.job_id}
 
     def get_bytes(self, path, limit):
@@ -25,39 +28,57 @@ class ClientSpy:
 class FacadeTests(unittest.TestCase):
     def setUp(self):
         self.client = ClientSpy()
-        self.project_id = str(uuid4())
+        self.project_id = self.client.project_id
         self.facade = ProjectFacade(self.client, self.project_id)
 
     def test_official_sdk_exposes_only_project_tools(self):
         server = create_server(self.facade)
         tools = asyncio.run(server.list_tools())
         names = {tool.name for tool in tools}
-        self.assertEqual(names, {"get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
+        self.assertEqual(names, {"get_project_context", "get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
                                  "prepare_job", "revise_job", "request_execution", "get_job", "get_job_logs",
                                  "list_job_artifacts", "get_job_artifact", "cancel_job_attempt"})
         self.assertTrue(next(t for t in tools if t.name == "get_job").annotations.readOnlyHint)
 
-    def test_official_sdk_stdio_initialization_and_tools(self):
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
+    def test_project_is_resolved_from_authenticated_context(self):
+        facade = ProjectFacade.from_credential(self.client)
+        self.assertEqual(facade.project_id, self.project_id)
+        self.assertEqual(self.client.calls, [("GET", "/api/v1/context", None, {})])
 
-        async def session():
-            parameters = StdioServerParameters(
-                command=sys.executable,
-                args=["-c", "from compute_broker.mcp.facade import main; main()"],
-                env={"PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
-                     "BROKER_PROJECT_ID": self.project_id,
-                     "BROKER_PROJECT_TOKEN": "synthetic-test-token",
-                     "BROKER_CONTROL_URL": "http://127.0.0.1:8765"},
-            )
-            async with stdio_client(parameters) as (read, write):
-                async with ClientSession(read, write) as client:
-                    await client.initialize()
-                    result = await client.list_tools()
-                    self.assertEqual(len(result.tools), 12)
-                    self.assertNotIn("approve_job", {tool.name for tool in result.tools})
+    def test_legacy_project_constraint_must_match_authenticated_project(self):
+        self.assertEqual(ProjectFacade.from_credential(self.client, expected_project_id=self.project_id).project_id,
+                         self.project_id)
+        with self.assertRaises(ValueError):
+            ProjectFacade.from_credential(self.client, expected_project_id=str(uuid4()))
+        with self.assertRaises(ValueError):
+            ProjectFacade.from_credential(self.client, expected_project_id="not-a-uuid")
+        self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
 
-        asyncio.run(session())
+    def test_context_is_refreshed_and_cannot_rebind_the_adapter(self):
+        self.assertEqual(self.facade.get_project_context()["project"]["id"], self.project_id)
+        self.client.project_id = str(uuid4())
+        with self.assertRaises(ValueError):
+            self.facade.get_project_context()
+
+    def test_prepare_and_revision_insert_project_without_mutating_inputs(self):
+        request = {"name": "synthetic"}
+        self.facade.prepare_job(request, "create")
+        self.facade.revise_job(self.client.job_id, request, "revision")
+        self.assertEqual(request, {"name": "synthetic"})
+        for index in (0, 2):
+            self.assertEqual(self.client.calls[index][2], {**request, "project_id": self.project_id})
+
+    def test_workflow_node_requests_infer_project_and_reject_other_projects(self):
+        server = create_server(ProjectFacade(self.client, self.project_id, enabled_extensions=["workflows"]))
+        document = {"name": "synthetic", "nodes": [{"key": "first", "request": {"name": "first"}}]}
+        asyncio.run(server.call_tool("prepare_workflow", {"document": document}))
+        self.assertNotIn("project_id", document["nodes"][0]["request"])
+        self.assertEqual(self.client.calls[-1][2]["nodes"][0]["request"]["project_id"], self.project_id)
+        count = len(self.client.calls)
+        document["nodes"][0]["request"]["project_id"] = str(uuid4())
+        with self.assertRaisesRegex(ToolError, "API key's project"):
+            asyncio.run(server.call_tool("prepare_workflow", {"document": document}))
+        self.assertEqual(len(self.client.calls), count)
 
     def test_project_override_is_rejected_before_http(self):
         with self.assertRaises(ValueError):

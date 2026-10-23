@@ -45,6 +45,12 @@ Upload object references are project-owned. Reusing a digest from another projec
 
 A human decision binds an execution-request UUID as well as the immutable revision and digest. One approval permits one attempt in version one. Authorization atomically consumes it together with reservation/outbox creation. Repeating a completed idempotent execution request returns its existing result; a new execution request needs a fresh human approval or fresh budgeted admission. A previous decision is never a reusable unlimited permission for the package.
 
+### Current authenticated project discovery
+
+`GET /api/v1/context` returns `schema_version: "1.0"`, `project` (`id`, `name`) and `credential` (`id`, `scopes`, `execution_mode`). It requires a valid project bearer key and current issuing-user eligibility/project membership, but no additional job scope. Human browser sessions and worker keys do not authorize it. It returns only the key's own project and no token, token hash, SSH settings or private credential references; success responses use `Cache-Control: no-store` and vary on `Authorization`.
+
+The stdio adapter uses this endpoint before starting MCP and derives routing identity from the verified key. `get_project_context` refreshes the same metadata. Job preparation/revision and workflow node requests may omit `project_id` through MCP; the adapter inserts it before calling the existing REST API. Direct REST job requests still require the canonical project ID, and all REST endpoints continue to enforce their own scopes/project checks. Optional legacy `BROKER_PROJECT_ID` must match the discovered identity or adapter startup fails.
+
 ## Idempotency and errors
 
 Require `Idempotency-Key` on job creation, execution requests, decisions, grant changes and cancellation. Scope it to project and operation (human/admin operations also bind actor as appropriate), and retain it for at least the operation lifetime. The key stores the canonical request digest and durable result. Reusing it with different bytes returns `409 IDEMPOTENCY_CONFLICT`. An HTTP retry and a new execution attempt are different actions.
@@ -82,6 +88,7 @@ Local stdio MCP is a facade under the agent account calling the authenticated se
 
 | Tool | Scope | Behavior |
 | --- | --- | --- |
+| `get_project_context` | Valid project key and current membership | The key's project, scopes and execution-mode preference; no secret values |
 | `list_compute_targets` | `jobs:read` | Assigned targets, capabilities and freshness |
 | `get_project_allowance` | `jobs:read` | Shared balance, reservations and policy |
 | `upload_job_file` | Upload scope | Bounded content upload; local bridge may read only configured local roots |

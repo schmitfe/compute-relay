@@ -150,7 +150,7 @@ def control_probe():
             finally:
                 connections.close_all()
 
-    facade = ProjectFacade(HttpBridge((demo_dir / "agent-token").read_text()), project_id)
+    facade = ProjectFacade.from_credential(HttpBridge((demo_dir / "agent-token").read_text()))
     server = create_server(facade)
 
     def tool(name, arguments=None):
@@ -163,7 +163,7 @@ def control_probe():
     assert tool("get_broker_capabilities")["enabled_extensions"] == []
     uploaded = tool("upload_job_file", {"path": "main.py", "content_base64": base64.b64encode(
         b"raise RuntimeError('simulation must never execute uploaded source')\n").decode()})
-    request = {"schema_version": "1.0", "project_id": project_id, "connection_id": demo["connection_id"],
+    request = {"schema_version": "1.0", "connection_id": demo["connection_id"],
                "name": "core-only-acceptance", "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
                "environment": {"id": demo["environment_id"], "revision_sha256": demo["environment_revision_sha256"]},
                "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},

@@ -22,13 +22,14 @@ def bearer(request):
     return value[7:]
 
 
-def project_credential(request, scope):
+def project_credential(request, scope=None):
     credential = ProjectCredential.objects.select_related("project").filter(token_hash=token_hash(bearer(request)), revoked=False, expires_at__gt=timezone.now()).first()
     if credential is None:
         raise BrokerError("AUTH_REQUIRED", "Credential is invalid, revoked or expired.", 401)
-    if scope not in credential.scopes:
+    if scope is not None and scope not in credential.scopes:
         raise BrokerError("SCOPE_DENIED", "Credential does not permit this operation.", 403)
-    require_credential_actor(credential, scope)
+    # Identity discovery needs current project membership, not a job scope.
+    require_credential_actor(credential, scope if scope is not None else "jobs:read")
     return credential
 
 

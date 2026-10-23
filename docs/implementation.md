@@ -8,13 +8,21 @@ The repository now implements a development alpha spanning control, immutable re
 
 ## Prioritized follow-up: simpler agent onboarding
 
-Recorded on 21 October 2026. **Pending implementation.** A new session should
+Recorded on 21 October 2026. **ONB-1 implemented on 23 October 2026; ONB-2 and
+the remaining ONB-3 context work are pending.** A new session should
 open a configured science project and discover its authorized compute context
 without receiving a project UUID, credential contents, or a manual tool list
 in the prompt. These changes apply to core onboarding and must not require
 storage, environment-build, workflow, or transfer extensions.
 
 ### ONB-1 — Infer the project from the API key
+
+Implemented through authenticated `GET /api/v1/context`, startup resolution,
+internal job/workflow identity insertion and UUID-free client examples and kit
+generation. The read-only `get_project_context` tool exposes basic project/key
+metadata. Legacy ID assertions fail closed on mismatch. A real stdio test uses
+only the endpoint and token-file reference; synthetic execution tests verify
+the same inference without optional extensions. No database migration is needed.
 
 - Remove mandatory `BROKER_PROJECT_ID` from MCP launch configuration. A project
   key already identifies exactly one project through server-side authentication.

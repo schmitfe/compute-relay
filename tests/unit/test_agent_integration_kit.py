@@ -28,8 +28,8 @@ def science(monkeypatch):
 
 
 def generated(tmp_path, case="00"):
-    return kit.create(case, tmp_path / "fresh-project", "http://127.0.0.1:8768", str(uuid4()),
-                      str(tmp_path / "project-token-DO-NOT-READ"), sys.executable)
+    return kit.create(case, tmp_path / "fresh-project", "http://127.0.0.1:8768",
+                      project_token_file=str(tmp_path / "project-token-DO-NOT-READ"), python=sys.executable)
 
 
 def test_generator_references_only_project_token_path_without_reading_it(tmp_path, monkeypatch):
@@ -49,6 +49,8 @@ def test_generator_references_only_project_token_path_without_reading_it(tmp_pat
     assert codex["args"] == ["-m", "compute_broker.mcp"]
     assert claude["type"] == "stdio" and claude["env"] == codex["env"]
     assert codex["env"]["BROKER_PROJECT_TOKEN_FILE"] == str(token)
+    assert "BROKER_PROJECT_ID" not in codex["env"]
+    assert json.loads((destination / "project.json").read_text())["project_identity_source"] == "api_key"
     for path in destination.rglob("*"):
         assert stat.S_IMODE(path.stat().st_mode) == (0o700 if path.is_dir() else 0o600)
         if path.is_file():
@@ -68,6 +70,27 @@ def test_generator_refuses_overwrite_and_outside_destination(tmp_path):
     symlink.symlink_to(ROOT / "examples", target_is_directory=True)
     with pytest.raises(ValueError):
         kit._destination(symlink / "should-not-exist")
+
+
+def test_create_cli_needs_no_project_id_and_stays_offline(tmp_path):
+    destination = tmp_path / "cli-project"
+    result = subprocess.run([sys.executable, str(ROOT / "tools/agent_integration.py"), "create", "--case", "00",
+        "--destination", str(destination), "--broker-url", "https://offline.invalid",
+        "--project-token-file", str(tmp_path / "does-not-exist.key"), "--python", sys.executable],
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    env = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_broker"]["env"]
+    assert "BROKER_PROJECT_ID" not in env
+    assert env["BROKER_CONTROL_URL"] == "https://offline.invalid"
+
+
+def test_generator_preserves_optional_legacy_identity_assertion(tmp_path):
+    project_id = str(uuid4())
+    destination = kit.create("00", tmp_path / "legacy-project", "http://localhost", project_id,
+                             str(tmp_path / "does-not-exist.key"), sys.executable)
+    env = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_broker"]["env"]
+    assert env["BROKER_PROJECT_ID"] == project_id
+    assert json.loads((destination / "project.json").read_text())["expected_project_id"] == project_id
 
 
 @pytest.mark.parametrize("url", ["https://user:pass@host.invalid", "http://remote.invalid", "https://host.invalid/path", "https://host.invalid/?key=secret", "file:///tmp/x"])

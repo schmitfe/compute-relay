@@ -85,6 +85,18 @@ def health(request):
 
 
 @boundary("GET")
+def project_context(request):
+    credential = project_credential(request)
+    response = JsonResponse({"schema_version": "1.0",
+        "project": {"id": str(credential.project_id), "name": credential.project.name},
+        "credential": {"id": str(credential.id), "scopes": credential.scopes,
+                       "execution_mode": credential.execution_mode}})
+    response["Cache-Control"] = "no-store"
+    response["Vary"] = "Authorization"
+    return response
+
+
+@boundary("GET")
 def connections(request):
     credential, project = scope(request, "jobs:read")
     targets = [c for c in project.connections.filter(enabled=True) if connection_allowed(credential, c.id)]

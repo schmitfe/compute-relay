@@ -12,13 +12,14 @@ These are reproducible tasks for a new agent session, not evidence that a client
 
 Extensions are disabled by default. `case.json` declares required extensions, core tools, optional profiles and resource bounds. Discover actual tools/capabilities first. Missing extension or scope means **blocked**, not permission to enable server extensions or broaden a key. Environment building needs the human-enabled `environments` extension. The current alpha can build an empty stdlib venv or a small verified wheel closure; its 512 KiB core upload limit cannot stage the 16.6 MB NumPy wheel, so a managed NumPy build is blocked until large-wheel transport exists. Use a preinstalled approved NumPy environment for case 04. The workflow extension orchestrates ordinary native jobs through retained artifacts; native Slurm arrays and scheduler dependency directives are not implemented. Ordinary output retrieval is core. The manual artifact-relay fallback for case 03 does not pass workflow-extension acceptance.
 
+The API key identifies the broker project. Neither the generated MCP configuration nor job requests need a project UUID; the adapter resolves it from the authenticated broker at startup. The optional legacy `--project-id` argument adds a checked identity assertion and is unnecessary for new setups. The generator itself stays offline and never opens the referenced key file.
+
 From the repository, create one fresh private project:
 
 ```sh
 python tools/agent_integration.py create --case 00 \
   --destination /tmp/broker-case00-codex \
   --broker-url http://127.0.0.1:8768 \
-  --project-id YOUR_PROJECT_UUID \
   --project-token-file /ABSOLUTE/PROJECT_TOKEN_FILE \
   --python /ABSOLUTE/BROKER_VENV/bin/python
 ```

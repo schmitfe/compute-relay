@@ -21,6 +21,26 @@ class ProjectFacade:
         from compute_broker.extensions import configured_names
         self.enabled_extensions = configured_names(",".join(enabled_extensions))
 
+    @classmethod
+    def from_credential(cls, client, *, expected_project_id=None, enabled_extensions=()):
+        context = client.request("GET", "/api/v1/context")
+        project_id = _uuid(context["project"]["id"])
+        if expected_project_id is not None and _uuid(expected_project_id) != project_id:
+            raise ValueError("configured project does not match the API key's project")
+        return cls(client, project_id, enabled_extensions)
+
+    def get_project_context(self):
+        context = self.client.request("GET", "/api/v1/context")
+        if _uuid(context["project"]["id"]) != self.project_id:
+            raise ValueError("API key project changed; reconnect the MCP adapter")
+        return context
+
+    def project_request(self, request: dict):
+        """Fill internal routing identity without changing the caller's document."""
+        if "project_id" in request and request["project_id"] != self.project_id:
+            raise ValueError("job must belong to the API key's project")
+        return {**request, "project_id": self.project_id}
+
     def get_broker_capabilities(self):
         return self.client.request("GET", "/api/v1/capabilities")
 
@@ -45,8 +65,7 @@ class ProjectFacade:
                             {"path": path, "content_base64": content_base64})
 
     def prepare_job(self, request: dict, idempotency_key: str | None = None):
-        if request.get("project_id") != self.project_id:
-            raise ValueError("job must belong to the configured project")
+        request = self.project_request(request)
         key = idempotency_key or str(uuid4())
         created = self._mutate("/api/v1/jobs", request, key)
         job_id = _uuid(created["id"])
@@ -56,8 +75,7 @@ class ProjectFacade:
         return self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/execution-requests", {}, idempotency_key)
 
     def revise_job(self, job_id: str, request: dict, idempotency_key: str | None = None):
-        if request.get("project_id") != self.project_id:
-            raise ValueError("job must belong to the configured project")
+        request = self.project_request(request)
         key = idempotency_key or str(uuid4())
         created = self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/revisions", request, key)
         return self._mutate(f"/api/v1/jobs/{_uuid(created['id'])}/prepare", {}, key + ":prepare")
@@ -98,6 +116,11 @@ def create_server(facade: ProjectFacade):
                             idempotentHint=False, openWorldHint=True)
 
     @server.tool(annotations=readonly)
+    def get_project_context() -> dict:
+        """Read the API key's project, scopes and execution-mode preference. Requires no project ID; never returns a secret."""
+        return facade.get_project_context()
+
+    @server.tool(annotations=readonly)
     def get_broker_capabilities() -> dict:
         """Read server-enabled extensions and this key's scopes before planning work."""
         return facade.get_broker_capabilities()
@@ -119,12 +142,12 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=write)
     def prepare_job(request: dict, idempotency_key: str | None = None) -> dict:
-        """Prepare a job for review. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). Preparation never executes code."""
+        """Prepare a job for review. Omit project_id; the API key selects the project. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). Preparation never executes code."""
         return facade.prepare_job(request, idempotency_key)
 
     @server.tool(annotations=write)
     def revise_job(job_id: str, request: dict, idempotency_key: str | None = None) -> dict:
-        """Prepare a linked revision after review feedback; changes need a new execution request."""
+        """Prepare a linked revision after review feedback. Omit project_id; changes need a new execution request."""
         return facade.revise_job(job_id, request, idempotency_key)
 
     @server.tool(annotations=write)
@@ -173,5 +196,6 @@ def main():
         allow_insecure_http=os.environ.get("BROKER_ALLOW_INSECURE_HTTP") == "1",
     )
     from compute_broker.extensions import configured_names
-    facade = ProjectFacade(client, os.environ["BROKER_PROJECT_ID"], configured_names())
+    facade = ProjectFacade.from_credential(client, expected_project_id=os.environ.get("BROKER_PROJECT_ID"),
+                                          enabled_extensions=configured_names())
     create_server(facade).run(transport="stdio")

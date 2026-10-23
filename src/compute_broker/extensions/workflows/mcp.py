@@ -8,7 +8,9 @@ def register(server, facade):
 
     @server.tool(annotations=write)
     def prepare_workflow(document: dict, idempotency_key: str | None = None) -> dict:
-        """Seal at most 32 job nodes and success-only artifact edges; executes nothing."""
+        """Seal at most 32 job nodes and success-only artifact edges. Omit project_id in node requests; executes nothing."""
+        document = {**document, "nodes": [{**node, "request": facade.project_request(node["request"])}
+                                          for node in document["nodes"]]}
         return facade._mutate(f"/api/v1/projects/{facade.project_id}/workflow-revisions", document, idempotency_key)
 
     @server.tool(annotations=write)

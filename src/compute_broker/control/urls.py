@@ -42,6 +42,7 @@ urlpatterns = [
     path("clusters/<uuid:connection_id>/environments/new/", management.environment_new),
     path("environments/", management.environments), path("environments/new/", management.environment_new),
     path("api/v1/connections", views.connections),
+    path("api/v1/context", views.project_context),
     path("api/v1/capabilities", views.capabilities),
     path("api/v1/projects/<uuid:project_id>/allowance", views.allowance),
     path("api/v1/projects/<uuid:project_id>/objects", views.objects),
