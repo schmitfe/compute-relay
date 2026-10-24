@@ -1,8 +1,10 @@
 """First-party local subprocess fixtures; no network, keys or real Slurm jobs."""
 
 import asyncio
+import errno
 import json
 import os
+from pathlib import Path
 import sys
 
 import pytest
@@ -15,6 +17,47 @@ def transport(timeout=10, **ssh):
     return AsyncOpenSSHTransport({"command_timeout_seconds": timeout, "ssh": {
         "host": "not-contacted", "user": "broker", "known_hosts": "/protected/known_hosts", **ssh,
     }})
+
+
+def assert_process_stopped(pid):
+    # Linux may reap the process while /proc is being read. A single read
+    # handles both forms of disappearance without hiding other I/O failures.
+    try:
+        status = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except (FileNotFoundError, ProcessLookupError):
+        return
+    assert status.split()[2] == "Z"
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError(errno.ENOENT, "reaped"), ProcessLookupError(errno.ESRCH, "reaped")])
+def test_process_stop_check_accepts_reaping_during_the_single_read(monkeypatch, error):
+    reads = []
+    def read(path, **kwargs):
+        reads.append(path)
+        raise error
+    monkeypatch.setattr(Path, "read_text", read)
+    assert_process_stopped(123)
+    assert reads == [Path("/proc/123/stat")]
+
+
+@pytest.mark.parametrize("state", ["Z", "R", "S", "D"])
+def test_process_stop_check_accepts_zombie_but_rejects_running_process(monkeypatch, state):
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: f"123 (python) {state} 1 2 3")
+    if state == "Z":
+        assert_process_stopped(123)
+    else:
+        with pytest.raises(AssertionError):
+            assert_process_stopped(123)
+
+
+@pytest.mark.parametrize("error", [PermissionError(errno.EACCES, "denied"), OSError(errno.EIO, "failed")])
+def test_process_stop_check_does_not_hide_unrelated_read_errors(monkeypatch, error):
+    def read(*_args, **_kwargs):
+        raise error
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(type(error)) as raised:
+        assert_process_stopped(123)
+    assert raised.value is error
 
 
 def test_async_streaming_is_bidirectional_and_does_not_block_the_event_loop():
@@ -123,9 +166,7 @@ def test_cancellation_stops_pipe_inheriting_descendants(tmp_path):
         # A killed descendant may briefly remain an orphan zombie until init
         # reaps it. It must no longer run or hold this operation's pipes open.
         pid = int(child_pid.read_text())
-        path = f"/proc/{pid}/stat"
-        if os.path.exists(path):
-            assert open(path).read().split()[2] == "Z"
+        assert_process_stopped(pid)
     asyncio.run(scenario())
 
 

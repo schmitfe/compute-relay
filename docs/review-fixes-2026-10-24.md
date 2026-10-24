@@ -85,8 +85,8 @@ remains the separate HTTP approval and ledger-settlement check.
 
 Recorded local acceptance on 2026-10-24:
 
-- The full review-fix suite passed **2,057 tests**, with **1 skipped** and
-  **67 subtests passed**, using Python 3.13.
+- The full integrated suite passed **2,065 tests** on both Python **3.12.3** and
+  **3.13.9**, each with **1 skipped** and **67 subtests passed**.
 - Four contract schemas and four examples validated offline. Bundled migrations
   matched the models without further generated changes.
 - A clean wheel and source distribution passed completeness/dependency checks
@@ -105,6 +105,17 @@ Recorded local acceptance on 2026-10-24:
 
 The optional Slurm CI workflow now includes the upgrade overlay. Local fixture
 containers and their volumes were removed after acceptance.
+
+## Python 3.12 CI cancellation-test correction
+
+The earlier CI failure checked that a descendant's `/proc/<pid>/stat` existed
+before opening it. Linux could reap the stopped process between those actions,
+raising `ProcessLookupError` even though cancellation succeeded. The test now
+reads once and accepts only a missing/reaped process or zombie state. A running
+process still fails, and permission or unrelated I/O failures remain visible.
+Eight deterministic cases cover those alternatives in
+[`test_async_transport.py`](../tests/ssh/test_async_transport.py). Production
+transport behavior is unchanged by this test correction.
 
 The local same-account and remote same-UID limitations remain unchanged. These
 fixes do not provide host-level secret isolation, hostile workload containment,
