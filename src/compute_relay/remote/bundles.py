@@ -72,7 +72,9 @@ def _link_component(name: str, source: str) -> LinkedComponent:
         if not isinstance(node, ast.ImportFrom) or not node.level:
             continue
         dependency = (node.module or "") + ".py"
+        trailing = lines[node.end_lineno - 1][node.end_col_offset:].strip()
         if (node not in tree.body or node.level != 1 or dependency not in _ALLOWED_COMPONENTS
+                or node.col_offset or trailing and not trailing.startswith("#")
                 or any(alias.asname or alias.name == "*" for alias in node.names)):
             raise ValueError(f"Unsupported component import in {name}")
         members = tuple(alias.name for alias in node.names)

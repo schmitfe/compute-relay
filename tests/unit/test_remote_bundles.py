@@ -85,6 +85,8 @@ def test_missing_components_fail_during_assembly(kind, missing, monkeypatch):
     "from .jobs import nonexistent", "from .unknown import submit",
     "from .jobs import *", "from .jobs import submit as renamed",
     "def hidden_import():\n    from .jobs import submit",
+    "from .jobs import submit; another_statement = 1",
+    "another_statement = 1; from .jobs import submit",
 ])
 def test_unresolved_or_unsupported_component_imports_fail_closed(declaration, monkeypatch):
     original = bundles._component
