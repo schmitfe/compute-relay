@@ -12,13 +12,13 @@ from uuid import uuid4
 
 import pytest
 
-from compute_broker.worker import async_client, async_runner, personal_connector as connector, ssh_session
-from compute_broker.worker.client import ControlError
-from compute_broker.worker.enrollment import profile_metadata
+from compute_relay.worker import async_client, async_runner, personal_connector as connector, ssh_session
+from compute_relay.worker.client import ControlError
+from compute_relay.worker.enrollment import profile_metadata
 
 
 def test_empty_key_hint_can_choose_locally_without_changing_download(setup, tmp_path, monkeypatch):
-    from compute_broker.worker import file_picker
+    from compute_relay.worker import file_picker
     setup["local"].pop("identity_file")
     monkeypatch.setattr(file_picker, "choose_identity_file", lambda: "/local/picked-private-key")
     state = connector.prepare(setup, tmp_path, allow_picker=True)
@@ -27,7 +27,7 @@ def test_empty_key_hint_can_choose_locally_without_changing_download(setup, tmp_
 
 
 def test_cancelled_picker_exits_before_login_or_pairing(setup, tmp_path, monkeypatch, sessions, capsys):
-    from compute_broker.worker import file_picker
+    from compute_relay.worker import file_picker
     def cancel():
         raise file_picker.FileSelectionCancelled()
     monkeypatch.setattr(file_picker, "choose_identity_file", cancel)
@@ -40,7 +40,7 @@ def test_cancelled_picker_exits_before_login_or_pairing(setup, tmp_path, monkeyp
 
 
 def test_noninteractive_start_never_opens_requested_picker(setup, tmp_path, monkeypatch, sessions):
-    from compute_broker.worker import file_picker
+    from compute_relay.worker import file_picker
     monkeypatch.setattr(file_picker, "choose_identity_file", lambda: pytest.fail("Noninteractive startup opened a picker"))
     with pytest.raises(SystemExit):
         connector.main(arguments(tmp_path, setup, choose_identity=True))
@@ -48,7 +48,7 @@ def test_noninteractive_start_never_opens_requested_picker(setup, tmp_path, monk
 
 
 def test_writable_parent_is_reported_before_picker_login_or_pairing(setup, tmp_path, monkeypatch, sessions, pairing, capsys):
-    from compute_broker.worker import file_picker
+    from compute_relay.worker import file_picker
     parent = tmp_path / "broker";parent.mkdir(mode=0o775);parent.chmod(0o775)
     args = arguments(tmp_path, setup, choose_identity=True)
     args.state_directory = str(parent / "lab")
@@ -85,15 +85,15 @@ def test_expired_setup_has_actionable_safe_cli_diagnostic(setup, tmp_path, sessi
 
 
 def test_empty_working_directory_is_identified_after_ssh_login(setup, tmp_path, sessions, pairing, served, monkeypatch):
-    from compute_broker.worker import personal_setup
+    from compute_relay.worker import personal_setup
     setup["remote_root"] = ""
     async def root(session):
         assert session.started == [False]
-        return "/home/synthetic/.compute-broker/jobs"
+        return "/home/synthetic/.compute-relay/jobs"
     monkeypatch.setattr(personal_setup, "default_work_root", root)
     connector.run(arguments(tmp_path, setup))
     saved = connector.read_private(tmp_path / "state/state.json")
-    assert saved["connection"]["remote_root"] == "/home/synthetic/.compute-broker/jobs"
+    assert saved["connection"]["remote_root"] == "/home/synthetic/.compute-relay/jobs"
     assert pairing.calls[0][2]["profile"]["remote_root_prefixes"] == [saved["connection"]["remote_root"]]
 
 
@@ -143,8 +143,12 @@ def sessions(monkeypatch):
         def check(self):
             self.checks += 1
             return True
+        async def check_async(self):
+            return self.check()
+        async def close_async(self):
+            self.close()
         def close(self):
-            self.closed += 1
+            self.closed = 1
     monkeypatch.setattr(ssh_session, "SSHSession", Session)
     return created
 
@@ -168,7 +172,7 @@ def pairing(monkeypatch, setup):
 @pytest.fixture
 def served(monkeypatch):
     calls = []
-    async def serve(state, session, directory, *, once, deadline, status=None):
+    async def serve(state, session, directory, *, once, deadline, status=None, extensions=None):
         calls.append((deepcopy(state), session, directory, once, deadline))
     monkeypatch.setattr(connector, "serve", serve)
     return calls
@@ -285,7 +289,7 @@ def test_private_setup_file_cannot_be_public_or_aliased(tmp_path, setup, session
 
 
 def patch_async_runtime(monkeypatch, *, poll):
-    from compute_broker.worker import personal_setup
+    from compute_relay.worker import personal_setup
     closed = []
     class Client:
         def __init__(self, *args, **kwargs):
@@ -330,7 +334,7 @@ def test_revoked_connector_closes_client_and_master(tmp_path, setup, sessions, p
 
 
 def test_revocation_during_startup_is_graceful_and_closes_master(tmp_path, setup, sessions, pairing, monkeypatch, capsys):
-    from compute_broker.worker import personal_setup
+    from compute_relay.worker import personal_setup
     async def poll():
         pytest.fail("A revoked startup reached the core worker")
     closed = patch_async_runtime(monkeypatch, poll=poll)
@@ -346,7 +350,7 @@ def test_revocation_during_startup_is_graceful_and_closes_master(tmp_path, setup
 
 def test_connector_identifies_cluster_before_ssh_and_reports_ready_after_broker_acceptance(
         tmp_path, setup, sessions, pairing, monkeypatch, capsys):
-    from compute_broker.worker import personal_setup
+    from compute_relay.worker import personal_setup
     async def idle():
         return False
     patch_async_runtime(monkeypatch, poll=idle)
@@ -370,6 +374,17 @@ def test_connector_identifies_cluster_before_ssh_and_reports_ready_after_broker_
     assert setup["pairing_token"] not in text and pairing.reply["worker_token"] not in text
     assert setup["local"]["identity_file"] not in text
     assert connector.read_private(tmp_path / "state/state.json")["name"] == setup["name"]
+
+
+def test_personal_connector_uses_explicit_installed_extension_selection(tmp_path, setup, sessions, pairing, monkeypatch):
+    from compute_relay.worker import personal_setup
+    async def idle():
+        return False
+    patch_async_runtime(monkeypatch, poll=idle)
+    received = []
+    monkeypatch.setattr(personal_setup.PersonalWorker, "__init__", lambda self, *a, **kw: received.append(kw["extensions"]))
+    connector.main(arguments(tmp_path, setup, extensions=["storage", "environments", "workflows"]))
+    assert received == [["storage", "environments", "workflows"]]
 
 
 def test_connector_verbose_startup_is_explicit_and_resume_keeps_saved_label(
@@ -459,7 +474,7 @@ def test_many_connectors_authenticate_sequentially_before_serving_and_use_saved_
         assert f"[{args[len(events) - 1].connector_label}] Connecting to" in output
         return original_start(self, interactive)
     monkeypatch.setattr(ssh_session.SSHSession, "start", start)
-    async def serve(state, session, directory, *, once, deadline, status):
+    async def serve(state, session, directory, *, once, deadline, status, extensions=None):
         assert len(sessions) == 2 and all(item.started == [False] for item in sessions)
         events.append("serve")
         assert status.label in {"agmn", "Ramses"}
@@ -490,7 +505,7 @@ def test_many_connectors_serve_concurrently_and_each_reports_readiness(
 
 def test_many_connector_login_failure_closes_previous_sessions_and_releases_locks(
         tmp_path, setup, sessions, pairing, served, monkeypatch, capsys):
-    from compute_broker.transports.openssh import TransportError
+    from compute_relay.transports.openssh import TransportError
     args = many_arguments(tmp_path, setup)
     previous = signal.getsignal(signal.SIGTERM)
     original_start = ssh_session.SSHSession.start
@@ -527,7 +542,7 @@ def test_finished_connector_releases_its_lock_while_another_connector_stays_runn
         tmp_path, setup, sessions, pairing, monkeypatch):
     args = many_arguments(tmp_path, setup)
     checked = []
-    async def serve(state, session, directory, *, once, deadline, status):
+    async def serve(state, session, directory, *, once, deadline, status, extensions=None):
         if status.label == "agmn":
             return
         assert status.label == "Ramses" and sessions[0].closed == 1 and sessions[1].closed == 0

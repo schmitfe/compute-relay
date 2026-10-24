@@ -1,5 +1,0 @@
-{% extends "broker/base.html" %}{% block content %}
-<h1>Sign in to review compute requests</h1><p>Choose your configured account source. Project API keys are for agent requests.</p>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-<form method="post">{% csrf_token %}{% if providers|length > 1 %}<label>Account source <select name="provider">{% for identifier,label in providers %}<option value="{{ identifier }}"{% if identifier == selected_provider %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>{% else %}{% for identifier,label in providers %}<input type="hidden" name="provider" value="{{ identifier }}"><p>{{ label }}</p>{% endfor %}{% endif %}<label>Username <input name="username" autocomplete="username" maxlength="150" required></label><label>Password <input name="password" type="password" autocomplete="current-password" maxlength="4096" required></label><button>Sign in</button></form>
-{% endblock %}

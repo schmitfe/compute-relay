@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from compute_broker.control.cluster_setup import RegistrationForm, owned_registrations
-from compute_broker.control.models import ClusterRegistration, User
+from compute_relay.control.cluster_setup import RegistrationForm, owned_registrations
+from compute_relay.control.models import ClusterRegistration, User
 from test_management import management, human, form_post
 from test_cluster_setup import registration_data
 
@@ -66,19 +66,25 @@ def test_personal_setup_is_primary_with_revision_and_csrf(management):
     assert f'action="/clusters/setup/{setup.id}/connect/"' in body
     assert f'name="setup_revision" value="{setup.revision}"' in body
     assert 'name="csrfmiddlewaretoken"' in body
-    assert body.index("Download personal connector setup") < body.index("Advanced: configure")
-    assert "compute-broker connector --setup" in body
+    assert "Advanced: configure" not in body and "/workers/" not in body
+    assert "compute-relay connector --setup" in body
     assert "No compute job is submitted during setup" in body
 
 
-@pytest.mark.parametrize("changes", [{"user": ""}, {"backend": "fake"}])
-def test_incomplete_and_simulator_setups_do_not_offer_personal_download(management, changes):
+def test_incomplete_setup_does_not_offer_personal_download(management):
     client = human(management.owner)
-    response = form_post(client, "/clusters/new/", registration_data(**{"backend": "slurm", **changes}))
+    response = form_post(client, "/clusters/new/", registration_data(backend="slurm", user=""))
     page = client.get(response.url)
     assert page.status_code == 200
     assert b"Download personal connector setup" not in page.content
-    assert b"Advanced: configure" in page.content
+    assert b"Advanced: configure" not in page.content
+
+
+def test_simulators_are_not_offered_in_personal_cluster_setup(management):
+    client = human(management.owner)
+    response = form_post(client, "/clusters/new/", registration_data(backend="fake"))
+    assert response.status_code == 200 and "backend" in response.context["form"].errors
+    assert not ClusterRegistration.objects.filter(backend="fake").exists()
 
 
 def test_admin_cannot_view_or_modify_another_owners_personal_registration(management):
@@ -87,7 +93,7 @@ def test_admin_cannot_view_or_modify_another_owners_personal_registration(manage
     admin = User.objects.create_superuser(username="personal-setup-admin", password=None)
     assert not owned_registrations(admin).filter(id=setup.id).exists()
     client = human(admin)
-    for suffix in ["", "edit/", "bind/", "worker-config/"]:
+    for suffix in ["", "edit/"]:
         assert client.get(f"/clusters/setup/{setup.id}/{suffix}").status_code == 404
     assert form_post(client, f"/clusters/setup/{setup.id}/edit/", registration_data(setup_revision=setup.revision)).status_code == 404
     assert setup.name.encode() not in client.get("/clusters/").content
@@ -106,7 +112,7 @@ def test_bound_owned_slurm_cluster_offers_personal_setup_with_registration_revis
     assert b'name="setup_revision" value="4"' in page.content
 
 
-def test_legacy_owned_slurm_cluster_offers_personal_setup_without_registration(management):
+def test_owned_slurm_connection_offers_personal_setup_without_registration(management):
     connection = management.connections[0]
     connection.backend = "slurm"
     connection.save(update_fields=["backend"])
@@ -116,12 +122,11 @@ def test_legacy_owned_slurm_cluster_offers_personal_setup_without_registration(m
     assert b'name="setup_revision" value=""' in page.content
 
 
-def test_foreign_cluster_inspection_does_not_offer_personal_enrollment_even_to_admin(management):
+def test_foreign_cluster_inspection_is_denied_even_to_admin(management):
     connection = management.connections[0]
     connection.backend = "slurm"
     connection.save(update_fields=["backend"])
     admin = User.objects.create_superuser(username="personal-inspection-admin", password=None)
     page = human(admin).get(f"/clusters/{connection.id}/")
-    assert page.status_code == 200
-    assert not page.context["personal_connector_allowed"]
+    assert page.status_code == 404
     assert b"Download personal connector setup" not in page.content

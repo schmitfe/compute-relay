@@ -14,14 +14,14 @@ from django.db import transaction
 from django.utils import timezone
 from jsonschema import ValidationError
 
-from compute_broker.control import services
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (
+from compute_relay.control import services
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import (
     ApprovalDecision, Attempt, Connection, Environment, ExecutionRequest, Grant, Job,
     LedgerEntry, Project, ProjectCredential, User, WorkerIdentity,
 )
-from compute_broker.domain.validation import validate
+from compute_relay.domain.validation import validate
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def capped_project(db):
     owner = User.objects.create_user(username="submission-limit-owner", password=None)
     worker = WorkerIdentity.objects.create(owner=owner, name="submission-limit-worker", token_hash=token_hash("limit-worker"))
     connection = Connection.objects.create(owner=owner, worker=worker, name="simulated", backend="fake",
-                                           configuration={}, revision_sha256="c" * 64)
+                                           configuration={"site_profile": {"automatic_execution_allowed": True}}, revision_sha256="c" * 64)
     project = Project.objects.create(name="capped-project", owner=owner)
     project.connections.add(connection)
     environment = Environment.objects.create(owner=owner, connection=connection, name="cluster Python",
@@ -43,7 +43,7 @@ def capped_project(db):
               "mode": "budgeted", "allowed_connection_ids": [str(connection.id)],
               "allowed_environment_revision_sha256": ["e" * 64], "allowed_gpu_types": [],
               "per_job_limits": {"cpu_cores": 1, "gpu_devices": 0, "memory_mib": 128,
-                                 "time_limit_seconds": 60, "maximum_charge_duration_seconds": 60},
+                                 "time_limit_seconds": 60},
               "max_active_jobs": 100, "max_total_jobs": 1,
               "allowance": {"cpu_core_seconds": 100000, "gpu_device_seconds": 0},
               "admission_expires_at": (timezone.now() + timedelta(days=1)).isoformat()}
@@ -54,8 +54,7 @@ def capped_project(db):
         request={"connection_id": str(connection.id), "name": "limit-test", "outputs": [],
                  "environment": {"id": str(environment.id), "revision_sha256": environment.revision_sha256}, "resources": {"memory_mib": 128}},
         manifest={"connection_revision_sha256": "c" * 64,
-                  "maximum_allocation": {"cpu_cores": 1, "gpu_devices": 0, "time_limit_seconds": 60,
-                                         "maximum_charge_duration_seconds": 60},
+                  "maximum_allocation": {"cpu_cores": 1, "gpu_devices": 0, "time_limit_seconds": 60},
                   "reservation": {"cpu_core_seconds": 60, "gpu_device_seconds": 0}},
         manifest_sha256="f" * 64)
     return SimpleNamespace(owner=owner, worker=worker, connection=connection, project=project,
@@ -99,7 +98,7 @@ def test_last_slot_is_admitted_once_and_reported_in_allowance(capped_project):
     assert LedgerEntry.objects.filter(action="reserve").count() == 1
 
 
-def test_legacy_policy_has_a_finite_default_and_zero_explicitly_blocks_admission(capped_project):
+def test_optional_job_cap_has_a_finite_default_and_zero_explicitly_blocks_admission(capped_project):
     context = capped_project
     del context.grant.policy["max_total_jobs"]
     context.grant.save(update_fields=["policy"])
@@ -233,23 +232,23 @@ from threading import Barrier
 from django.core.management import call_command
 from django.db import close_old_connections, transaction
 from django.utils import timezone
-from compute_broker.control.models import *
-from compute_broker.control.auth import token_hash
-from compute_broker.control import services
-from compute_broker.control.errors import BrokerError
+from compute_relay.control.models import *
+from compute_relay.control.auth import token_hash
+from compute_relay.control import services
+from compute_relay.control.errors import BrokerError
 call_command("migrate", run_syncdb=True, verbosity=0)
 owner=User.objects.create_user(username="limit-race-owner", password=None)
 worker=WorkerIdentity.objects.create(owner=owner,name="fake",token_hash=token_hash("limit-race-worker"))
-connection=Connection.objects.create(owner=owner,worker=worker,name="fake",backend="fake",configuration={},revision_sha256="c"*64)
+connection=Connection.objects.create(owner=owner,worker=worker,name="fake",backend="fake",configuration={"site_profile":{"automatic_execution_allowed":True}},revision_sha256="c"*64)
 project=Project.objects.create(owner=owner,name="lifetime-race")
 project.connections.add(connection)
 environment=Environment.objects.create(owner=owner,connection=connection,name="cluster Python",configuration={"interpreter":"/usr/bin/python3"},revision_sha256="e"*64)
 project.environments.add(environment)
 credential=ProjectCredential.objects.create(project=project, issued_by=project.owner,name="agent",prefix="fake",token_hash=token_hash("limit-race-key"),scopes=["jobs:execute"],expires_at=timezone.now()+timedelta(days=1))
 mode=os.environ["SUBMISSION_LIMIT_TEST_MODE"]
-policy={"schema_version":"1.0","project_id":str(project.id),"revision":1,"mode":mode,"allowed_connection_ids":[str(connection.id)],"allowed_environment_revision_sha256":["e"*64],"allowed_gpu_types":[],"per_job_limits":{"cpu_cores":1,"gpu_devices":0,"memory_mib":128,"time_limit_seconds":60,"maximum_charge_duration_seconds":60},"max_active_jobs":100,"max_total_jobs":2,"allowance":{"cpu_core_seconds":100000,"gpu_device_seconds":0},"admission_expires_at":(timezone.now()+timedelta(days=1)).isoformat()}
+policy={"schema_version":"1.0","project_id":str(project.id),"revision":1,"mode":mode,"allowed_connection_ids":[str(connection.id)],"allowed_environment_revision_sha256":["e"*64],"allowed_gpu_types":[],"per_job_limits":{"cpu_cores":1,"gpu_devices":0,"memory_mib":128,"time_limit_seconds":60},"max_active_jobs":100,"max_total_jobs":2,"allowance":{"cpu_core_seconds":100000,"gpu_device_seconds":0},"admission_expires_at":(timezone.now()+timedelta(days=1)).isoformat()}
 grant=Grant.objects.create(project=project,policy=policy)
-job=Job.objects.create(project=project,credential=credential,request={"connection_id":str(connection.id),"environment":{"id":str(environment.id),"revision_sha256":environment.revision_sha256},"resources":{"memory_mib":128}},manifest={"connection_revision_sha256":"c"*64,"maximum_allocation":{"cpu_cores":1,"gpu_devices":0,"time_limit_seconds":60,"maximum_charge_duration_seconds":60},"reservation":{"cpu_core_seconds":60,"gpu_device_seconds":0}},manifest_sha256="f"*64)
+job=Job.objects.create(project=project,credential=credential,request={"connection_id":str(connection.id),"environment":{"id":str(environment.id),"revision_sha256":environment.revision_sha256},"resources":{"memory_mib":128}},manifest={"connection_revision_sha256":"c"*64,"maximum_allocation":{"cpu_cores":1,"gpu_devices":0,"time_limit_seconds":60},"reservation":{"cpu_core_seconds":60,"gpu_device_seconds":0}},manifest_sha256="f"*64)
 historical=ExecutionRequest.objects.create(job=job,credential=credential,state="authorized")
 Attempt.objects.create(execution_request=historical,job=job,connection=connection,grant=grant,state="succeeded",accounting_state="settled",reservation_cpu=0,reservation_gpu=0)
 waiting=[]
@@ -293,10 +292,10 @@ if mode=='approval_required':
 assert services.allowance(project)["jobs"]=={"limit":2,"admitted":2,"remaining":0,"active":1,"active_limit":100,"awaiting_approval":expected_waiting}
 print(json.dumps({"authorized":1,"admitted":2,"reserved_cpu":grant.reserved_cpu}))
 '''
-    environment = dict(os.environ, DJANGO_SETTINGS_MODULE="compute_broker.control.settings",
+    environment = dict(os.environ, DJANGO_SETTINGS_MODULE="compute_relay.control.settings",
         PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"), SUBMISSION_LIMIT_TEST_MODE=mode,
         BROKER_DB_ENGINE="sqlite", BROKER_DATA_DIR=str(tmp_path / "service"), BROKER_DB_PATH=str(tmp_path / "race.sqlite3"),
-        BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"), BROKER_PROFILE="development")
+        BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"), BROKER_PROFILE="local")
     result = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout.splitlines()[-1]) == {

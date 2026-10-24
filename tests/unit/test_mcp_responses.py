@@ -11,10 +11,10 @@ from jsonschema import Draft202012Validator
 from mcp.server.fastmcp.exceptions import ToolError
 import pytest
 
-from compute_broker.mcp.facade import ProjectFacade, create_server
-from compute_broker.mcp import implementation
-from compute_broker.mcp.requests import JobRequest, client_job_schema
-from compute_broker.mcp.responses import compact_allowance, compact_job
+from compute_relay.mcp.facade import ProjectFacade, create_server
+from compute_relay.mcp import implementation
+from compute_relay.mcp.requests import JobRequest, client_job_schema
+from compute_relay.mcp.responses import compact_allowance, compact_job
 from test_mcp import ClientSpy
 
 
@@ -77,7 +77,7 @@ def test_summary_size_stays_bounded_with_long_history_and_large_prepared_metadat
 
 def test_failed_attempt_summary_retains_safe_actual_accounting_and_scheduler_outcome(job_payload):
     job_payload["execution_requests"][-1]["state"] = "authorized"
-    job_payload["attempts"] = [{"id": str(uuid4()), "state": "failed", "accounting_state": "settled",
+    job_payload["attempts"] = [{"id": str(uuid4()), "execution_request_id": job_payload["execution_requests"][-1]["id"], "state": "failed", "accounting_state": "settled",
         "error_code": "OBSERVED_OVERAGE", "native_state": "FAILED", "exit_code": "1:0",
         "native_identity": {"job_id": "42", "cluster": "science", "work_dir": "/private/job/path"},
         "stdout": "large science output", "accounting": {"final": True, "cpu_core_seconds": 90, "gpu_device_seconds": 0,
@@ -97,7 +97,7 @@ def test_failed_attempt_summary_retains_safe_actual_accounting_and_scheduler_out
     ("expired", "none"), ("awaiting_approval", "await_human_review")])
 def test_newest_review_state_is_not_hidden_by_old_successful_attempt(job_payload, execution_state, next_action):
     job_payload["execution_requests"][-1].update(state=execution_state, comment="Please reduce memory.")
-    job_payload["attempts"] = [{"id": str(uuid4()), "state": "succeeded", "accounting_state": "settled"}]
+    job_payload["attempts"] = [{"id": str(uuid4()), "execution_request_id": str(uuid4()), "state": "succeeded", "accounting_state": "settled"}]
     summary = compact_job(job_payload)
     assert summary["latest_execution"]["comment"] == "Please reduce memory."
     assert summary["next_action"]["action"] == next_action
@@ -115,6 +115,14 @@ def test_attempt_from_an_older_execution_is_not_mistaken_for_current_results(job
     assert summary["latest_attempt"]["id"] == current["id"]
     assert summary["previous_attempt_count"] == 1
     assert summary["next_action"]["action"] == "wait"
+
+
+@pytest.mark.parametrize("association", [None, "", 1])
+def test_attempt_response_requires_current_execution_request_association(job_payload, association):
+    job_payload["attempts"] = [{"id": str(uuid4()), "execution_request_id": association,
+        "state": "succeeded", "accounting_state": "settled"}]
+    with pytest.raises(ValueError, match="must identify their execution request"):
+        compact_job(job_payload)
 
 
 def test_get_job_full_metadata_is_explicit_and_uses_no_extra_http_calls(job_payload):
@@ -137,7 +145,7 @@ def test_adapter_metadata_identifies_the_loaded_client_and_does_not_reread_sourc
         "adapter": {"implementation": "synthetic-remote-spoof"}}
     client.request = lambda *args, **kwargs: original
     expected = implementation.adapter_metadata()
-    assert expected["implementation"] == "compute-broker-stdio-mcp"
+    assert expected["implementation"] == "compute-relay-stdio-mcp"
     assert expected["schema_version"] == "1.0"
     assert len(expected["source_sha256"]) == 64
     assert expected["default_job_response_mode"] == "compact"
@@ -346,7 +354,7 @@ def test_stdio_protocol_and_sdk_stderr_do_not_echo_invalid_argument_values(tmp_p
     from mcp.client.stdio import stdio_client
     source = str(Path(__file__).resolve().parents[2] / "src")
     program = (
-        "from compute_broker.mcp.facade import ProjectFacade,create_server;"
+        "from compute_relay.mcp.facade import ProjectFacade,create_server;"
         "create_server(ProjectFacade(None,'608ef015-5813-4e8f-a6ab-7ec182f406d7')).run(transport='stdio')"
     )
     log = tmp_path / "sdk-stderr.log"
@@ -379,7 +387,7 @@ def test_real_stdio_defaults_are_compact_with_explicit_adapter_and_response_mode
     # Passing fixed synthetic fixtures directly avoids any real token, service,
     # project filesystem, or institutional cluster access in this protocol test.
     program = "\n".join((
-        "from compute_broker.mcp.facade import ProjectFacade, create_server",
+        "from compute_relay.mcp.facade import ProjectFacade, create_server",
         f"job = {job_payload!r}", f"allowance = {allowance_payload!r}", f"context = {context!r}",
         "class Client:",
         "    def request(self, method, path, *args, **kwargs):",

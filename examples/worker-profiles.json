@@ -10,8 +10,8 @@
       "remote_root_prefixes": ["/home/brokeruser/broker-jobs"],
       "ssh": {
         "mode": "key",
-        "identity_file": "/run/compute-broker/cluster-identity",
-        "known_hosts": "/etc/compute-broker/known_hosts"
+        "identity_file": "/run/compute-relay/cluster-identity",
+        "known_hosts": "/etc/compute-relay/known_hosts"
       },
       "python_path": "/usr/bin/python3",
       "slurm_paths": {

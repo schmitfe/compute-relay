@@ -17,14 +17,14 @@ from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control import services
-from compute_broker.control.auth import new_token, token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (
+from compute_relay.control import services
+from compute_relay.control.auth import new_token, token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import (
     Artifact, Attempt, Connection, Environment, ExecutionRequest, Grant,
     Job, Project, ProjectCredential, User, WorkerIdentity,
 )
-from compute_broker.control.storage import store_blob
+from compute_relay.control.storage import store_blob
 
 
 SCOPES = ["objects:write", "jobs:read", "jobs:write", "jobs:execute", "jobs:cancel", "artifacts:read"]
@@ -42,7 +42,7 @@ def management(db, settings, tmp_path):
                                                       "allowed_ports": [22], "remote_root_prefixes": ["/fixture/jobs"]}])
     profile = {"partitions": ["debug"], "accounts": ["broker"], "qos": [],
                "maximum_cpus": 2, "maximum_gpus": 1, "maximum_memory_mib": 1024,
-               "maximum_time_limit_seconds": 600}
+               "maximum_time_limit_seconds": 600, "automatic_execution_allowed": True}
     worker.profiles[0].update({"revision_sha256": "a" * 64, "site_profile": profile})
     worker.save(update_fields=["profiles"])
     connections = []
@@ -66,7 +66,7 @@ def management(db, settings, tmp_path):
               "allowed_environment_revision_sha256": [environment.revision_sha256],
               "allowed_gpu_types": ["a100"], "per_job_limits": {
                   "cpu_cores": 2, "gpu_devices": 1, "memory_mib": 512,
-                  "time_limit_seconds": 600, "maximum_charge_duration_seconds": 660},
+                  "time_limit_seconds": 600},
               "max_active_jobs": 2, "allowance": {"cpu_core_seconds": 7200, "gpu_device_seconds": 3600},
               "admission_expires_at": (timezone.now() + timedelta(days=3)).isoformat()}
     grant = Grant.objects.create(project=project, policy=policy)
@@ -247,40 +247,10 @@ def test_project_jobs_list_is_scoped_even_across_same_owners_projects(management
     assert another_project.name.encode() not in page.content
 
 
-def test_cluster_form_accepts_only_an_advertised_scoped_profile(management):
-    from compute_broker.control.forms import ClusterForm
-    context = management
-    form = ClusterForm({"name": "new fixture", "worker": str(context.worker.id),
-                        "credential_profile": "synthetic-profile", "host": "fixture.invalid",
-                        "user": "fixtureuser", "port": 22, "remote_root": "/fixture/jobs/project"}, user=context.owner)
-    assert form.is_valid(), form.errors
-    assert form.cleaned_data["profile"]["alias"] == "synthetic-profile"
-    assert form.cleaned_data["profile"]["backend"] == "fake"
 
 
-@pytest.mark.parametrize("changes", [
-    {"credential_profile": "unknown-profile"}, {"host": "unapproved.invalid"},
-    {"host": "fixture.invalid;whoami"}, {"user": "another-user"}, {"port": 2222},
-    {"remote_root": "/fixture/jobs-other"}, {"remote_root": "/fixture/jobs/../escape"},
-    {"remote_root": "/fixture//jobs"},
-])
-def test_cluster_form_rejects_targets_outside_worker_profile(management, changes):
-    from compute_broker.control.forms import ClusterForm
-    context = management
-    data = {"name": "new fixture", "worker": str(context.worker.id), "credential_profile": "synthetic-profile",
-            "host": "fixture.invalid", "user": "fixtureuser", "port": 22, "remote_root": "/fixture/jobs/project"}
-    data.update(changes)
-    assert not ClusterForm(data, user=context.owner).is_valid()
 
 
-def test_cluster_form_cannot_select_another_users_private_worker(management):
-    from compute_broker.control.forms import ClusterForm
-    context = management
-    worker = WorkerIdentity.objects.create(name="outsider private worker", owner=context.outsider,
-                                           token_hash=token_hash("outsider-private-worker"), profiles=context.worker.profiles)
-    data = {"name": "new fixture", "worker": str(worker.id), "credential_profile": "synthetic-profile",
-            "host": "fixture.invalid", "user": "fixtureuser", "port": 22, "remote_root": "/fixture/jobs/project"}
-    assert not ClusterForm(data, user=context.owner).is_valid()
 
 
 @pytest.mark.parametrize("changes", [
@@ -289,7 +259,7 @@ def test_cluster_form_cannot_select_another_users_private_worker(management):
     {"module_init": "/home/user/untrusted.sh"},
 ])
 def test_environment_form_rejects_command_fragments_and_untrusted_hooks(management, changes):
-    from compute_broker.control.forms import EnvironmentForm
+    from compute_relay.control.forms import EnvironmentForm
     context = management
     data = {"name": "module Python", "connection": str(context.connections[0].id), "kind": "modules",
             "interpreter": "python3", "modules": "python/3.12", "module_init": "/etc/profile.d/modules.sh"}
@@ -689,27 +659,10 @@ def discovery_report(connection, worker, lease, **changes):
     return report
 
 
-def test_owner_enrolls_cluster_without_private_credential_material(management):
-    context = management
-    before = Connection.objects.count()
-    data = {"name": "new enrolled fixture", "worker": str(context.worker.id), "credential_profile": "synthetic-profile",
-            "host": "fixture.invalid", "user": "fixtureuser", "port": 22, "remote_root": "/fixture/jobs/project"}
-    with patch("subprocess.run", side_effect=AssertionError("cluster enrollment must not execute SSH locally")):
-        response = form_post(human(context.owner), "/clusters/new/", data)
-    assert response.status_code == 302
-    assert Connection.objects.count() == before + 1
-    connection = Connection.objects.get(name=data["name"])
-    assert connection.owner_id == context.owner.id
-    assert connection.worker_id == context.worker.id
-    assert connection.configuration["credential_profile"] == "synthetic-profile"
-    assert connection.backend == "fake"
-    assert connection.discovery_state == "queued"
-    assert "identity_file" not in json.dumps(connection.configuration)
-    assert "known_hosts" not in json.dumps(connection.configuration)
 
 
 def test_discovery_lease_is_worker_scoped_and_replay_is_rejected(management):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = management
     connection = queued_discovery(context)
     stranger = WorkerIdentity.objects.create(name="unrelated worker", owner=context.outsider,
@@ -735,7 +688,7 @@ def test_discovery_lease_is_worker_scoped_and_replay_is_rejected(management):
 
 
 def test_rediscovery_fences_old_lease_and_failure_preserves_last_good_snapshot(management):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = management
     connection = queued_discovery(context)
     connection.discovery_snapshot = {"last_good": "preserve this synthetic metadata"}
@@ -756,7 +709,7 @@ def test_rediscovery_fences_old_lease_and_failure_preserves_last_good_snapshot(m
 
 
 def test_discovery_report_rejects_secret_fields_and_changed_targets(management):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = management
     connection = queued_discovery(context)
     lease = lease_discovery(context.worker)["lease"]
@@ -773,7 +726,7 @@ def test_discovery_report_rejects_secret_fields_and_changed_targets(management):
 
 
 def test_expired_discovery_report_cannot_replace_last_good_snapshot(management):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = management
     connection = queued_discovery(context)
     connection.discovery_snapshot = {"last_good": True}
@@ -796,7 +749,7 @@ def outstanding_discovery_attempt(context, connection):
 
 
 def test_discovery_cannot_change_execution_profile_until_existing_accounting_settles(management):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = management
     connection = queued_discovery(context)
     initial = lease_discovery(context.worker)["lease"]
@@ -825,7 +778,7 @@ def test_discovery_cannot_change_execution_profile_until_existing_accounting_set
 
 
 def test_discovery_can_refresh_snapshot_without_changing_unsettled_execution_profile(management):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = management
     connection = queued_discovery(context)
     initial = lease_discovery(context.worker)["lease"]
@@ -925,10 +878,6 @@ def test_modules_environment_form_prefills_paths_and_defaults_to_cluster_command
     assert b"/opt/site/modules" not in private.content
 
 
-@pytest.mark.parametrize("connection_id", ["not-a-uuid", "", str(uuid4())])
-def test_environment_form_handles_missing_or_invalid_connection_without_server_error(management, connection_id):
-    page = human(management.owner).get("/environments/new/", {"connection": connection_id, "kind": "modules"})
-    assert page.status_code in {302, 400, 404}
 
 
 @pytest.mark.parametrize("kind,details", [
@@ -936,7 +885,7 @@ def test_environment_form_handles_missing_or_invalid_connection_without_server_e
     ("venv", {"interpreter": "/opt/venvs/test/bin/python", "prefix": "/opt/venvs/test"}),
 ])
 def test_nonmodule_environment_rejects_module_search_paths(management, kind, details):
-    from compute_broker.control.forms import EnvironmentForm
+    from compute_relay.control.forms import EnvironmentForm
     context = management
     form = EnvironmentForm({"name": "inconsistent environment", "connection": str(context.connections[0].id),
                             "kind": kind, **details, "module_paths": "/opt/site/modules"}, user=context.owner)

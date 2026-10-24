@@ -11,7 +11,7 @@ from django.template.loader import render_to_string
 import pytest
 
 
-TEMPLATES = Path(__file__).resolve().parents[2] / "src/compute_broker/control/templates/broker"
+TEMPLATES = Path(__file__).resolve().parents[2] / "src/compute_relay/control/templates/broker"
 
 
 class Markup(HTMLParser):
@@ -26,7 +26,7 @@ class Markup(HTMLParser):
 
 def test_base_initializes_theme_before_styles_and_offers_a_labelled_native_selector():
     html = render_to_string("broker/base.html")
-    assert html.index("compute-broker.theme") < html.index("<style>") < html.index("<body>")
+    assert html.index("compute-relay.theme") < html.index("<style>") < html.index("<body>")
     tags = Markup(html).tags
     assert ("label", {"for": "portal-theme"}) in tags
     assert ("select", {"id": "portal-theme"}) in tags
@@ -44,14 +44,13 @@ def browser():
 const vm = require('node:vm');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const events = {}, documentEvents = {}, selectorEvents = {};
-const values = Object.assign({}, input.stored === undefined ? {} : {'compute-broker.theme': input.stored});
+const values = Object.assign({}, input.stored === undefined ? {} : {'compute-relay.theme': input.stored});
 const writes = [];
 const root = {dataset: {}, style: {}};
 const picker = {hidden: true};
 const selector = {value: 'system', addEventListener(type, handler) { selectorEvents[type] = handler; }};
 const media = {matches: Boolean(input.dark)};
-if (input.legacyMedia) media.addListener = handler => { events.media = handler; };
-else media.addEventListener = (type, handler) => { events.media = handler; };
+media.addEventListener = (type, handler) => { events.media = handler; };
 const window = {matchMedia() { return media; }, addEventListener(type, handler) { events[type] = handler; }};
 Object.defineProperty(window, 'localStorage', {get() {
   if (input.blockStorage) throw new Error('Storage unavailable');
@@ -72,7 +71,7 @@ const ready = state(), states = [];
 for (const action of input.actions || []) {
   if (action.kind === 'choose') { selector.value = action.value; selectorEvents.change(); }
   else if (action.kind === 'system') { media.matches = action.dark; events.media(); }
-  else if (action.kind === 'storage') events.storage({key: action.key ?? 'compute-broker.theme', newValue: action.value});
+  else if (action.kind === 'storage') events.storage({key: action.key ?? 'compute-relay.theme', newValue: action.value});
   states.push(state());
 }
 process.stdout.write(JSON.stringify({initial, ready, states, values, writes}));
@@ -103,13 +102,12 @@ def test_user_choice_persists_and_explicit_theme_ignores_later_system_changes(br
     result = browser(actions=[{"kind": "choose", "value": "dark"}, {"kind": "system", "dark": False},
         {"kind": "choose", "value": "light"}, {"kind": "system", "dark": True}])
     assert [state["theme"] for state in result["states"]] == ["dark", "dark", "light", "light"]
-    assert result["writes"] == [["compute-broker.theme", "dark"], ["compute-broker.theme", "light"]]
-    assert result["values"]["compute-broker.theme"] == "light"
+    assert result["writes"] == [["compute-relay.theme", "dark"], ["compute-relay.theme", "light"]]
+    assert result["values"]["compute-relay.theme"] == "light"
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_system_choice_follows_live_operating_system_changes(browser, legacy):
-    result = browser(stored="light", legacyMedia=legacy, actions=[{"kind": "choose", "value": "system"},
+def test_system_choice_follows_live_operating_system_changes(browser):
+    result = browser(stored="light", actions=[{"kind": "choose", "value": "system"},
         {"kind": "system", "dark": True}, {"kind": "system", "dark": False}])
     assert [state["theme"] for state in result["states"]] == ["light", "dark", "light"]
     assert all(state["selected"] == "system" for state in result["states"])

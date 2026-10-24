@@ -150,7 +150,7 @@ requirement. The portal shows the same explanations on the prepared-job page.
 
 ## Integration API
 
-`compute_broker.domain.cluster_configuration` uses only the standard library:
+`compute_relay.domain.cluster_configuration` uses only the standard library:
 
 ```python
 evidence = derive_cluster_configuration(snapshot, current_profile)
@@ -166,7 +166,7 @@ Unknown resource fields are absent from `site_profile`, and appear as `None` in
 The helper performs no SSH, file access, database query or submitted-code
 execution. `ClusterConfigurationError` reports invalid retained/input values.
 
-The Django-only `compute_broker.control.cluster_configuration` provides:
+The Django-only `compute_relay.control.cluster_configuration` provides:
 
 ```python
 form = ClusterConfigurationForm(

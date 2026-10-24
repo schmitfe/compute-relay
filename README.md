@@ -1,106 +1,85 @@
-# Compute Broker
+# Compute Relay
 
-Compute Broker lets AI clients prepare, submit, and inspect compute jobs on configured clusters. Projects use human approval, a shared compute allowance, or both. Its first backend is Slurm over SSH. A thin MCP facade gives agents project access while the worker holds cluster access.
+Compute Relay gives Codex, Claude Code, and compatible local MCP clients access to your Slurm clusters through a local portal and a project-scoped MCP interface. Agents prepare jobs, you review the exact script and batch file, and the broker submits and tracks approved work. Projects can instead allow automatic execution within a compute allowance and lifetime job limit.
 
-**Status: development alpha.** The Django control service, management portal, review pages, transactional ledger, durable OpenSSH worker, Slurm adapter, simulated backend, and stdio MCP tools are implemented. SQLite remains the personal default; PostgreSQL settings, concurrency checks and [offline migration/rehearsal tools](docs/database-migration.md) are available. Human login uses explicit local or optional LDAP providers, with a [synthetic TLS directory fixture](deploy/ldap/README.md). Project keys are shown once, stored only as hashes, and bound to their issuing users; execution requires that user's own worker and cluster connection.
+**Status: development alpha.** One Python package runs on your device. It includes the portal, a persistent SQLite ledger, SSH connectors, the official MCP adapter, software discovery, storage planning, managed environment builds, and artifact-dependent workflows. No separate database server, Docker installation, directory service, or hosted account is required.
 
-Projects share compute and submission limits across keys; each key can require human review. Disposable native and Docker workflows exercise management, approval, rejection, revision, execution, collection, and accounting. See [runtime scope and limitations](docs/runtime.md) and [container acceptance results](docs/container-testing.md) for the evidence and its limits. Protected personal/server deployment, institutional MFA acceptance, membership-management screens and hosted production acceptance remain unfinished. The working name is provisional.
+Source repository: [schmitfe/compute-relay](https://github.com/schmitfe/compute-relay).
 
-The [personal connector](docs/personal-connectors.md) enrolls its worker
-automatically from a one-use cluster setup download. OpenSSH performs local
-interactive key/MFA authentication at startup; the async worker reuses that
-session. Private keys and MFA answers stay on the user's device.
+## Install and start
 
-Optional [extensions](docs/extensions.md) add advisory storage planning, scheduled
-reusable Python environment builds, and artifact-dependent workflows. They have
-separate apps, tables, routes and tests, and are disabled by default. Ordinary
-submission and accounting work without them. Remote filesystem migration,
-packed environments and [native arrays](docs/arrays-design.md) remain planned.
-The [fresh-agent science kit](examples/agent-integration/README.md) provides five
-copyable tasks and private project configuration generation for client acceptance.
+Use Python 3.12 or 3.13 and install the package into a virtual environment:
 
-An opt-in [asynchronous core Slurm worker](docs/async-workers.md) provides bounded
-SSH/HTTP operations and per-owner lanes. The synchronous worker remains the
-default and supports the optional extensions; those extensions do not yet have
-async worker hooks.
+```sh
+python -m venv ~/.venvs/compute-relay
+. ~/.venvs/compute-relay/bin/activate
+python -m pip install git+https://github.com/schmitfe/compute-relay.git
+compute-relay
+```
 
-## Try it
+The intended PyPI distribution has not been published yet. Until a release exists, install from this checkout with `python -m pip install .`, or install a locally built wheel. The normal installation includes all runtime dependencies; no extras are required.
 
-Use Python 3.12 or 3.13. This runs an isolated fake workflow, creates only synthetic credentials, starts the service and worker, and removes its temporary state afterward:
+The launcher starts the portal at `http://127.0.0.1:8768` and opens your browser. On first launch, choose a local password or leave it blank to use passwordless access on this device. The local account is named `local`. The choice is saved; subsequent launches reuse the same projects, jobs, budgets, and connector configuration.
+
+Keep the terminal running. Cluster SSH key passphrases and MFA prompts appear there, one connection at a time. Ctrl-C stops the local portal and its connectors; it does not cancel jobs already submitted to Slurm. Run `compute-relay` again to resume monitoring and reconnect.
+
+## Connect a cluster and a project
+
+1. In the portal, add a cluster and start its local connector. Choose the SSH identity on your device and answer any SSH or MFA prompts in the launcher terminal.
+2. Review discovered partitions, resource limits, module candidates, and storage paths. Save the cluster configuration and a suitable execution environment.
+3. Create a project, select its cluster and environment, set approval and budget limits, and create a project API key. The key is shown once.
+4. In your science project directory, initialize your AI clients:
+
+```sh
+compute-relay init-mcp --client both --with-workflow
+```
+
+Paste the project key at the hidden prompt. The command writes project-local Codex and Claude Code configuration, private key storage, Git exclusions, and a usage guide. It does not put SSH keys or MFA answers into the agent configuration. See [local client setup](docs/local-client-setup.md) for client-specific options and file transfer commands.
+
+## Local state and options
+
+State lives in `$XDG_DATA_HOME/compute-relay`, or `~/.local/share/compute-relay` when that variable is unset. To keep a separate installation:
+
+```sh
+compute-relay --data-directory /path/to/private/broker-data --port 8770
+```
+
+Useful options include `--no-browser`, `--no-connectors`, `--verbose`, and `--non-interactive`. For unattended first setup, choose `--no-password` explicitly or supply a private password file with `--owner-password-file PATH`. Passwords are never printed or generated into a plaintext file. See [installation and recovery](docs/deployment.md) for backups and restart behavior.
+
+The bundled storage, environment, and workflow modules are enabled by the normal launcher. Their operations still require explicit project policy and scopes. Storage budgets are advisory; reusable environment builds consume ordinary reviewed or budgeted Slurm jobs; workflow nodes use the same ledger and job caps. Native Slurm arrays, other schedulers, packed environment migration, and direct artifact transfer remain planned.
+
+The package shares your operating-system account. Passwordless mode treats local access to the portal as your authority. A process that controls your account can also inspect its files and SSH sessions; this installation does not isolate secrets from such a process. Project API scopes and approval pages govern broker requests, while complete account-level security requires a separate operating-system boundary. See [security](docs/security.md).
+
+## Develop and test
+
+From a source checkout:
 
 ```sh
 python -m venv .venv
-.venv/bin/python -m pip install -c requirements.lock '.[test,mcp]'
-.venv/bin/python -m pytest -q
-.venv/bin/python tools/local_smoke.py
-.venv/bin/python tools/local_smoke.py --management
-.venv/bin/python tools/local_smoke.py --mode budgeted
+. .venv/bin/activate
+python -m pip install -c requirements.lock '.[test]'
+python -m pytest -q
+python tools/check_contracts.py
+python tools/local_smoke.py
+python tools/package_smoke.py
 ```
 
-For an interactive dashboard and an actual disposable Slurm cluster, follow [the Docker instructions](docs/container-testing.md). The ordinary test suite never discovers or submits to a real cluster.
+The default suite uses SQLite and synthetic credentials. It requires no Docker, institutional network, SSH key, or real cluster. A disposable Slurm Docker fixture remains available for [optional integration acceptance](docs/container-testing.md).
 
-For a science project using an already running broker, activate the installed
-broker environment, enter the project directory and run `compute-broker init-mcp`.
-It prompts privately for the project's API key and writes the local MCP setup
-and Git ignore rules. No project UUID is required. See [local client setup](docs/local-client-setup.md)
-for project initialization and named connector shortcuts.
+The former multi-user server, LDAP, and PostgreSQL implementation is retained on `codex/archive-multi-user-server` at `520effc`; it is outside this package's supported runtime. No live server data is automatically imported or changed by this source cleanup.
 
-Use `compute-broker init-mcp --client both --with-workflow` for Codex and Claude
-Code with one shared compute skill. Existing workspaces can add `--reuse-key`.
-The [portable compute workflow](docs/portable-compute-workflow.md) explains compact
-MCP status, explicit workspace file staging and checksummed result downloads,
-supported clients and the remaining placement/planning work. The portal header
-also offers System, Light and Dark themes, with a browser-local preference.
-
-Development mode does not protect secrets from another process running as your account. A real deployment requires a separate service identity or server that the agent cannot administer. An agent that controls Docker can inspect containers and their secrets.
-
-## Design decisions
-
-- Build the project permissions, immutable approvals, compute reservations, and audit history in our own control service.
-- Implement a small Slurm adapter using OpenSSH first. Evaluate FirecREST behind the same interface after proving its fit for the university MFA flow.
-- Keep cluster credentials in a protected worker. The process launched by an AI client holds only its project credential.
-- Run the local service under a separate protected operating-system identity. An agent with no root, sudo, or Docker-daemon access must not read the service's secret files or alter deployed code.
-- Use Django for the control service, persistent SQL attempts and leases for work, and the official MCP SDK for the client facade. SQLite and PostgreSQL use the same models and ledger, with backend-specific locking tests and an explicit offline migration procedure.
-- Route local and LDAP human authentication explicitly. A browser login grants no HPC credential; each user-bound project key can access only that user's approved worker/connection bindings. OIDC and hosted HTTP MCP authentication remain future work.
-- Support single-node, bounded jobs initially. Arrays, automatic requeue, arbitrary scheduler directives, other schedulers, and autonomous agent orchestration are later features.
-
-The service governs jobs submitted through it. Arbitrary code running under a cluster account can potentially submit other jobs, change same-user files, or modify queued jobs. A hard ceiling on all activity under that account requires cluster-side restrictions. See the [security model](docs/security.md).
-
-## Read the plan
+## More detail
 
 | Document | Contents |
 | --- | --- |
-| [Architecture](docs/architecture.md) | Components, trust boundaries, data model, state machine, budget transactions |
-| [Shared-service design](docs/hosted-architecture.md) | Implemented local/LDAP, PostgreSQL and user-bound execution baseline, plus remaining hosted isolation work |
-| [Implemented runtime](docs/runtime.md) | Entrypoints, configuration, API, modes, current restrictions |
-| [Portal and worker profiles](docs/management.md) | Projects, one-time API keys, cluster enrollment, software discovery and environment recipes |
-| [API and contracts](docs/api.md) | REST and MCP operations, worker protocol, errors, examples |
-| [Security](docs/security.md) | Threat model, protected identities, secrets, MFA, approval limits |
-| [Backends](docs/backends.md) | Slurm implementation, SSH helper, environments, reuse assessment |
-| [Deployment](docs/deployment.md) | Personal and hosted deployment, bootstrap, recovery and migration |
-| [Database migration](docs/database-migration.md) | Offline SQLite/PostgreSQL transfer, verification, legacy key-owner mapping and rollback constraints |
-| [Async workers](docs/async-workers.md) | Opt-in core Slurm concurrency, transport limits and synchronous-extension compatibility |
-| [Implementation](docs/implementation.md) | Proposed source tree, milestone work packages and acceptance gates |
-| [Testing](docs/testing.md) | Test IDs, layers, failure injection, cluster acceptance and release gates |
-| [Decision records](docs/adr/README.md) | Decisions and their consequences |
-| [HPC-MCP source assessment](docs/references/hpc-mcp.md) | Pinned upstream review, reusable components and required adaptations |
-| [RASER paper assessment](docs/references/paper-2609-03598.md) | Future runtime boundary and resilience test implications |
-
-## Check the planning contracts
-
-Use Python 3.12 or 3.13 in an isolated development environment:
-
-```bash
-python -m venv .venv
-.venv/bin/python -m pip install -r requirements-plan.txt
-.venv/bin/python tools/check_contracts.py
-.venv/bin/python -m unittest discover -s tests/contracts -v
-```
-
-These separate checks validate schemas, examples, and contract-level invariants. The pytest suite also exercises database authorization/concurrency, worker recovery, SSH/helper boundaries, and the MCP protocol. Real Docker/Slurm acceptance is explicit; MFA and deployment-security gates remain in the [testing plan](docs/testing.md).
-
-Example contracts use synthetic UUIDs, filenames, and hashes. They contain no real hosts, usernames, keys, or datasets. Keep real discovery snapshots, configuration, credentials, and logs in an ignored private directory such as `local/`.
+| [Runtime](docs/runtime.md) | Launcher, persistence, job lifecycle, and supported limits |
+| [Installation and recovery](docs/deployment.md) | Local configuration, first setup, backups, and restart |
+| [Portal](docs/management.md) | Cluster setup, project keys, discovery, and environment recipes |
+| [Architecture](docs/architecture.md) | Components, immutable approval, ledger, and execution boundaries |
+| [Backends](docs/backends.md) | Slurm, SSH, remote helper, and reuse assessment |
+| [Modules](docs/extensions.md) | Storage, environment builds, and workflows |
+| [Testing](docs/testing.md) | SQLite, package, and optional Slurm acceptance |
 
 ## Public release
 
-The target is a public source repository with documented operation, contribution guidance, and automated checks. Nothing has been published. Before release, the rights holder must choose a license, maintainers must establish a private security-reporting channel, and the runtime must pass its release gates. No redistribution license has been granted yet. See [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).
+The intended distribution has not been published. Before publication, the rights holder must choose a license, maintainers must establish a private security-reporting channel, and release checks must pass. No redistribution license has been granted yet. See [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).

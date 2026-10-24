@@ -6,11 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from compute_broker.extensions.storage.planning import (
+from compute_relay.extensions.storage.planning import (
     StoragePlanningError, assess_health, default_health_policy, plan_storage,
     validate_observation, validate_plan, validate_storage_roots,
 )
-from compute_broker.extensions.storage.probe import probe_filesystem, snapshot_from_statvfs
+from compute_relay.extensions.storage.probe import probe_filesystem, snapshot_from_statvfs
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
 
@@ -201,7 +201,7 @@ def test_statvfs_conversion_uses_user_available_blocks_and_marks_unknown_identit
 
 
 def test_unused_probe_reads_only_directory_metadata_and_never_follows_links(tmp_path, monkeypatch):
-    from compute_broker.extensions.storage import probe
+    from compute_relay.extensions.storage import probe
     root = tmp_path / "enrolled"
     root.mkdir()
     monkeypatch.setattr(probe.os, "scandir", lambda *_args: pytest.fail("probe scanned directories"))

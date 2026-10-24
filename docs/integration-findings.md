@@ -83,17 +83,16 @@ HTTP response is fetched, so the server summary endpoint remains roadmap work.
 
 ## Helper discovery without a PATH assumption
 
-Initialization now generates a private, ignored `.compute-broker/USAGE.md` with
+Initialization now generates a private, ignored `.compute-relay/USAGE.md` with
 concrete commands using the installed absolute Python interpreter and
-`-m compute_broker.cli`. Shell quoting handles spaces and apostrophes in both
+`-m compute_relay.cli`. Shell quoting handles spaces and apostrophes in both
 the interpreter and workspace path. The shared skill, project guidance and
 initializer output all point to this guide. It contains no API-key bytes and
 does not require a globally installed console script.
 
-Explicit `init-mcp --reuse-key --with-workflow` upgrades exact known generated
-skills and managed blocks while preserving surrounding instructions, keys and
-client settings. Unrecognized edits are refused before mutation. Codex and
-Claude Code continue using the same skill and broker implementation.
+Explicit `init-mcp --reuse-key --with-workflow` now accepts only exact current
+packaged skills, managed blocks and helper guides. Different content is refused
+before prompting or mutation. There is no older-template migration path.
 
 The follow-up does not automatically modify the external science workspace or
 enable new cluster authority. Operator acceptance should reconnect the MCP

@@ -1,4 +1,4 @@
-name: Runtime and disposable cluster
+name: Local package and SQLite
 
 on:
   pull_request:
@@ -12,11 +12,13 @@ permissions:
 jobs:
   python:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+    env:
+      BROKER_PROFILE: local
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -24,131 +26,17 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -c requirements.lock '.[test,mcp,ldap,local-auth]'
-      - run: python -m pytest -q
-      - run: python tools/local_smoke.py
-      - run: python tools/local_smoke.py --management
-      - run: python tools/local_smoke.py --mode budgeted
-      - run: python -m django makemigrations --check --dry-run --settings=compute_broker.control.settings
-      - name: Check optional extension migrations
-        run: BROKER_EXTENSIONS=storage,environments,workflows python -m django makemigrations --check --dry-run --settings=compute_broker.control.settings
-  postgres:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      BROKER_DB_ENGINE: postgresql
-      BROKER_DB_NAME: broker_control
-      BROKER_DB_USER: broker
-      BROKER_DB_HOST: 127.0.0.1
-      BROKER_DB_PORT: "15432"
-      BROKER_DB_PASSWORD_FILE: ${{ github.workspace }}/local/ci-postgres/password
-      BROKER_DB_SSLMODE: disable
-      BROKER_POSTGRES_SECRET_DIR: ${{ github.workspace }}/local/ci-postgres
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: "3.13"
-      - run: python -m pip install -c requirements.lock '.[test,mcp,postgres,ldap,local-auth,worker]'
-      - name: Create private disposable database password
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import os, secrets
-          root = Path('local/ci-postgres')
-          root.mkdir(parents=True, mode=0o700)
-          fd = os.open(root / 'password', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-          with os.fdopen(fd, 'w') as output:
-              output.write(secrets.token_urlsafe(32) + '\n')
-          PY
-      - name: Start isolated PostgreSQL
-        run: docker compose -p cb-postgres-ci -f deploy/compose.postgres.yml up -d --wait
-      - name: Test PostgreSQL and independent-process admission races
+      - name: Install the complete package and test tools
+        run: python -m pip install -c requirements.lock '.[test]'
+      - name: Unit, SQLite and local integration checks
         run: python -m pytest -q
-      - name: Remove disposable database
-        if: always()
-        run: docker compose -p cb-postgres-ci -f deploy/compose.postgres.yml down --volumes --remove-orphans
-  containers:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        stack: [fake, test, async]
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Select disposable stack
+      - name: Validate schemas and synthetic contracts
+        run: python tools/check_contracts.py
+      - name: Exercise reviewed and budgeted synthetic jobs
         run: |
-          if [ '${{ matrix.stack }}' = async ]; then
-            echo 'COMPOSE_FILE=deploy/compose.test.yml:deploy/compose.async-test.yml' >> "$GITHUB_ENV"
-          else
-            echo 'COMPOSE_FILE=deploy/compose.${{ matrix.stack }}.yml' >> "$GITHUB_ENV"
-          fi
-      - name: Build synthetic images
-        run: docker compose --profile test build
-      - name: Start synthetic stack
-        run: docker compose up -d --wait
-      - name: Exercise approval and execution
-        run: docker compose --profile test run --rm smoke
-      - name: Remove disposable services
-        if: always()
-        run: docker compose down --volumes --remove-orphans
-  personal-connector:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      COMPOSE_FILE: deploy/compose.test.yml:deploy/compose.personal-test.yml
-      COMPOSE_PROJECT_NAME: cb-personal-ci
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Build isolated cluster and connector
-        run: docker compose build control slurm personal-smoke
-      - name: Start broker and Slurm without a manually registered worker
-        run: docker compose up -d --wait control slurm
-      - name: Verify pairing, post-login configuration, directory browsing and execution
-        run: docker compose run --rm --no-deps personal-smoke
-      - name: Remove disposable services and generated credentials
-        if: always()
-        run: docker compose down --volumes --remove-orphans
-  ldap:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Build synthetic directory and native TLS client
-        run: docker compose -p cb-ldap-ci -f deploy/ldap/compose.yml build
-      - name: Start directory without published ports
-        run: docker compose -p cb-ldap-ci -f deploy/ldap/compose.yml up -d --wait ldap
-      - name: Verify identity routing, LDAPS and required StartTLS
-        run: docker compose -p cb-ldap-ci -f deploy/ldap/compose.yml run --rm acceptance
-      - name: Remove disposable directory and generated secrets
-        if: always()
-        run: docker compose -p cb-ldap-ci -f deploy/ldap/compose.yml down --volumes --remove-orphans
-  extensions:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        extension: [environments, workflows, storage]
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Build extension acceptance images
-        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml --profile test build
-      - name: Start disposable Slurm and enabled extension
-        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml up -d --wait control worker
-      - name: Verify the optional capability through public interfaces
-        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml run --rm --no-deps smoke
-      - name: Remove only disposable acceptance resources
-        if: always()
-        run: docker compose -f deploy/compose.test.yml -f deploy/compose.${{ matrix.extension }}-test.yml down --volumes --remove-orphans
+          python tools/local_smoke.py
+          python tools/local_smoke.py --mode budgeted
+      - name: Check all bundled migrations
+        run: BROKER_EXTENSIONS=storage,environments,workflows python -m django makemigrations --check --dry-run --settings=compute_relay.control.settings
+      - name: Build and verify a clean installed wheel
+        run: python tools/package_smoke.py

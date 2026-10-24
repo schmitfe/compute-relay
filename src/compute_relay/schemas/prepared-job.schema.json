@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://compute-relay.invalid/contracts/prepared-job.schema.json",
+  "title": "Compute Relay version one prepared manifest",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "job_revision_id", "backend", "adapter_version", "helper_sha256", "profile_revision", "connection_revision_sha256", "request", "files", "batch_script", "environment_wrapper", "maximum_allocation", "reservation"],
+  "properties": {
+    "extension_name": {"type": "string", "enum": ["storage", "environments", "workflows"]},
+    "schema_version": {"const": "1.0"},
+    "job_revision_id": {"$ref": "common.schema.json#/$defs/uuid"},
+    "backend": {"const": "slurm"},
+    "adapter_version": {"const": "slurm-ssh/v1"},
+    "helper_sha256": {"$ref": "common.schema.json#/$defs/digest"},
+    "profile_revision": {"type": "integer", "minimum": 1},
+    "connection_revision_sha256": {"$ref": "common.schema.json#/$defs/digest"},
+    "request": {"$ref": "job-request.schema.json"},
+    "files": {"type": "array", "minItems": 3, "maxItems": 110, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/file"}},
+    "batch_script": {"const": "_broker/batch.sh"},
+    "environment_wrapper": {"const": "_broker/environment.sh"},
+    "maximum_allocation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cpu_cores", "gpu_devices", "time_limit_seconds"],
+      "properties": {
+        "cpu_cores": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "gpu_devices": {"type": "integer", "minimum": 0, "maximum": 16},
+        "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60}
+      }
+    },
+    "reservation": {"$ref": "common.schema.json#/$defs/usageVector"}
+  }
+}

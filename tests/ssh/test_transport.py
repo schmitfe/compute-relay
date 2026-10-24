@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-from compute_broker.backends import prepare
-from compute_broker.backends.preparation import helper_source, sha256
-from compute_broker.transports import OpenSSHTransport, TransportError
+from compute_relay.backends import prepare
+from compute_relay.backends.preparation import helper_source, sha256
+from compute_relay.transports import OpenSSHTransport, TransportError
 
 
 def transport(timeout=10):

@@ -1,53 +1,143 @@
 {
-  "name": "compute-broker-fake",
+  "name": "compute-relay-fake",
   "services": {
     "control": {
-      "build": {"context": "..", "dockerfile": "deploy/Dockerfile", "target": "control"},
-      "environment": {
-        "BROKER_HOST": "0.0.0.0", "BROKER_PORT": "8765",
-        "BROKER_DATA_DIR": "/data", "BROKER_DB_PATH": "/data/broker.sqlite3", "BROKER_ARTIFACT_ROOT": "/data/artifacts",
-        "BROKER_BOOTSTRAP_DEMO": "1", "BROKER_DEMO_BACKEND": "fake"
+      "build": {
+        "context": "..",
+        "dockerfile": "deploy/Dockerfile",
+        "target": "control"
       },
-      "ports": ["127.0.0.1:${BROKER_TEST_PORT:-8765}:8765"],
-      "volumes": ["control-data:/data", "demo-metadata:/run/demo", "worker-config:/run/worker"],
-      "networks": ["fixture"],
+      "environment": {
+        "BROKER_HOST": "0.0.0.0",
+        "BROKER_PORT": "8765",
+        "BROKER_DATA_DIR": "/data",
+        "BROKER_DB_PATH": "/data/broker.sqlite3",
+        "BROKER_ARTIFACT_ROOT": "/data/artifacts",
+        "BROKER_BOOTSTRAP_DEMO": "1",
+        "BROKER_DEMO_BACKEND": "fake",
+        "BROKER_PROFILE": "local",
+        "BROKER_ALLOWED_HOSTS": "localhost,127.0.0.1,[::1],control"
+      },
+      "ports": [
+        "127.0.0.1:${BROKER_TEST_PORT:-8765}:8765"
+      ],
+      "volumes": [
+        "control-data:/data",
+        "demo-metadata:/run/demo",
+        "worker-config:/run/worker"
+      ],
+      "networks": [
+        "fixture"
+      ],
       "read_only": true,
-      "tmpfs": ["/tmp:rw,nosuid,nodev,size=64m,mode=1777"],
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"],
+      "tmpfs": [
+        "/tmp:rw,nosuid,nodev,size=64m,mode=1777"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
       "healthcheck": {
-        "test": ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=2).read()"],
-        "interval": "3s", "timeout": "5s", "start_period": "20s", "retries": 30
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=2).read()"
+        ],
+        "interval": "3s",
+        "timeout": "5s",
+        "start_period": "20s",
+        "retries": 30
       }
     },
     "worker": {
-      "build": {"context": "..", "dockerfile": "deploy/Dockerfile", "target": "worker"},
+      "build": {
+        "context": "..",
+        "dockerfile": "deploy/Dockerfile",
+        "target": "worker"
+      },
       "environment": {
-        "BROKER_CONTROL_URL": "http://control:8765", "BROKER_ALLOW_INSECURE_HTTP": "1",
-        "BROKER_WORKER_CONFIG": "/run/demo/worker.json", "BROKER_WORKER_TOKEN_FILE": "/run/demo/worker-token",
+        "BROKER_CONTROL_URL": "http://control:8765",
+        "BROKER_ALLOW_INSECURE_HTTP": "1",
+        "BROKER_WORKER_CONFIG": "/run/demo/worker.json",
+        "BROKER_WORKER_TOKEN_FILE": "/run/demo/worker-token",
         "BROKER_WORKER_JOURNAL": "/worker-state"
       },
-      "volumes": ["worker-config:/run/demo:ro", "worker-journal:/worker-state"],
-      "depends_on": {"control": {"condition": "service_healthy"}},
-      "networks": ["fixture"],
+      "volumes": [
+        "worker-config:/run/demo:ro",
+        "worker-journal:/worker-state"
+      ],
+      "depends_on": {
+        "control": {
+          "condition": "service_healthy"
+        }
+      },
+      "networks": [
+        "fixture"
+      ],
       "read_only": true,
-      "tmpfs": ["/tmp:rw,nosuid,nodev,size=64m,mode=1777"],
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"]
+      "tmpfs": [
+        "/tmp:rw,nosuid,nodev,size=64m,mode=1777"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
     },
     "smoke": {
-      "profiles": ["test"],
-      "build": {"context": "..", "dockerfile": "deploy/Dockerfile", "target": "smoke"},
-      "command": ["--base-url", "http://control:8765", "--demo-file", "/run/demo/demo.json", "--management"],
-      "volumes": ["demo-metadata:/run/demo:ro"],
-      "depends_on": {"control": {"condition": "service_healthy"}, "worker": {"condition": "service_started"}},
-      "networks": ["fixture"],
+      "profiles": [
+        "test"
+      ],
+      "build": {
+        "context": "..",
+        "dockerfile": "deploy/Dockerfile",
+        "target": "smoke"
+      },
+      "command": [
+        "--base-url",
+        "http://control:8765",
+        "--demo-file",
+        "/run/demo/demo.json"
+      ],
+      "volumes": [
+        "demo-metadata:/run/demo:ro"
+      ],
+      "depends_on": {
+        "control": {
+          "condition": "service_healthy"
+        },
+        "worker": {
+          "condition": "service_started"
+        }
+      },
+      "networks": [
+        "fixture"
+      ],
       "read_only": true,
-      "tmpfs": ["/tmp:rw,nosuid,nodev,size=16m,mode=1777"],
-      "cap_drop": ["ALL"],
-      "security_opt": ["no-new-privileges:true"]
+      "tmpfs": [
+        "/tmp:rw,nosuid,nodev,size=16m,mode=1777"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
     }
   },
-  "networks": {"fixture": {"internal": true}},
-  "volumes": {"control-data": {}, "demo-metadata": {}, "worker-config": {}, "worker-journal": {}}
+  "networks": {
+    "fixture": {
+      "internal": true
+    }
+  },
+  "volumes": {
+    "control-data": {},
+    "demo-metadata": {},
+    "worker-config": {},
+    "worker-journal": {}
+  }
 }

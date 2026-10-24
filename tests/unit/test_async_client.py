@@ -3,8 +3,8 @@ import asyncio
 import httpx
 import pytest
 
-from compute_broker.worker.async_client import AsyncJsonClient
-from compute_broker.worker.client import ControlError
+from compute_relay.worker.async_client import AsyncJsonClient
+from compute_relay.worker.client import ControlError
 
 
 class Stream(httpx.AsyncByteStream):

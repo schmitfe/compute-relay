@@ -16,7 +16,7 @@ def test_disabled_storage_needs_no_plugin_tables_routes_or_model_imports(tmp_pat
     # identity configuration or secrets from the parent test environment.
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("BROKER_") and key != "DJANGO_SETTINGS_MODULE"}
-    env.update(BROKER_EXTENSIONS="", DJANGO_SETTINGS_MODULE="compute_broker.control.settings",
+    env.update(BROKER_EXTENSIONS="", DJANGO_SETTINGS_MODULE="compute_relay.control.settings",
                PYTHONPATH=str(source), BROKER_DATA_DIR=str(tmp_path / "disabled"),
                BROKER_DB_PATH=str(tmp_path / "disabled.sqlite3"))
     program = """
@@ -27,8 +27,8 @@ from django.apps import apps
 from django.core.management import call_command
 from django.db import connection
 from django.urls import resolve, Resolver404
-assert not apps.is_installed('compute_broker.extensions.storage')
-assert 'compute_broker.extensions.storage.models' not in sys.modules
+assert not apps.is_installed('compute_relay.extensions.storage')
+assert 'compute_relay.extensions.storage.models' not in sys.modules
 call_command('migrate', verbosity=0)
 assert not any(name.startswith('broker_storage_') for name in connection.introspection.table_names())
 for route in ('/storage/targets/', '/projects/00000000-0000-4000-8000-000000000001/storage/',
@@ -47,16 +47,16 @@ for route in ('/storage/targets/', '/projects/00000000-0000-4000-8000-0000000000
 
 def test_storage_worker_imports_no_django_or_database_modules(tmp_path):
     source = Path(__file__).resolve().parents[3] / "src"
-    program = f"import sys; sys.path.insert(0, {str(source)!r}); import compute_broker.extensions.storage.worker; assert not any(name == 'django' or name.startswith('django.') for name in sys.modules)"
+    program = f"import sys; sys.path.insert(0, {str(source)!r}); import compute_relay.extensions.storage.worker; assert not any(name == 'django' or name.startswith('django.') for name in sys.modules)"
     result = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
 
 def test_optional_mcp_tools_are_read_only_project_scoped_and_reject_paths_before_http():
     pytest.importorskip("mcp")
-    from compute_broker.mcp.facade import ProjectFacade, create_server
-    from compute_broker.extensions.storage.mcp import register
-    from compute_broker.extensions.storage.planning import StoragePlanningError
+    from compute_relay.mcp.facade import ProjectFacade, create_server
+    from compute_relay.extensions.storage.mcp import register
+    from compute_relay.extensions.storage.planning import StoragePlanningError
 
     class Client:
         def __init__(self):

@@ -9,11 +9,11 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.models import (Connection, ConnectorEnrollment, ConnectorTask, ClusterRegistration,
+from compute_relay.control.auth import token_hash
+from compute_relay.control.models import (Connection, ConnectorEnrollment, ConnectorTask, ClusterRegistration,
     User, WorkerIdentity)
-from compute_broker.control.services import digest
-from compute_broker.worker.enrollment import profile_metadata, resolve_connection
+from compute_relay.control.services import digest
+from compute_relay.worker.enrollment import profile_metadata, resolve_connection
 
 pytestmark = pytest.mark.django_db
 
@@ -24,7 +24,6 @@ def personal():
     token = "cbw_synthetic-connector-token"
     site = {"partitions": ["cpu"], "accounts": [], "qos": [], "maximum_cpus": 8,
         "maximum_gpus": 0, "maximum_memory_mib": 8192, "maximum_time_limit_seconds": 600,
-        "termination_margin_seconds": 30, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30,
         "automatic_execution_allowed": False}
     protected = {"backend": "slurm", "allowed_hosts": ["cluster.example"], "allowed_users": ["researcher"],
         "allowed_ports": [22], "remote_root_prefixes": ["/home/researcher/jobs"], "site_profile": site,
@@ -272,7 +271,7 @@ def test_no_configuration_before_discovery(personal):
 
 
 def active_attempt(context):
-    from compute_broker.control.models import Attempt, ExecutionRequest, Grant, Job, Project
+    from compute_relay.control.models import Attempt, ExecutionRequest, Grant, Job, Project
     project = Project.objects.create(owner=context.owner, name="Active test")
     project.connections.add(context.connection)
     grant = Grant.objects.create(project=project, policy={})
@@ -299,7 +298,7 @@ def test_upgrade_with_active_jobs_preserves_current_binding(personal):
 
 
 def test_suspension_is_rechecked_under_setup_authority_fence(personal, monkeypatch):
-    from compute_broker.control import connector_setup
+    from compute_relay.control import connector_setup
     original = connector_setup.authenticated_connection
     def suspended(request, document):
         result = original(request, document)
@@ -311,7 +310,7 @@ def test_suspension_is_rechecked_under_setup_authority_fence(personal, monkeypat
 
 
 def test_discovery_during_configuration_cannot_reopen_admission(personal):
-    from compute_broker.control.cluster_services import lease_discovery, report_discovery
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
     context = personal
     assert context.human.post(f"/clusters/{context.connection.id}/configuration/", configuration_fields(context)).status_code == 302
     context.connection.refresh_from_db();assert not context.connection.configuration_confirmed

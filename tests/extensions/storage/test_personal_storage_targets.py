@@ -8,10 +8,10 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control.models import ClusterRegistration, ConnectorEnrollment, ConnectorTask, WorkerIdentity
-from compute_broker.control.auth import token_hash
-from compute_broker.extensions.storage import services
-from compute_broker.extensions.storage.models import StorageTarget, StorageTargetRegistration
+from compute_relay.control.models import ClusterRegistration, ConnectorEnrollment, ConnectorTask, WorkerIdentity
+from compute_relay.control.auth import token_hash
+from compute_relay.extensions.storage import services
+from compute_relay.extensions.storage.models import StorageTarget, StorageTargetRegistration
 
 
 @pytest.fixture
@@ -236,16 +236,12 @@ def test_new_human_operations_require_csrf_and_never_accept_project_keys(persona
     assert personal.human.get(target_path(personal, f"registrations/{registration.id}/")).status_code == 302
 
 
-def test_external_directory_authority_must_remain_current_before_saving(personal):
-    from compute_broker.control.identity.models import AuthenticationIdentity
+def test_local_owner_must_remain_active_before_saving(personal):
     registration = queue(personal)
     assert complete(personal, registration).status_code == 200
-    # An external identity with stale/unknown provider verification cannot use a
-    # cached human session to save the prior directory result.
-    AuthenticationIdentity.objects.create(user=personal.owner, provider_id="unavailable-directory",
-        subject=str(uuid4()), login_name="researcher", enabled=True, directory_active=True,
-        verified_at=timezone.now() - timedelta(days=2), provider_config_sha256="d" * 64)
-    assert save(personal, registration).status_code == 403
+    personal.owner.is_active = False
+    personal.owner.save(update_fields=["is_active"])
+    assert save(personal, registration).status_code in {302, 403}
     assert not StorageTarget.objects.exists()
 
 

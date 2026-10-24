@@ -12,15 +12,15 @@ import pytest
 from django.db import transaction
 from django.utils import timezone
 
-from compute_broker.control import services
-from compute_broker.control.auth import token_hash
-from compute_broker.control.cluster_services import publish_profiles
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (
+from compute_relay.control import services
+from compute_relay.control.auth import token_hash
+from compute_relay.control.cluster_services import publish_profiles
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import (
     ApprovalDecision, Attempt, Connection, Environment, ExecutionRequest, Grant, Job,
     LedgerEntry, Project, ProjectCredential, User, WorkerIdentity,
 )
-from compute_broker.worker.enrollment import profile_metadata
+from compute_relay.worker.enrollment import profile_metadata
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def review_site(db):
               "allowed_connection_ids": [str(connection.id)], "allowed_environment_revision_sha256": ["e" * 64],
               "allowed_gpu_types": [], "max_active_jobs": 10, "max_total_jobs": 10,
               "per_job_limits": {"cpu_cores": 1, "gpu_devices": 0, "memory_mib": 128,
-                                 "time_limit_seconds": 60, "maximum_charge_duration_seconds": 60},
+                                 "time_limit_seconds": 60},
               "allowance": {"cpu_core_seconds": 1000, "gpu_device_seconds": 0},
               "admission_expires_at": (timezone.now() + timedelta(days=1)).isoformat()}
     grant = Grant.objects.create(project=project, policy=policy)
@@ -51,8 +51,7 @@ def review_site(db):
         request={"connection_id": str(connection.id), "name": "supervised-site-test", "outputs": [],
                  "environment": {"id": str(environment.id), "revision_sha256": "e" * 64}, "resources": {"memory_mib": 128}},
         manifest={"connection_revision_sha256": "c" * 64,
-                  "maximum_allocation": {"cpu_cores": 1, "gpu_devices": 0, "time_limit_seconds": 60,
-                                         "maximum_charge_duration_seconds": 60},
+                  "maximum_allocation": {"cpu_cores": 1, "gpu_devices": 0, "time_limit_seconds": 60},
                   "reservation": {"cpu_core_seconds": 60, "gpu_device_seconds": 0}}, manifest_sha256="f" * 64)
     return SimpleNamespace(owner=owner, worker=worker, connection=connection, project=project,
                            credential=credential, grant=grant, job=job)
@@ -100,8 +99,11 @@ def test_unverified_site_holds_budget_for_review_without_consuming_compute_usage
     assert allowance["jobs"]["admitted"] == 0
 
 
-def test_direct_authorization_cannot_skip_site_review_gate(review_site):
+@pytest.mark.parametrize("site_profile", [{}, {"automatic_execution_allowed": False}])
+def test_direct_authorization_cannot_skip_site_review_gate(review_site, site_profile):
     context = review_site
+    context.connection.configuration = {"site_profile": site_profile}
+    context.connection.save(update_fields=["configuration"])
     execution = ExecutionRequest.objects.create(job=context.job, credential=context.credential)
     with pytest.raises(BrokerError) as denied:
         with transaction.atomic():
@@ -128,7 +130,8 @@ def test_exact_human_approval_can_authorize_and_dispatch_unverified_site_once(re
     assert Attempt.objects.count() == 1
 
 
-def test_dispatch_requires_approval_even_for_an_existing_automatic_authorization(review_site):
+@pytest.mark.parametrize("site_profile", [{}, {"automatic_execution_allowed": False}])
+def test_dispatch_requires_approval_even_for_an_existing_automatic_authorization(review_site, site_profile):
     context = review_site
     # Model an authorization admitted before the operator disabled automation.
     # Keep the synthetic revision constant to isolate this final dispatch gate.
@@ -137,7 +140,7 @@ def test_dispatch_requires_approval_even_for_an_existing_automatic_authorization
     result, execution = request_execution(context)
     assert result["attempt_id"]
     attempt = Attempt.objects.get(execution_request=execution)
-    context.connection.configuration = {"site_profile": {"automatic_execution_allowed": False}}
+    context.connection.configuration = {"site_profile": site_profile}
     context.connection.save(update_fields=["configuration"])
     with pytest.raises(BrokerError) as denied:
         dispatch(context, attempt)
@@ -147,14 +150,18 @@ def test_dispatch_requires_approval_even_for_an_existing_automatic_authorization
     assert not ApprovalDecision.objects.exists()
 
 
-@pytest.mark.parametrize("site_profile", [{}, {"automatic_execution_allowed": True}])
-def test_legacy_or_explicitly_verified_site_retains_budgeted_automation(review_site, site_profile):
+@pytest.mark.parametrize("backend", ["fake", "slurm"])
+@pytest.mark.parametrize("site_profile", [{}, {"automatic_execution_allowed": False}, {"automatic_execution_allowed": True}])
+def test_only_explicit_cluster_opt_in_permits_budgeted_automation(review_site, site_profile, backend):
     context = review_site
+    context.connection.backend = backend
     context.connection.configuration = {"site_profile": site_profile}
-    context.connection.save(update_fields=["configuration"])
-    result, _ = request_execution(context)
-    assert result["attempt_id"]
-    assert Attempt.objects.count() == 1
+    context.connection.save(update_fields=["backend", "configuration"])
+    result, execution = request_execution(context)
+    allowed = site_profile.get("automatic_execution_allowed") is True
+    assert bool(result["attempt_id"]) is allowed
+    assert Attempt.objects.count() == (1 if allowed else 0)
+    assert execution.state == ("authorized" if allowed else "awaiting_approval")
 
 
 def advertised_profile(automatic_execution_allowed=False):

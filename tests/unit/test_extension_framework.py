@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import pytest
 from django.db import transaction
 
-from compute_broker import extensions
-from compute_broker.control import services
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Job
+from compute_relay import extensions
+from compute_relay.control import services
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Job
 from test_control import broker, budgeted, execution, prepared_job
 
 

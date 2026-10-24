@@ -81,11 +81,11 @@ def preflight(p, calibration, local, grants):
     if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in rates):
         raise ValueError("Positive measured pilot throughput is required")
     expected = 30 + 4 * (costs["matrix_elements_generated"] / rates[0] + costs["matmul_flops"] / rates[1] + costs["thermal_updates"] / rates[2])
-    required = {"memory_mib", "storage_available_bytes", "cpu_core_seconds_available", "wall_seconds", "maximum_charge_duration_seconds", "maximum_flops"}
+    required = {"memory_mib", "storage_available_bytes", "cpu_core_seconds_available", "wall_seconds", "maximum_flops"}
     if set(grants) != required or any(type(v) is not int or v <= 0 or v > 2**53 - 1 for v in grants.values()):
         raise ValueError("Explicit integer project resource grants are required")
-    if grants["wall_seconds"] % 60 or grants["maximum_charge_duration_seconds"] < grants["wall_seconds"]:
-        raise ValueError("Use whole-minute scheduler time and verified larger charge duration")
+    if grants["wall_seconds"] % 60:
+        raise ValueError("Use whole-minute scheduler time")
     if costs["peak_bytes"] > grants["memory_mib"] * 1024**2:
         raise ValueError("Conservative dense working set exceeds the cluster memory grant")
     if costs["project_storage_bound_bytes"] > grants["storage_available_bytes"] or costs["output_bound_bytes"] > 512 * 1024:
@@ -94,7 +94,7 @@ def preflight(p, calibration, local, grants):
         raise ValueError("Scientific work exceeds the explicit operation budget")
     if expected > grants["wall_seconds"] * 0.8:
         raise ValueError("Conservative pilot extrapolation exceeds scheduler time")
-    reserved = p["threads"] * grants["maximum_charge_duration_seconds"]
+    reserved = p["threads"] * grants["wall_seconds"]
     if reserved > grants["cpu_core_seconds_available"]:
         raise ValueError("Allocated CPU reservation exceeds the available project budget")
     return {"schema_version": "1.0", "accepted": True, "parameters_sha256": digest(p), "parameters": p,

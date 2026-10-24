@@ -9,10 +9,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
 
-from compute_broker.worker.client import ControlError, JsonClient, strict_json
-from compute_broker.worker.journal import Journal
-from compute_broker.worker.runner import Worker
-from compute_broker.worker.enrollment import EnrollmentError, profile_metadata, resolve_connection
+from compute_relay.worker.client import ControlError, JsonClient, strict_json
+from compute_relay.worker.journal import Journal
+from compute_relay.worker.runner import Worker
+from compute_relay.worker.enrollment import EnrollmentError, profile_metadata, resolve_connection
 
 
 class FakeControl:
@@ -56,7 +56,7 @@ class BackendSpy:
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
-        from compute_broker.backends import prepare
+        from compute_relay.backends import prepare
 
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -212,9 +212,7 @@ class EnrollmentTests(unittest.TestCase):
             "remote_root_prefixes": ["/scratch/alice/broker"], "profile_revision": 1,
             "ssh": {"identity_file": "/protected/id_ed25519", "known_hosts": "/protected/known_hosts", "mode": "key"},
             "python_path": "/usr/bin/python3", "slurm_paths": {"sbatch": "/usr/bin/sbatch"},
-            "site_profile": {"partitions": ["debug"], "accounts": ["research"], "qos": [],
-                             "termination_margin_seconds": 30, "overtime_margin_seconds": 0,
-                             "cleanup_margin_seconds": 30},
+            "site_profile": {"partitions": ["debug"], "accounts": ["research"], "qos": [],},
             "environment_discovery": {"python_executables": ["/usr/bin/python3"]},
         }
         self.profiles = {"university": self.profile}
@@ -310,6 +308,19 @@ class EnrollmentTests(unittest.TestCase):
                     profile_metadata("university", self.profile)
                 self.assertEqual(rejected.exception.code, "INVALID_CREDENTIAL_PROFILE")
 
+    def test_unknown_site_fields_are_rejected_before_profile_publication_or_discovery(self):
+        for field in ("termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"):
+            with self.subTest(field=field):
+                profile = copy.deepcopy(self.profile)
+                profile["site_profile"][field] = 30
+                with self.assertRaises(EnrollmentError):
+                    profile_metadata("university", profile)
+                configuration = copy.deepcopy(self.public)
+                configuration["site_profile"] = {**self.profile["site_profile"], field: 30}
+                for refresh in (False, True):
+                    with self.assertRaises(EnrollmentError):
+                        resolve_connection(configuration, self.profiles, refresh=refresh)
+
     def test_authorized_discovery_can_renew_derived_binding_but_jobs_remain_strict(self):
         _, old, old_digest = resolve_connection(self.public, self.profiles)
         self.profile["site_profile"]["allocated_cpus"] = 4
@@ -372,7 +383,7 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual([item["alias"] for item in self.control.calls[-1][2]["profiles"]], ["university"])
 
     def test_new_worker_reconstructs_dynamic_job_from_public_lease(self):
-        from compute_broker.backends import prepare
+        from compute_relay.backends import prepare
 
         private, public, digest = resolve_connection(self.public, self.profiles)
         source = b"print('cluster payload, never run locally')\n"

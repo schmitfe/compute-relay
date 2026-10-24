@@ -12,7 +12,7 @@ These are reproducible tasks for a new agent session, not evidence that a client
 
 Extensions are disabled by default. `case.json` declares required extensions, core tools, optional profiles and resource bounds. Discover actual tools/capabilities first. Missing extension or scope means **blocked**, not permission to enable server extensions or broaden a key. Environment building needs the human-enabled `environments` extension. The current alpha can build an empty stdlib venv or a small verified wheel closure; its 512 KiB core upload limit cannot stage the 16.6 MB NumPy wheel, so a managed NumPy build is blocked until large-wheel transport exists. Use a preinstalled approved NumPy environment for case 04. The workflow extension orchestrates ordinary native jobs through retained artifacts; native Slurm arrays and scheduler dependency directives are not implemented. Ordinary output retrieval is core. The manual artifact-relay fallback for case 03 does not pass workflow-extension acceptance.
 
-The API key identifies the broker project. Neither the generated MCP configuration nor job requests need a project UUID; the adapter resolves it from the authenticated broker at startup. The optional legacy `--project-id` argument adds a checked identity assertion and is unnecessary for new setups. The generator itself stays offline and never opens the referenced key file.
+The API key identifies the broker project. Neither the generated MCP configuration nor job requests need a project UUID; the adapter resolves it from the authenticated broker at startup. The generator itself stays offline and never opens the referenced key file.
 
 From the repository, create one fresh private project:
 
@@ -28,7 +28,7 @@ Use a new operator-configured project for each externally metered run. A consume
 
 The supplied Python must already have this broker and its `mcp` extra installed. The generator creates mode0700 directories and mode0600 files, refuses any existing destination, and references the token path without opening/copying it. Destinations must be below `/tmp/` or this checkout's ignored `local/`. It changes no global client settings. Optional client registration is explicit: add --extensions environments,workflows only when the human has enabled those server extensions and granted the required project/key scopes; the flag does not grant authority. Each project contains `.codex/config.toml`, `.mcp.json`, `PROMPT.md`, scripts, checklist, source hashes, and a recording template. Use a distinct project directory/session for every client/case repetition.
 
-For Codex, open the generated project, review/trust its project configuration, verify the `compute_broker` server is connected, and send `PROMPT.md` as the first task. Codex documents project-scoped stdio configuration in `.codex/config.toml`. [Official Codex MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+For Codex, open the generated project, review/trust its project configuration, verify the `compute_relay` server is connected, and send `PROMPT.md` as the first task. Codex documents project-scoped stdio configuration in `.codex/config.toml`. [Official Codex MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 For Claude Code, start in that project and review its project `.mcp.json`; check the MCP connection before sending the prompt. [Official Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
 

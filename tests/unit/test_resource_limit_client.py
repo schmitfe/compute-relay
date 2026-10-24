@@ -9,8 +9,8 @@ from urllib.error import HTTPError
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
-from compute_broker.mcp.facade import ProjectFacade, create_server
-from compute_broker.worker.client import ControlError, JsonClient
+from compute_relay.mcp.facade import ProjectFacade, create_server
+from compute_relay.worker.client import ControlError, JsonClient
 
 
 TOKEN = "private-project-token-do-not-expose"

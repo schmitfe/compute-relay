@@ -20,7 +20,7 @@ Rejection comments remain in the normal job history.
 The fixed stdlib script sleeps for two seconds, prints its hostname and Python
 version, selected Python executable and loaded module names, and writes
 `cluster-check.json` containing those details and the marker
-`compute-broker-cluster-check-v1`. It requests two logical CPUs, or one when the
+`compute-relay-cluster-check-v1`. It requests two logical CPUs, or one when the
 configured ceiling is one, 128 MiB, zero GPUs and a one-minute scheduler limit.
 Queueing, startup and cleanup can take longer than the script. The reservation
 uses configured allocation rounding and the one-minute requested walltime. Final

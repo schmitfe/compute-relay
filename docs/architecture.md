@@ -1,78 +1,68 @@
-# Compute Broker architecture
+# Compute Relay architecture
 
-This is the target architecture. See [implemented runtime scope](runtime.md) for the development alpha and remaining acceptance gates.
+This describes the local package and its execution boundaries. See [runtime](runtime.md)
+for supported behavior and [installation](deployment.md) for startup and recovery.
+The prior hosted/multi-user design is archived on `codex/archive-multi-user-server`
+at `520effc`.
 
-The [shared-service specification](hosted-architecture.md) and
-[ADR 0005](adr/0005-hosted-identity-and-connectors.md) refine hosted accounts,
-PostgreSQL, async I/O and per-user SSH session custody. They are implementation
-direction, not a claim that the development deployment is ready for shared use.
+## Local scope
 
-## Scope and deployment assumptions
+One command starts a loopback Django/Waitress portal, a durable SQLite ledger,
+local artifact storage and saved SSH connectors. One local owner controls
+projects, cluster profiles and human decisions, using an optional password or
+explicitly selected passwordless local access. All components share the device's
+ordinary account; they do not form an operating-system secret boundary against
+another process with that account's access.
 
-The broker provides compute access to existing AI clients; it does not run a language-model orchestration loop. A request can survive the originating chat and be inspected by another authorized client. The control service owns authorization, approvals, reservations, and durable history. Execution workers own cluster credentials and perform bounded operations on approved targets.
+The broker supplies compute access to existing AI clients; it does not run the
+language-model orchestration loop. A durable job survives its originating chat.
+Independent clusters retain separate SSH identities and human login/MFA sessions.
+Failure of one connection must not erase another's records or accounting.
 
-The first supported protected deployment is Linux. The agent has broad access to its ordinary account, including its workspace and potentially its browser, but has no root/sudo, broker service identity, Docker-daemon access, or access to deployment administration. A same-user development installation is useful with synthetic credentials but cannot satisfy the secret-isolation requirement. macOS and Windows protected installations require a separate service/VM design and acceptance tests before support is claimed.
-
-Two clusters are configured independently. The internal cluster uses an SSH key. The university cluster uses a different key and human MFA during SSH login. Neither requires a REST API or Slurm federation. Expiry or failure of one connection must not stop the other.
-
-## Component boundaries
+## Components
 
 ```mermaid
 flowchart LR
-    A[AI client account] --> F[MCP facade or REST client]
-    F --> C[Control service]
-    H[Trusted human session] --> C
-    C --> D[(SQL database)]
-    C --> O[Immutable object storage]
-    W[Protected execution worker] -->|Lease and report API| C
-    W -->|Read exact authorized bundle| O
+    A[AI client] --> F[Project-scoped MCP facade]
+    F --> C[Local portal and API]
+    H[Local human session] --> C
+    C --> D[(SQLite ledger)]
+    C --> O[Immutable local artifacts]
+    W[Local SSH connector] -->|Leases and reports| C
     W --> S[Slurm adapter]
-    S --> T[OpenSSH transport]
-    T --> R[Audited remote helper]
+    S --> T[System OpenSSH]
+    T --> R[Fixed one-shot remote helper]
     R --> L[Slurm commands]
 ```
 
-| Component | Implementation | Authority |
-| --- | --- | --- |
-| Control service | Django, Django REST framework, server-rendered review UI | Project permissions, human decisions, ledger, authenticated execution authorizations, task leases |
-| MCP facade | Official Python MCP SDK; stdio first, HTTP later | Forward caller-scoped requests; no database or cluster credentials |
-| Execution worker | Separate Python process/container and protected identity | Only assigned cluster connections and leased operations; no direct database access |
-| Slurm adapter | Backend protocol implementation | Render a constrained job, query scheduler/accounting, cancel managed jobs |
-| SSH transport | System OpenSSH with explicit trusted configuration | Authenticated connections to configured hosts; no agent-controlled SSH options |
-| Remote helper | Small reviewed Python 3 program, invoked once per operation | Fixed operations, bounded JSON input/output, absolute scheduler commands |
-| SQL and object storage | SQLite + protected filesystem locally; PostgreSQL + filesystem initially on server | Durable records, immutable job packages and authorized outputs |
+The launcher supervises the web service and saved connectors. SSH passphrase and
+MFA prompts remain in its terminal and are serialized. Connectors use scoped
+HTTP credentials and their own durable journals rather than accessing controller
+tables directly. The official MCP stdio process has a project credential; it
+receives no SSH key or MFA response. No Redis, Celery, directory service or
+separate database is required.
 
-Use a modular monolith for control logic. Do not add Redis, Celery, Kubernetes hosting, a separate authorization server, or object storage infrastructure to the personal baseline. A SQL outbox and leased work items make worker recovery durable without an additional queue service.
+## Authority
 
-Django is selected for its users, sessions, migrations and transaction support. Permissions remain explicit service logic; list queries and object creation require authorization checks as well as object retrieval. [Django transactions](https://docs.djangoproject.com/en/5.2/topics/db/transactions/), [DRF permission limitations](https://www.django-rest-framework.org/api-guide/permissions/)
+The owner controls all local projects. A project's agent keys have explicit
+scopes, expiries and execution policy; several keys share one authoritative
+allowance and lifetime submission cap. Key material is shown once and stored as
+a hash by the controller. Human configuration and approval remain separate from
+project bearer authentication, including in passwordless mode.
 
-## Identity and project permissions
-
-Every object has an internal UUID. External human identities are linked by `(provider, immutable subject)`, never by an email or username match alone. A local installation creates one owner but uses the same user/membership tables as a shared installation. The hosted target supports explicitly routed local passwords or direct LDAP authentication; OIDC may be added as another provider later. LDAP-only identities have no usable local password, and directory failure cannot fall back to local login. Directory groups may grant configured project membership; they do not automatically grant cluster access or service administration.
-
-Roles are project-scoped `viewer`, `submitter`, `approver`, and `project_admin`, plus installation-level `service_admin`. Project administrators can manage project members, budgets and issued credentials within installation policy; they cannot edit protected SSH settings. Approval and administration must use human credentials, never project agent keys. A user may hold multiple roles. Enforcing separation between requester and approver is a configurable hosted policy, not a requirement for a single owner.
-
-An agent key belongs to one project and an actor label, with a hash, independent display identifier, expiry, revocation timestamp, explicit scopes and optional tighter limits. Its full value is shown only at creation/rotation and never stored by normal key management. Several keys share one authoritative project ledger and lifetime submission count. A key may require human confirmation while automatic execution stays within project policy. Keys cannot select another project or another user's cluster connection. Revoking a key stops new agent operations and undispatched execution; observation/accounting of dispatched jobs continues. A separate target stop-project action pauses admissions and requests cancellation of outstanding managed attempts.
-
-Cluster definitions describe capabilities. Cluster connections bind a user, worker, remote username, allowed Slurm accounts and a credential reference. The API must not let a project key override the binding's host, user, key path or Slurm account allowlist. Multiple projects using one remote Unix UID do not receive cluster-side filesystem isolation.
-
-Hosted control and runner storage must not retain user private SSH keys, including
-encrypted copies. Bind each user's agent key to their own verified HPC principal
-and isolated per-principal OpenSSH worker. Sharing a project does not change
-the execution account; cross-user HPC delegation is outside the initial scope.
-Server-side connectors consume approved live
-sessions only after keyless activation and isolation pass site acceptance;
-outbound personal connectors keep credentials on the user's protected device.
-An authenticated SSH control socket is a sensitive access capability even though
-it does not contain the private key. Cluster I/O becomes async while short ledger
-transactions remain synchronous and never wait for network operations.
+A cluster connection binds the local owner, connector, SSH target and approved
+Slurm accounts. Agent keys cannot replace its host, user, key path or account
+allowlist. A prepared job binds an exact connection/environment revision and
+content digest. Revocation or policy change stops new admission and undispatched
+execution; observation and accounting of dispatched allocations continue.
+Multiple projects using one remote Unix account do not gain filesystem isolation.
 
 ## Persisted entities
 
 | Entity | Key fields and constraints |
 | --- | --- |
-| User and ExternalIdentity | UUID; unique issuer/subject; local or external authentication |
-| Project and Membership | UUID; unique project/user membership; explicit role set |
+| Local owner | UUID; optional local password hash and saved local authentication choice |
+| Project | UUID; local owner, policy, cluster/environment grants and shared key limits |
 | ProjectCredential | Project, creator, actor label, secret hash, independent display identifier, scopes, expiry, execution confirmation, cluster restrictions, revocation |
 | Cluster and ClusterProfileRevision | Backend kind; immutable normalized discovery and raw observation references; timestamps; admin overrides |
 | ClusterConnection | Owner, cluster, worker, remote identity, credential reference, allowed accounts, authorization state |
@@ -104,7 +94,7 @@ The native job identity includes connection, cluster identity, remote user, sche
 4. The adapter renders the final `sbatch` bytes and environment wrapper. The service stores the complete manifest and files. It calculates maximum allocation and compute reservation requirements from the configured site model, not from an LLM estimate.
 5. The UI shows script files, wrappers, environment revision, resource/allocation envelope, data access, maximum charge, and the diff from earlier revisions. A human decision binds the canonical manifest digest.
 6. Approval-required execution requests wait. A human approval permits exactly one attempt for that request in version one; it is consumed atomically at authorization and cannot be replayed for another attempt, even with the same package digest. Budgeted requests pass a fresh deterministic policy check and reservation for each attempt. Mixed mode uses the budgeted path only within the configured automatic envelope; otherwise it creates a human approval request. Hard project/installation caps still apply after human approval. A cap increase is a separate authorized policy change.
-7. Authorization rechecks permissions, credential status, pause state, policy version, immutable connection revision, profile compatibility, active-job cap and funds. Apply the automatic envelope and hard caps to the effective prepared allocation and conservative charge duration after site rounding, not only the requested resources. It reserves compute and creates a dispatch outbox item in the same transaction.
+7. Authorization rechecks permissions, credential status, pause state, policy version, immutable connection revision, profile compatibility, active-job cap and funds. Apply the automatic envelope and hard caps to the effective prepared allocation after site rounding and requested walltime, not only the unrounded resource request. It reserves compute and creates a dispatch outbox item in the same transaction.
 
 Package integrity uses SHA-256 of each file and an RFC 8785 canonical JSON manifest. The manifest excludes its own digest. File entries are sorted by logical path before canonicalization; duplicate paths are invalid. It includes the exact batch script, environment wrapper, referenced immutable environment recipe/image digest, resource envelope, immutable connection-configuration digest and profile revision. Reject duplicate JSON keys, nonfinite numbers and unpaired Unicode surrogates before validation/hashing. Restrict wire integers to the exact browser/JSON range through `2^53 - 1`; the internal ledger uses checked BIGINT arithmetic. Mutable input datasets are identified as mutable in the review; a pinned reference is not proof of their future contents. Hard reproducibility requires snapshots/checksums and isolated execution.
 
@@ -140,7 +130,7 @@ Slurm does not supply a broker-wide exactly-once submit transaction. Persist a s
 
 ## Budget units and transactions
 
-Use integer allocated resource-seconds: `cpu_core_seconds` and `gpu_device_seconds`. Requested utilization, process CPU time, GPU busy percentage and billing TRES are different quantities. Requested Slurm limits are whole-minute multiples in version one. Reserve effective allocated resources multiplied by requested walltime: 8 cores and 1 GPU for 3,600 seconds reserve 28,800 core-seconds and 3,600 GPU-seconds. No termination, overtime or cleanup interval is added. New manifests retain the internal `maximum_charge_duration_seconds` field equal to requested walltime. Settlement charges actual Slurm-reported elapsed allocated resources in full, even when usage exceeds the reservation; debt blocks new admissions. This reservation model does not promise a physical upper bound on site usage. Separate GPU-type buckets or explicit weights are later features; initially each grant has an allowed GPU-type set so dissimilar devices are not silently treated as equivalent. [Slurm time-limit behavior](https://slurm.schedmd.com/sbatch.html)
+Use integer allocated resource-seconds: `cpu_core_seconds` and `gpu_device_seconds`. Requested utilization, process CPU time, GPU busy percentage and billing TRES are different quantities. Requested Slurm limits are whole-minute multiples in version one. Reserve effective allocated resources multiplied by requested walltime: 8 cores and 1 GPU for 3,600 seconds reserve 28,800 core-seconds and 3,600 GPU-seconds. No termination, overtime or cleanup interval is added. Requested walltime is the sole reservation duration; no separate charge-duration field is retained. Settlement charges actual Slurm-reported elapsed allocated resources in full, even when usage exceeds the reservation; debt blocks new admissions. This reservation model does not promise a physical upper bound on site usage. Separate GPU-type buckets or explicit weights are later features; initially each grant has an allowed GPU-type set so dissimilar devices are not silently treated as equivalent. [Slurm time-limit behavior](https://slurm.schedmd.com/sbatch.html)
 
 The admission invariant for each resource dimension is:
 
@@ -157,7 +147,7 @@ spent + reserved + candidate_reservation <= granted_limit
 | Adjustment | Privileged append-only correction; retain original evidence and record actor/reason |
 | Pause or revoke grant | Block future admissions/dispatch permits; preserve records and committed usage; cancellation is an explicit operation |
 
-Serialize authorization on the grant row. PostgreSQL uses `transaction.atomic()` with `SELECT FOR UPDATE`; SQLite uses an `IMMEDIATE` write transaction and short bounded retries for lock contention. SQLite `select_for_update()` does not supply PostgreSQL locking semantics. Check the active-job cap in the same serialized transaction. Enforce unique settlement/release constraints and optimistic lease generation checks. Do not implement concurrency solely with process-local locks. [Django database differences](https://docs.djangoproject.com/en/5.2/ref/databases/)
+Serialize authorization with SQLite `IMMEDIATE` write transactions and short bounded retries for lock contention. The local database remains authoritative across worker processes and API clients. Check the active-job cap in the same serialized transaction. Enforce unique settlement/release constraints and optimistic lease generation checks. Do not implement concurrency solely with process-local locks. [Django database differences](https://docs.djangoproject.com/en/5.2/ref/databases/)
 
 Keep full reservations for queued/running attempts. Account failed and cancelled jobs for allocated runtime too. Do not double-count allocation and `.batch`/`.extern` step records. Missing final allocation, a native requeue or unverifiable final usage quarantines the attempt, blocks further automatic spending as appropriate, and preserves its reservation. Usable final accounting is charged in full even if allocated resources or elapsed duration exceeded the prepared reservation; record the overage rather than truncating observed usage to fit the grant.
 
@@ -179,7 +169,7 @@ Use protected content-addressed local files with a storage interface that can la
 
 Enforce per-project and global storage/object-count quotas, concurrent-upload limits and a disk-headroom floor. Reserve declared or chunked upload capacity transactionally before writing bytes, then reconcile actual bytes. Count logical project references separately from physical deduplicated objects without disclosing another project's content. Aborted uploads expire; unreachable objects have a bounded orphan TTL. Artifact collection consumes the same quotas. Garbage collection never removes evidence/packages held by unsettled attempts. Per-file/package limits alone are not sufficient against storage exhaustion.
 
-After a restart, replay outstanding work by state and lease generation, reconcile dispatched native jobs, and settle only after definitive evidence. Back up the database, objects, protected keys and configuration with a coordinated procedure. A stale restore can forget already submitted jobs; restore starts with admissions paused and remote reconciliation before resuming. A migration from local to hosted has one authoritative ledger, a cutover fence and re-paired connectors; copying data and letting both installations admit work is forbidden.
+After a restart, replay outstanding work by state and lease generation, reconcile dispatched native jobs, and settle only after definitive evidence. Back up the database, objects, protected keys and configuration with a coordinated procedure. A stale restore can forget already submitted jobs; restore starts with admissions paused and remote reconciliation before resuming. Never restore a second installation that admits work against the same outstanding jobs without one authoritative ledger and reconciliation fence.
 
 ### Planned project storage guidance and placement
 
@@ -195,7 +185,7 @@ The agent-facing planning response should contain configured budget, managed mea
 
 Cheap filesystem capacity observations run through fixed worker operations on approved targets. Project usage can combine managed artifact/build receipts with bounded, infrequent scans of its dedicated roots. Never repeatedly walk a multi-terabyte shared home tree on login nodes. Record partial scans and out-of-band writes as uncertainty. Paths, stale observations and scheduler resource tables do not imply current available space.
 
-For a shared NAS hosting identity and home services, recommend an operator-configured low-space admission guard independent of project budgets. Its free-byte and free-inode warning/stop thresholds, reserved headroom, maximum observation age and recovery hysteresis are configurable per backing filesystem. A stale/unreachable observation can pause new storage-heavy managed work according to policy. This is an optional broker guard, not protection against all NAS writers. Do not automatically delete unrelated data, cancel existing jobs or claim a capacity guarantee. Keep the hosted control database, worker journals, monitoring and recovery configuration on storage independent of the vulnerable NAS.
+For a shared NAS hosting identity and home services, recommend an operator-configured low-space admission guard independent of project budgets. Its free-byte and free-inode warning/stop thresholds, reserved headroom, maximum observation age and recovery hysteresis are configurable per backing filesystem. A stale/unreachable observation can pause new storage-heavy managed work according to policy. This is an optional broker guard, not protection against all NAS writers. Do not automatically delete unrelated data, cancel existing jobs or claim a capacity guarantee. Keep the local database, worker journals, monitoring and recovery configuration on storage independent of the vulnerable NAS.
 
 Storage holds reserve **planning estimates**, not physical filesystem blocks. Include build/download caches, unpacked environments, stage-in copies, expected retained outputs and simultaneous old/new migration copies. Declare persistent and peak scratch requirements separately. Deduplicate shared environment-cache estimates at the actual target, while retaining project attribution and access checks. Atomic holds prevent cooperating broker clients from double-planning the same headroom; measurement freshness and external writers still limit the guarantee. Estimate global headroom from observed available capacity minus pending unmaterialized growth and operational reserve; retained files are already reflected in filesystem free space and must not be subtracted twice. A retained result remains charged to project storage planning after compute accounting has settled.
 
@@ -234,7 +224,7 @@ Native arrays are a separate backend milestone. Add immutable `admission_units` 
 
 The current alpha implements **broker relay only**: the protected worker reads bounded declared outputs over its configured cluster connection, reports their bytes to control, and control stores them under project quotas. The authorized analysis client downloads those stored artifacts from the broker. Logs use the same bounded reporting path. Direct delivery, route selection, transfer grants and object-store delivery described below are planned extensions; they are not current configuration fields or implemented endpoints. The supervised lab test keeps its existing helper, execution manifests and relay flow.
 
-Keep artifact authorization in the control service while allowing the artifact bytes to take a different path. This permits a future hosted broker to manage jobs without carrying large analysis datasets. The initial extension needs a route selector, a small durable transfer record and an artifact-only transport adapter, rather than a separate workflow platform.
+Keep artifact authorization in the control service while allowing the artifact bytes to take a different path. This permits a future transfer adapter to manage jobs without carrying large analysis datasets. The initial extension needs a route selector, a small durable transfer record and an artifact-only transport adapter, rather than a separate workflow platform.
 
 | Planned delivery | Data path | Preconditions |
 | --- | --- | --- |

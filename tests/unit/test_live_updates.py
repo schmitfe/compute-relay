@@ -10,8 +10,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 import pytest
 
-from compute_broker.control import services
-from compute_broker.control.models import ApprovalDecision, Attempt, Connection, ExecutionRequest, Job, Membership, ProjectCredential
+from compute_relay.control import services
+from compute_relay.control.models import ApprovalDecision, Attempt, Connection, ExecutionRequest, Job, ProjectCredential
 from test_control import broker, execution, prepared_job
 
 
@@ -71,34 +71,25 @@ def test_dashboard_updates_job_state_and_new_pending_review_notice(broker):
     assert "No execution requests" in running["live-review-notifications"]
 
 
-def test_dashboard_membership_and_approval_roles_are_checked_on_each_poll(broker):
+def test_dashboard_never_shows_another_owners_jobs_or_reviews(broker):
     job = prepared_job(broker)
     execution(broker, job)
-    membership = Membership.objects.create(project=broker.project, user=broker.outsider, roles=["viewer"])
     client = human(broker.outsider)
     viewed = live(client).json()["fragments"]
-    assert f'/review/{job.id}/' in viewed["live-job-list"]
+    assert str(job.id) not in viewed["live-job-list"]
     assert "No execution requests" in viewed["live-review-notifications"]
-    membership.roles = ["approver"]
-    membership.save(update_fields=["roles"])
-    assert "1 execution request" in live(client).json()["fragments"]["live-review-notifications"]
-    membership.delete()
-    withdrawn = live(client).json()["fragments"]
-    assert str(job.id) not in withdrawn["live-job-list"]
-    assert "No execution requests" in withdrawn["live-review-notifications"]
+    owner = live(human(broker.owner)).json()["fragments"]
+    assert str(job.id) in owner["live-job-list"]
+    assert "1 execution request" in owner["live-review-notifications"]
 
 
-def test_project_snapshot_updates_shared_allowance_and_requires_current_admin_role(broker):
+def test_project_snapshot_updates_owned_allowance_and_denies_other_accounts(broker):
     job = prepared_job(broker)
     attempt(broker, job)
-    membership = Membership.objects.create(project=broker.project, user=broker.outsider, roles=["project_admin"])
-    client = human(broker.outsider)
-    response = live(client, "project", broker.project.id)
+    response = live(human(broker.owner), "project", broker.project.id)
     assert response.status_code == 200
     assert "1 of 100 simultaneous jobs" in response.json()["fragments"]["live-project-allowance"]
-    membership.roles = ["viewer"]
-    membership.save(update_fields=["roles"])
-    assert live(client, "project", broker.project.id).status_code == 403
+    assert live(human(broker.outsider), "project", broker.project.id).status_code == 403
 
 
 def test_review_snapshot_inserts_a_new_bound_approval_panel_without_reloading_source(broker):
@@ -107,7 +98,7 @@ def test_review_snapshot_inserts_a_new_bound_approval_panel_without_reloading_so
     initial = live(client, "review", job.id)
     assert initial.status_code == 200 and initial.json()["execution_requests"] == []
     request = execution(broker, job)
-    with patch("compute_broker.control.services.read_blob", side_effect=AssertionError("Polling must not read source files")):
+    with patch("compute_relay.control.services.read_blob", side_effect=AssertionError("Polling must not read source files")):
         response = live(client, "review", job.id)
     payload = response.json()
     panel, = payload["execution_requests"]
@@ -121,7 +112,7 @@ def test_review_snapshot_inserts_a_new_bound_approval_panel_without_reloading_so
     assert "uploaded source" not in response.content.decode()
 
 
-def test_live_review_uses_the_requesting_key_for_legacy_approval_fallback_and_keeps_budget_hold(broker):
+def test_live_review_shows_recorded_requesting_key_requirements_and_keeps_budget_hold(broker):
     job = prepared_job(broker)
     broker.grant.policy["mode"] = "budgeted"
     broker.grant.save(update_fields=["policy"])
@@ -129,8 +120,6 @@ def test_live_review_uses_the_requesting_key_for_legacy_approval_fallback_and_ke
         name="Review-only request key", token_hash="b" * 64, scopes=broker.credential.scopes,
         execution_mode="approval_required", expires_at=timezone.now() + timedelta(days=1))
     request = execution(broker, job, credential=other_key)
-    request.approval_requirements = {}
-    request.save(update_fields=["approval_requirements"])
     response = live(human(broker.owner), "review", job.id)
     panel, = response.json()["execution_requests"]
     assert "KEY_REVIEW_REQUIRED" in panel["html"]
@@ -203,7 +192,7 @@ def test_review_snapshot_bounds_history_queries_but_includes_old_pending_and_rec
     ApprovalDecision.objects.create(execution_request=requests[0], approver=broker.owner,
         approved=False, manifest_sha256=job.manifest_sha256, comment="New decision on an older request")
     client = human(broker.owner)
-    with patch("compute_broker.control.services.serialize_job", side_effect=AssertionError("No full-history serialization")):
+    with patch("compute_relay.control.services.serialize_job", side_effect=AssertionError("No full-history serialization")):
         with CaptureQueriesContext(connection) as queries:
             response = live(client, "review", job.id)
     assert response.status_code == 200
@@ -215,16 +204,14 @@ def test_review_snapshot_bounds_history_queries_but_includes_old_pending_and_rec
     assert "New decision on an older request" in panels[str(requests[0].id)]["html"]
 
 
-def test_review_snapshot_rechecks_approver_membership_and_owner_global_suspension(broker):
+def test_review_snapshot_requires_ownership_and_current_active_owner(broker):
     job = prepared_job(broker)
-    membership = Membership.objects.create(project=broker.project, user=broker.outsider, roles=["approver"])
-    client = human(broker.outsider)
+    assert live(human(broker.outsider), "review", job.id).status_code == 403
+    client = human(broker.owner)
     assert live(client, "review", job.id).status_code == 200
-    membership.delete()
-    assert live(client, "review", job.id).status_code == 403
     broker.owner.is_active = False
     broker.owner.save(update_fields=["is_active"])
-    assert live(human(broker.owner), "review", job.id).status_code in {401, 403}
+    assert live(client, "review", job.id).status_code in {401, 403}
 
 
 def test_cluster_poll_updates_saved_discovery_and_revocation_without_exposing_credentials(broker):
@@ -247,9 +234,9 @@ def test_all_snapshot_queries_are_read_only_and_do_not_contact_execution_paths(b
     client = human(broker.owner)
     before = services.allowance(broker.project)["reserved"]
     assert before == {"cpu_core_seconds": 60, "gpu_device_seconds": 0}
-    with patch("compute_broker.control.services.prepare_job", side_effect=AssertionError("No preparation")), \
-            patch("compute_broker.control.services.authorize", side_effect=AssertionError("No authorization")), \
-            patch("compute_broker.control.services.lease_work", side_effect=AssertionError("No worker query")):
+    with patch("compute_relay.control.services.prepare_job", side_effect=AssertionError("No preparation")), \
+            patch("compute_relay.control.services.authorize", side_effect=AssertionError("No authorization")), \
+            patch("compute_relay.control.services.lease_work", side_effect=AssertionError("No worker query")):
         with CaptureQueriesContext(connection) as queries:
             responses = [live(client), live(client, "project", broker.project.id),
                 live(client, "review", job.id), live(client, "cluster", broker.connection.id)]

@@ -3,37 +3,35 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "compute-broker"
+name = "compute-relay"
 version = "0.1.0.dev0"
-description = "A project-scoped compute broker with reviewed Slurm jobs and shared compute allowances"
+description = "A local compute broker for reviewed and budgeted Slurm jobs from AI clients"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "Django>=5.2,<5.3",
   "jsonschema==4.26.0",
   "rfc3339-validator>=0.1.4,<1",
   "rfc8785>=0.1.4,<1",
+  "httpx>=0.28,<1",
+  "mcp>=1.12,<2",
+  "waitress>=3.0.2,<4",
 ]
 
 [project.optional-dependencies]
-control = []
-postgres = ["psycopg[binary]>=3.2,<4"]
-local-auth = ["argon2-cffi>=23.1,<26"]
-ldap = ["ldap3==2.9.1"]
-worker = ["httpx>=0.28,<1"]
-mcp = ["mcp>=1.12,<2"]
-test = ["pytest>=8,<10", "pytest-django>=4.10,<5", "hypothesis>=6,<7", "httpx>=0.28,<1"]
+test = ["pytest>=8,<10", "pytest-django>=4.10,<5", "hypothesis>=6,<7", "build>=1.2,<2"]
 
 [project.scripts]
-compute-broker = "compute_broker.cli:main"
+compute-relay = "compute_relay.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-compute_broker = ["schemas/*.json", "control/templates/broker/*.html", "extensions/*/templates/*/*.html", "extensions/*/schemas/*.json", "mcp/resources/*.md"]
+compute_relay = ["schemas/*.json", "control/templates/broker/*.html", "extensions/*/templates/*/*.html", "extensions/*/schemas/*.json", "mcp/resources/*.md"]
 
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "compute_broker.control.test_settings"
+DJANGO_SETTINGS_MODULE = "compute_relay.control.test_settings"
 pythonpath = ["src", "tools"]
 testpaths = ["tests"]
 markers = [

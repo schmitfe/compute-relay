@@ -1,8 +1,0 @@
-{% extends "broker/base.html" %}{% block content %}
-{% if setup %}<p><a href="/clusters/setup/{{ setup.id }}/">{{ setup.name }} setup</a> / Worker</p>{% endif %}
-<h1>Register a worker</h1>
-<p>A worker connects this service to your clusters from a protected device or server. Registering it creates an identity and a token; it does not start software or connect to a cluster.</p>
-<section><form method="post">{% csrf_token %}{% include "broker/configuration_form.html" %}<button>Register and show token once</button></form></section>
-<p>Keep the worker token and cluster credentials outside the agent's accessible files. The worker will advertise only the cluster profiles configured on its protected device.</p>
-{% if setup %}<p><a href="/clusters/setup/{{ setup.id }}/">Return to cluster setup</a></p>{% else %}<p><a href="/clusters/">Return to clusters</a></p>{% endif %}
-{% endblock %}

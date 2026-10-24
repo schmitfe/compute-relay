@@ -6,9 +6,9 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.models import ClusterRegistration, ConnectorEnrollment, Connection, User, WorkerIdentity, AuditEvent
-from compute_broker.worker.enrollment import profile_metadata
+from compute_relay.control.auth import token_hash
+from compute_relay.control.models import ClusterRegistration, ConnectorEnrollment, Connection, User, WorkerIdentity, AuditEvent
+from compute_relay.worker.enrollment import profile_metadata
 
 pytestmark = pytest.mark.django_db
 
@@ -69,7 +69,7 @@ def test_working_directory_can_be_chosen_after_personal_login(setup_cluster):
     registration.requested_root = "";registration.save()
     document = download(setup_cluster)
     assert document["remote_root"] == ""
-    root = "/home/hpc-user/.compute-broker/jobs"
+    root = "/home/hpc-user/.compute-relay/jobs"
     response = enroll(setup_cluster, document, public_profile(registration, root=root))
     assert response.status_code == 201
     connection = Connection.objects.get()

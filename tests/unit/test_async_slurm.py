@@ -9,12 +9,12 @@ from uuid import uuid4
 
 import pytest
 
-from compute_broker.backends import canonical_json_bytes, prepare
-from compute_broker.backends.async_slurm import AsyncSlurmBackend
-from compute_broker.transports.async_openssh import AsyncOpenSSHTransport
-from compute_broker.transports.openssh import TransportError
-from compute_broker.worker.async_runner import AsyncWorker
-from compute_broker.worker.journal import Journal
+from compute_relay.backends import canonical_json_bytes, prepare
+from compute_relay.backends.async_slurm import AsyncSlurmBackend
+from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+from compute_relay.transports.openssh import TransportError
+from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.journal import Journal
 
 
 @pytest.fixture
@@ -26,8 +26,7 @@ def package(tmp_path):
     source = f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('bad')\n".encode()
     connection = {"backend": "slurm", "revision_sha256": "f" * 64, "remote_root": str(tmp_path / "jobs"),
                   "slurm_paths": {"sbatch": str(sbatch)}, "ssh": {"host": "not-contacted", "user": "broker", "known_hosts": "/protected/known_hosts"},
-                  "site_profile": {"partitions": ["debug"], "accounts": ["broker"], "termination_margin_seconds": 0,
-                                   "overtime_margin_seconds": 0, "cleanup_margin_seconds": 0}}
+                  "site_profile": {"partitions": ["debug"], "accounts": ["broker"],}}
     request = {"schema_version": "1.0", "project_id": str(uuid4()), "connection_id": str(uuid4()), "name": "async-helper",
         "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
         "environment": {"id": str(uuid4()), "revision_sha256": "a" * 64},

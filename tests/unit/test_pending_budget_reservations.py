@@ -1,20 +1,18 @@
 """Waiting reviews share project funds and become one safely charged execution."""
 
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import timedelta
 import json
-from threading import Barrier
 
 import pytest
-from django.db import close_old_connections, connection, transaction
+from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control import services
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (ApprovalDecision, Attempt, ExecutionRequest, Grant, Job,
+from compute_relay.control import services
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import (ApprovalDecision, Attempt, ExecutionRequest, Grant, Job,
     LedgerEntry, Project, ProjectCredential, User)
 from test_control import broker, budgeted, decide, execution, prepared_job, submit_receipt
 
@@ -357,70 +355,3 @@ def test_converted_hold_settles_actual_cancelled_job_usage_once(broker):
     assert services.allowance(broker.project)["available"]["cpu_core_seconds"] == 58
     assert LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1
     assert not pending.budget_entries.filter(action="hold_release").exists()
-
-
-def postgres_race(functions):
-    barrier = Barrier(len(functions))
-    def run(action):
-        close_old_connections()
-        try:
-            barrier.wait(timeout=10)
-            return action()
-        except BrokerError as error:
-            return error.code
-        finally:
-            close_old_connections()
-    with ThreadPoolExecutor(max_workers=len(functions)) as pool:
-        futures = [pool.submit(run, action) for action in functions]
-        return [future.result(timeout=20) for future in futures]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_postgres_different_keys_race_for_one_remaining_pending_hold(broker):
-    if connection.vendor != "postgresql":
-        pytest.skip("Requires independent PostgreSQL transactions")
-    allowance(broker)
-    job = prepared_job(broker)
-    other = another_key(broker)
-    def request(key_id):
-        with transaction.atomic():
-            services.request_execution(Job.objects.get(id=job.id), ProjectCredential.objects.get(id=key_id))
-        return "held"
-    results = postgres_race([lambda: request(broker.credential.id), lambda: request(other.id)])
-    assert sorted(results) == ["BUDGET_UNAVAILABLE", "held"]
-    broker.grant.refresh_from_db()
-    assert broker.grant.reserved_cpu == 60 and ExecutionRequest.objects.count() == 1
-    assert LedgerEntry.objects.filter(action="hold").count() == 1 and not Attempt.objects.exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_postgres_approval_and_cancellation_preserve_one_clean_budget_outcome(broker):
-    if connection.vendor != "postgresql":
-        pytest.skip("Requires independent PostgreSQL transactions")
-    allowance(broker)
-    job = prepared_job(broker)
-    pending = execution(broker, job)
-    def approve():
-        with transaction.atomic():
-            services.decide(Job.objects.get(id=job.id), User.objects.get(id=broker.owner.id), {
-                "execution_request_id": str(pending.id), "manifest_sha256": job.manifest_sha256, "approved": True})
-        return "approved"
-    def cancel():
-        services.cancel_execution_request(ExecutionRequest.objects.get(id=pending.id))
-        return "cancelled"
-    outcomes = postgres_race([approve, cancel])
-    assert outcomes[1] == "cancelled" and outcomes[0] in {"approved", "DECISION_EXISTS"}
-    broker.grant.refresh_from_db()
-    pending.refresh_from_db()
-    assert broker.grant.reserved_cpu == broker.grant.spent_cpu == 0
-    if pending.state == "cancelled":
-        assert pending.reservation_state == "released" and not Attempt.objects.exists()
-        assert not ApprovalDecision.objects.exists()
-        assert pending.budget_entries.filter(action="hold_release").count() == 1
-    else:
-        assert pending.state == "authorized" and pending.reservation_state == "converted"
-        attempt = Attempt.objects.get()
-        assert attempt.state == "cancelled" and attempt.accounting_state == "released"
-        assert ApprovalDecision.objects.get().consumed_at is not None
-        assert LedgerEntry.objects.filter(action="release").count() == 1
-        assert pending.budget_entries.filter(action="hold_convert").count() == 1

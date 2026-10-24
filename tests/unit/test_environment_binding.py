@@ -1,24 +1,22 @@
 """Recipe identities belong to one cluster; historical accounting stays usable."""
 
 import copy
-import importlib
 from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
-from django.apps import apps
-from django.db import connection as database_connection, transaction
+from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control import services
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (
+from compute_relay.control import services
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import (
     ApprovalDecision, Attempt, Connection, Environment, ExecutionRequest, Grant,
     Job, Project, ProjectCredential, User, WorkerIdentity,
 )
-from compute_broker.control.storage import store_blob
+from compute_relay.control.storage import store_blob
 
 
 @pytest.fixture
@@ -27,7 +25,7 @@ def catalog(db, settings, tmp_path):
     owner = User.objects.create_user(username="cluster-recipe-owner")
     worker = WorkerIdentity.objects.create(owner=owner, name="synthetic", token_hash=token_hash("synthetic-worker"))
     targets = [Connection.objects.create(owner=owner, worker=worker, name=name, backend="fake",
-                                         configuration={}, revision_sha256=revision * 64)
+                                         configuration={"site_profile": {"automatic_execution_allowed": True}}, revision_sha256=revision * 64)
                for name, revision in [("internal", "a"), ("university", "b")]]
     configuration = {"interpreter": "/usr/bin/python3"}
     revision = services.digest(configuration)
@@ -44,7 +42,7 @@ def catalog(db, settings, tmp_path):
               "allowed_connection_ids": [str(target.id) for target in targets],
               "allowed_environment_revision_sha256": [revision], "allowed_gpu_types": [],
               "per_job_limits": {"cpu_cores": 4, "gpu_devices": 0, "memory_mib": 512,
-                                 "time_limit_seconds": 600, "maximum_charge_duration_seconds": 600},
+                                 "time_limit_seconds": 600},
               "max_active_jobs": 10, "allowance": {"cpu_core_seconds": 10000, "gpu_device_seconds": 0},
               "admission_expires_at": (timezone.now() + timedelta(days=1)).isoformat()}
     grant = Grant.objects.create(project=project, policy=policy)
@@ -89,17 +87,9 @@ def test_identical_interpreter_and_digest_do_not_make_recipe_portable(catalog):
     assert Job.objects.get(id=result["id"]).request["connection_id"] == str(catalog.targets[1].id)
 
 
-def test_unbound_legacy_recipe_cannot_create_new_job(catalog):
-    Environment.objects.filter(id=catalog.environments[0].id).update(connection=None)
-    with pytest.raises(BrokerError) as denied:
-        services.create_job(catalog.credential, catalog.request)
-    assert denied.value.code == "REFERENCE_DENIED"
-    assert not Job.objects.exists()
 
 
 def test_inventory_exposes_only_recipes_for_effective_allowed_clusters(catalog):
-    unbound = Environment.objects.create(owner=catalog.owner, name="Legacy", configuration={}, revision_sha256="e" * 64)
-    catalog.project.environments.add(unbound)
     disabled = Connection.objects.create(owner=catalog.owner, worker=catalog.worker, name="disabled", backend="fake",
                                           configuration={}, revision_sha256="d" * 64, enabled=False)
     disabled_recipe = Environment.objects.create(owner=catalog.owner, connection=disabled, name="disabled Python",
@@ -155,7 +145,7 @@ def test_recipe_binding_is_rechecked_before_each_new_execution_stage(catalog, st
         assert not execution.attempt.dispatch_started
 
 
-def test_legacy_recipe_unbinding_does_not_block_observation_or_final_accounting(catalog):
+def test_recipe_rebinding_does_not_block_observation_or_final_accounting(catalog):
     job = _job(catalog)
     execution = _execute(catalog, job)
     attempt = execution.attempt
@@ -167,7 +157,7 @@ def test_legacy_recipe_unbinding_does_not_block_observation_or_final_accounting(
                        "connection_revision_sha256": catalog.targets[0].revision_sha256})
     services.report(catalog.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
                                                 "outcome": "submitted", "native_identity": identity})
-    Environment.objects.filter(id=catalog.environments[0].id).update(connection=None)
+    Environment.objects.filter(id=catalog.environments[0].id).update(connection=catalog.targets[1])
     Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now() - timedelta(seconds=1))
     observation_lease = services.lease_work(catalog.worker)["lease"]
     assert observation_lease["operation"] == "observe"
@@ -180,56 +170,3 @@ def test_legacy_recipe_unbinding_does_not_block_observation_or_final_accounting(
     assert attempt.accounting_state == "settled"
     assert catalog.grant.spent_cpu == 2
     assert catalog.grant.reserved_cpu == 0
-
-
-def test_migration_binds_only_unambiguous_owner_and_cluster_without_rewriting_history(catalog):
-    migrate = importlib.import_module("compute_broker.control.migrations.0005_bind_unambiguous_legacy_environments").bind_legacy_environments
-    other = User.objects.create_user(username="other-recipe-owner")
-    configuration = {"interpreter": "/usr/bin/python3", "modules": []}
-    revision = services.digest(configuration)
-
-    def legacy(name, projects=(), owner=None):
-        environment = Environment.objects.create(name=name, configuration=configuration, revision_sha256=revision, owner=owner)
-        for project in projects:
-            project.environments.add(environment)
-        return environment
-
-    one = Project.objects.create(owner=catalog.owner, name="single cluster")
-    one.connections.add(catalog.targets[0])
-    second_same = Project.objects.create(owner=catalog.owner, name="same cluster second project")
-    second_same.connections.add(catalog.targets[0])
-    mixed_owner = Project.objects.create(owner=other, name="different owner")
-    mixed_owner.connections.add(catalog.targets[0])
-    bindable = legacy("unambiguous", [one, second_same])
-    ambiguous = legacy("two clusters", [catalog.project])
-    conflicting_owner = legacy("two owners", [one, mixed_owner])
-    explicit_foreign_owner = legacy("foreign explicit owner", [one], owner=other)
-    unused = legacy("unused")
-    previously_shared = legacy("historically two clusters", [one])
-    preserved_manifest = {"audit": "original sealed package"}
-    historical = Job.objects.create(project=one, request={"environment": {"id": str(previously_shared.id)},
-                                                         "connection_id": str(catalog.targets[1].id)},
-                                    manifest=preserved_manifest, manifest_sha256="9" * 64)
-    historical_only = legacy("historical reference only")
-    historic_project = Project.objects.create(owner=catalog.owner, name="past permission removed")
-    Job.objects.create(project=historic_project,
-                       request={"environment": {"id": str(historical_only.id).upper()},
-                                "connection_id": str(catalog.targets[0].id)})
-    malformed_history = legacy("invalid historical target", [one])
-    Job.objects.create(project=one, request={"environment": {"id": str(malformed_history.id)}, "connection_id": "invalid"})
-
-    migrate(apps, SimpleNamespace(connection=database_connection))
-
-    for environment in (bindable, historical_only):
-        environment.refresh_from_db()
-        assert environment.connection_id == catalog.targets[0].id
-        assert environment.owner_id == catalog.owner.id
-    for environment in (ambiguous, conflicting_owner, explicit_foreign_owner, unused, previously_shared, malformed_history):
-        environment.refresh_from_db()
-        assert environment.connection_id is None
-    for environment in (bindable, ambiguous, conflicting_owner, explicit_foreign_owner, unused, previously_shared, historical_only):
-        assert environment.configuration == configuration
-        assert environment.revision_sha256 == revision
-    historical.refresh_from_db()
-    assert historical.manifest == preserved_manifest
-    assert historical.manifest_sha256 == "9" * 64

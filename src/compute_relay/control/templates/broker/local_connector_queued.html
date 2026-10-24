@@ -1,0 +1,7 @@
+{% extends "broker/base.html" %}{% block content %}
+<h1>Start {{ cluster_name }}</h1>
+<p role="status">The connector start is queued in your local application.</p>
+<p>Return to the terminal where you started Compute Relay. Complete this cluster's SSH key passphrase, host-key confirmation or second-factor prompt there. The terminal clearly names each cluster before asking for authentication.</p>
+<p>Your other connected clusters and the web portal remain available while you sign in. A failed login will wait for another explicit start request.</p>
+<p><a class="button" href="{{ cluster_url }}">Return to cluster</a></p>
+{% endblock %}

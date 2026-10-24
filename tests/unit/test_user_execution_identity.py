@@ -1,3 +1,5 @@
+"""Personal project keys remain bound to the same active resource owner."""
+
 from datetime import timedelta
 from uuid import uuid4
 
@@ -5,74 +7,62 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control.auth import connection_allowed, token_hash
-from compute_broker.control.models import Connection, Membership, ProjectCredential, WorkerIdentity
+from compute_relay.control.auth import connection_allowed, token_hash
+from compute_relay.control.models import Connection, ProjectCredential, WorkerIdentity
 from test_management import management, human, form_post, key_data, issued
 
 
-def member_key(context, user, role="submitter"):
-    Membership.objects.create(project=context.project, user=user, roles=[role])
-    return ProjectCredential.objects.create(project=context.project, issued_by=user, name="member agent",
-        token_hash=token_hash("synthetic-member"), scopes=context.credential.scopes,
+def foreign_key(context):
+    return ProjectCredential.objects.create(project=context.project, issued_by=context.outsider, name="foreign agent",
+        token_hash=token_hash("synthetic-foreign"), scopes=context.credential.scopes,
         expires_at=timezone.now()+timedelta(days=1))
 
 
-def test_shared_project_routes_each_key_to_its_own_user_account(management):
+def test_project_key_cannot_route_through_a_foreign_account_even_if_assigned(management):
     c = management
-    bob = member_key(c, c.outsider)
-    worker = WorkerIdentity.objects.create(owner=c.outsider, name="Bob's worker", token_hash=token_hash("synthetic-bob-worker"))
-    connection = Connection.objects.create(owner=c.outsider, worker=worker, name="Bob's HPC login", backend="fake",
+    key = foreign_key(c)
+    worker = WorkerIdentity.objects.create(owner=c.outsider, name="Foreign worker", token_hash=token_hash("synthetic-foreign-worker"))
+    connection = Connection.objects.create(owner=c.outsider, worker=worker, name="Foreign HPC login", backend="fake",
         configuration={}, revision_sha256="b"*64)
     c.project.connections.add(connection)
     assert connection_allowed(c.credential, c.connections[0].id)
-    assert connection_allowed(bob, connection.id)
+    assert not connection_allowed(key, connection.id)
     assert not connection_allowed(c.credential, connection.id)
-    assert not connection_allowed(bob, c.connections[0].id)
+    assert not connection_allowed(key, c.connections[0].id)
 
 
 def test_mixed_owner_connection_and_worker_are_not_executable(management):
     c = management
     c.project.connections.add(c.foreign)
-    bob = member_key(c, c.outsider)
-    assert not connection_allowed(bob, c.foreign.id)
+    assert not connection_allowed(c.credential, c.foreign.id)
 
 
-def test_member_can_issue_and_rotate_only_their_own_execution_key(management):
+def test_foreign_account_cannot_issue_or_rotate_project_execution_keys(management):
     c = management
-    Membership.objects.create(project=c.project, user=c.outsider, roles=["submitter"])
     user = human(c.outsider)
-    response = form_post(user, f"/projects/{c.project.id}/keys/new/", key_data(c))
-    secret, key = issued(response)
-    assert key.issued_by_id == c.outsider.id
-    admin = human(c.owner)
-    denied = form_post(admin, f"/projects/{c.project.id}/keys/{key.id}/rotate/", {"submission_id": str(uuid4())})
-    assert denied.status_code == 403 and secret.encode() not in denied.content
-    key.refresh_from_db()
-    assert not key.revoked and key.replaced_by_id is None
-    rotated = form_post(user, f"/projects/{c.project.id}/keys/{key.id}/rotate/", {"submission_id": str(uuid4())})
-    _, replacement = issued(rotated)
-    assert replacement.issued_by_id == c.outsider.id
+    assert form_post(user, f"/projects/{c.project.id}/keys/new/", key_data(c)).status_code == 403
+    denied = form_post(user, f"/projects/{c.project.id}/keys/{c.credential.id}/rotate/", {"submission_id": str(uuid4())})
+    assert denied.status_code == 403
+    c.credential.refresh_from_db()
+    assert not c.credential.revoked and c.credential.replaced_by_id is None
 
 
-@pytest.mark.parametrize("change", ["disabled", "membership_removed", "owner_unknown"])
+@pytest.mark.parametrize("change", ["disabled", "foreign_owner"])
 def test_existing_key_cannot_outlive_issuer_authority(management, change):
     c = management
-    key = member_key(c, c.outsider)
     if change == "disabled":
-        c.outsider.is_active = False; c.outsider.save(update_fields=["is_active"])
-    elif change == "membership_removed":
-        Membership.objects.filter(user=c.outsider, project=c.project).delete()
-    else:
-        key.issued_by = None; key.save(update_fields=["issued_by"])
-    assert Client().get("/api/v1/connections", HTTP_AUTHORIZATION="Bearer synthetic-member").status_code == 403
+        c.owner.is_active = False
+        c.owner.save(update_fields=["is_active"])
+    elif change == "foreign_owner":
+        c.credential.issued_by = c.outsider
+        c.credential.save(update_fields=["issued_by"])
+    assert Client().get("/api/v1/connections", HTTP_AUTHORIZATION="Bearer " + c.token).status_code == 403
 
 
-def test_viewer_cannot_issue_write_scopes_or_broaden_existing_key(management):
+def test_owner_can_issue_a_read_only_key_without_granting_write_scopes(management):
     c = management
-    member_key(c, c.outsider, "viewer")
-    user = human(c.outsider)
-    denied = form_post(user, f"/projects/{c.project.id}/keys/new/", key_data(c))
-    assert denied.status_code == 403
-    read = form_post(user, f"/projects/{c.project.id}/keys/new/", key_data(c, scopes=["jobs:read"]))
-    _, key = issued(read)
-    assert key.issued_by_id == c.outsider.id and key.scopes == ["jobs:read"]
+    response = form_post(human(c.owner), f"/projects/{c.project.id}/keys/new/", key_data(c, scopes=["jobs:read"]))
+    secret, key = issued(response)
+    assert key.issued_by_id == c.owner.id and key.scopes == ["jobs:read"]
+    assert Client().post(f"/api/v1/projects/{c.project.id}/objects", {}, content_type="application/json",
+        HTTP_AUTHORIZATION="Bearer " + secret).status_code == 403

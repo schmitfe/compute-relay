@@ -8,15 +8,15 @@ from pathlib import Path
 import pytest
 import rfc8785
 
-from compute_broker.backends import (
+from compute_relay.backends import (
     BackendError, FakeBackend, SlurmBackend, canonical_json_bytes, prepare, verify_package,
 )
-from compute_broker.backends.preparation import sha256
-from compute_broker.backends.slurm import parse_observation
-from compute_broker.backends.discovery import parse_discovery
-from compute_broker.backends.environments import EnvironmentProfileError, render_environment, validate_environment_config
-from compute_broker.remote import helper
-from compute_broker.transports import OpenSSHTransport, TransportError
+from compute_relay.backends.preparation import sha256
+from compute_relay.backends.slurm import parse_observation
+from compute_relay.backends.discovery import parse_discovery
+from compute_relay.backends.environments import EnvironmentProfileError, render_environment, validate_environment_config
+from compute_relay.remote import helper
+from compute_relay.transports import OpenSSHTransport, TransportError
 
 
 ATTEMPT = "55555555-5555-4555-8555-555555555555"
@@ -38,8 +38,7 @@ def sample(tmp_path):
     }
     environment = {**request["environment"], "interpreter": "/usr/bin/python3", "modules": []}
     connection = {"backend": "fake", "state_directory": str(tmp_path / "fake"), "revision_sha256": "f" * 64,
-                  "site_profile": {"maximum_cpus": 2, "maximum_gpus": 0, "maximum_memory_mib": 1024,
-                                   "termination_margin_seconds": 5, "cleanup_margin_seconds": 30}}
+                  "site_profile": {"maximum_cpus": 2, "maximum_gpus": 0, "maximum_memory_mib": 1024}}
     return request, environment, connection, content
 
 
@@ -54,7 +53,7 @@ def test_prepare_is_deterministic_and_reserves_requested_walltime(sample):
     prepared, files = package(sample)
     assert prepared == prepare(*sample[:3], REVISION)
     manifest = prepared["manifest"]
-    assert manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == 60
+    assert manifest["maximum_allocation"]["time_limit_seconds"] == 60
     assert manifest["reservation"] == {"cpu_core_seconds": 120, "gpu_device_seconds": 0}
     assert "#SBATCH --time=1\n" in prepared["generated_files"]["_broker/batch.sh"]
     assert "#SBATCH --no-requeue\n" in prepared["generated_files"]["_broker/batch.sh"]
@@ -303,7 +302,7 @@ def test_ssh_mfa_fails_closed_instead_of_reauthenticating():
 def test_discovery_separates_visibility_from_access_without_timing_margins():
     response = {
         "version": {"returncode": 0, "stdout": "slurm 22.05\n"},
-        "nodes": {"returncode": 0, "stdout": "gpu01|gpu*|32|256000|gpu:a100:4|idle\n"},
+        "nodes": {"returncode": 0, "stdout": "gpu01|gpu*|32|256000|gpu:a100:4|idle|2|8|2\n"},
         "partitions": {"returncode": 0, "stdout": "PartitionName=gpu MaxTime=01:00:00 OverTimeLimit=2\n"},
         "settings": {"returncode": 0, "stdout": "KillWait = 5 sec\nOverTimeLimit = 0 min\nJobRequeue = 0\n"},
         "associations": {"returncode": 1, "stdout": "", "stderr": "not permitted"},
@@ -315,8 +314,6 @@ def test_discovery_separates_visibility_from_access_without_timing_margins():
     assert "timing_candidates" not in result
     assert result["scheduler_settings"]["KillWait"] == "5 sec"
     assert not any("finite verified site margin" in note for note in result["notes"])
-    legacy = parse_discovery(response, {"site_profile": {"cleanup_margin_seconds": 30}})
-    assert "timing_candidates" not in legacy
 
 
 def test_helper_discovery_performs_only_fixed_readonly_queries(monkeypatch):

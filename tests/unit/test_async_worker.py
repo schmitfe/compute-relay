@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import pytest
 
-from compute_broker.backends import prepare
-from compute_broker.worker.async_runner import AsyncWorker
-from compute_broker.worker.client import ControlError
-from compute_broker.worker.concurrency import PrincipalScheduler, WorkerCapacityError
-from compute_broker.worker.journal import Journal
+from compute_relay.backends import canonical_json_bytes, prepare
+from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.client import ControlError
+from compute_relay.worker.concurrency import PrincipalScheduler, WorkerCapacityError
+from compute_relay.worker.journal import Journal
 
 
 class Control:
@@ -221,6 +221,130 @@ def test_async_journal_lock_keeps_cross_process_fence_without_blocking_loop(conf
     asyncio.run(scenario())
 
 
-def test_async_runner_rejects_sync_extension_hooks_at_configuration(configured):
-    with pytest.raises(ValueError, match="synchronous worker"):
-        AsyncWorker(configured.control, {}, configured.journal, owner_id=uuid4(), extensions=["storage"])
+def test_async_runner_advertises_only_installed_native_async_extension_hooks(configured):
+    worker = AsyncWorker(configured.control, {}, configured.journal, owner_id=uuid4(), extensions=["storage", "environments", "workflows"])
+    asyncio.run(worker.publish_profiles())
+    assert configured.control.calls[-1][2] == {"profiles": [], "extensions": ["storage", "environments", "workflows"]}
+
+
+def extension_worker(configured, name, *, enabled=True):
+    c = configured
+    manifest = c.lease["prepared"]["manifest"]
+    manifest["extension_name"] = name
+    c.lease["prepared"]["manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    connection = c.worker.connections[c.lease["connection_id"]]
+    connection.update(backend="slurm", remote_root="/trusted/project/jobs")
+    c.backend.connection = connection
+    c.worker = AsyncWorker(c.control, {c.lease["connection_id"]: connection}, c.journal,
+        owner_id=uuid4(), backend_factory=lambda _: c.backend, extensions=[name] if enabled else [])
+    return c
+
+
+@pytest.mark.parametrize("name", ["environments", "workflows"])
+def test_async_worker_submits_enabled_extension_packages_with_normal_dispatch_and_intent(configured, name):
+    c = extension_worker(configured, name)
+    asyncio.run(c.worker.execute(c.lease))
+    assert c.backend.submitted == 1
+    assert sum(path.endswith("/dispatch") for _, path, _ in c.control.calls) == 1
+    assert c.journal.read(c.lease["attempt_id"])["outcome"] == "submitted"
+
+
+def test_disabled_extension_package_never_dispatches_or_writes_an_intent(configured):
+    c = extension_worker(configured, "environments", enabled=False)
+    with pytest.raises(ValueError, match="not enabled"):
+        asyncio.run(c.worker.execute(c.lease))
+    assert c.control.calls == [] and c.backend.submitted == 0
+    assert c.journal.read(c.lease["attempt_id"]) is None
+
+
+def environment_context(c):
+    context = {"build_id": str(uuid4()), "attempt_id": c.lease["attempt_id"], "spec_sha256": "a" * 64, "generation": 4}
+    c.lease.update(operation="observe", native_identity={"job_id": "17", "attempt_id": c.lease["attempt_id"]},
+        extension_context={"environments": context})
+    return context
+
+
+def test_async_environment_terminal_hook_finalizes_bound_metadata_and_collects_outputs(configured, monkeypatch):
+    from compute_relay.extensions.environments.remote import REMOTE_SOURCE
+    c = extension_worker(configured, "environments")
+    context = environment_context(c)
+    calls = []
+    async def call_helper(source, request):
+        await asyncio.sleep(0)
+        calls.append((source, request))
+        return {"verified": True, "spec_sha256": context["spec_sha256"]}
+    c.backend.transport = SimpleNamespace(call_helper=call_helper)
+    monkeypatch.setattr(asyncio, "to_thread", lambda *a, **kw: pytest.fail("Async finalization used a thread-pool SSH bridge"))
+    asyncio.run(c.worker.execute(c.lease))
+    report = c.control.calls[-1][2]
+    assert report["extension_data"]["environments"] == {"environment_finalization": {
+        "verified": True, "spec_sha256": context["spec_sha256"]}, "generation": 4}
+    assert report["observation"]["accounting"]["final"] is True and report["stdout"] == "synthetic result"
+    assert calls == [(REMOTE_SOURCE, {"operation": "finalize_environment", "config": {"remote_root": "/trusted/project/jobs"},
+        "native_identity": c.lease["native_identity"], "build_id": context["build_id"], "spec_sha256": "a" * 64})]
+
+
+@pytest.mark.parametrize("failure", ["attempt-mismatch", "remote-failure", "hook-failure"])
+def test_async_environment_finalization_failure_preserves_core_accounting_and_output_collection(configured, monkeypatch, failure):
+    from compute_relay import extensions
+    c = extension_worker(configured, "environments")
+    context = environment_context(c)
+    calls = []
+    async def call_helper(source, request):
+        calls.append(request)
+        raise OSError("synthetic-private-ssh-error")
+    c.backend.transport = SimpleNamespace(call_helper=call_helper)
+    if failure == "attempt-mismatch":
+        context["attempt_id"] = str(uuid4())
+    elif failure == "hook-failure":
+        async def failed_hook(*args):
+            raise OSError("synthetic-private-extension-error")
+        monkeypatch.setattr(extensions, "worker_after_observation_async", failed_hook)
+    asyncio.run(c.worker.execute(c.lease))
+    report = c.control.calls[-1][2]
+    assert report["observation"]["accounting"]["final"] is True and report["stdout"] == "synthetic result"
+    if failure == "hook-failure":
+        assert report["extension_data"] == {"environments": {"error": "FINALIZATION_UNAVAILABLE"}}
+    else:
+        assert report["extension_data"]["environments"]["environment_finalization"] == {
+            "verified": False, "error_code": "ENVIRONMENT_METADATA_UNVERIFIED"}
+    if failure != "remote-failure":
+        assert calls == []
+    assert "synthetic-private" not in str(report)
+
+
+def test_async_environment_cancellation_propagates_without_reporting_completion(configured):
+    c = extension_worker(configured, "environments")
+    environment_context(c)
+    entered = asyncio.Event()
+    async def call_helper(source, request):
+        entered.set()
+        await asyncio.Event().wait()
+    c.backend.transport = SimpleNamespace(call_helper=call_helper)
+    async def scenario():
+        task = asyncio.create_task(c.worker.execute(c.lease))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(scenario())
+    assert c.control.calls == []
+
+
+def test_disabled_async_terminal_hook_never_imports_extension_and_still_collects(configured, monkeypatch):
+    from compute_relay import extensions
+    c = extension_worker(configured, "environments", enabled=False)
+    environment_context(c)
+    monkeypatch.setattr(extensions, "import_module", lambda *a: pytest.fail("Disabled extension was imported"))
+    asyncio.run(c.worker.execute(c.lease))
+    report = c.control.calls[-1][2]
+    assert "extension_data" not in report and report["stdout"] == "synthetic result"
+    assert report["observation"]["accounting"]["final"] is True
+
+
+def test_disabled_async_maintenance_is_rejected_before_import(configured, monkeypatch):
+    from compute_relay import extensions
+    monkeypatch.setattr(extensions, "import_module", lambda *a: pytest.fail("Disabled maintenance extension was imported"))
+    with pytest.raises(ValueError, match="not enabled"):
+        asyncio.run(configured.worker.execute({"operation": "extension", "extension": "storage"}))
+    assert configured.control.calls == []

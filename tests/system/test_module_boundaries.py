@@ -27,7 +27,7 @@ class DenyImports(importlib.abc.MetaPathFinder):
 
 
 def deny_optional_imports(*additional):
-    from compute_broker.extensions import EXTENSIONS
+    from compute_relay.extensions import EXTENSIONS
 
     prefixes = [entry[0] for entry in EXTENSIONS.values()]
     sys.meta_path.insert(0, DenyImports([*prefixes, *additional]))
@@ -48,7 +48,7 @@ def run_probe(tmp_path, probe, *, explicit_empty=False):
                        BROKER_DB_PATH=str(tmp_path / "control.sqlite3"),
                        BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"),
                        BROKER_BOUNDARY_ROOT=str(tmp_path),
-                       DJANGO_SETTINGS_MODULE="compute_broker.control.settings")
+                       DJANGO_SETTINGS_MODULE="compute_relay.control.settings")
     if explicit_empty:
         environment["BROKER_EXTENSIONS"] = ""
     result = subprocess.run([sys.executable, str(Path(__file__).resolve()), probe],
@@ -83,7 +83,7 @@ def control_probe():
     from uuid import UUID, uuid4
 
     prefixes = deny_optional_imports()
-    from compute_broker.cli import bootstrap_demo
+    from compute_relay.cli import bootstrap_demo
 
     root = Path(os.environ["BROKER_BOUNDARY_ROOT"])
     demo_dir = root / "demo"
@@ -98,11 +98,11 @@ def control_probe():
     from django.test import Client
     from django.urls import Resolver404, resolve
     from django.utils import timezone
-    from compute_broker.control.models import Attempt, Grant, Job
-    from compute_broker.extensions import EXTENSIONS
-    from compute_broker.mcp.facade import ProjectFacade, create_server
-    from compute_broker.worker.journal import Journal
-    from compute_broker.worker.runner import Worker
+    from compute_relay.control.models import Attempt, Grant, Job
+    from compute_relay.extensions import EXTENSIONS
+    from compute_relay.mcp.facade import ProjectFacade, create_server
+    from compute_relay.worker.journal import Journal
+    from compute_relay.worker.runner import Worker
 
     assert settings.BROKER_EXTENSIONS == ()
     assert not any(config.name in prefixes for config in apps.get_app_configs())
@@ -202,20 +202,20 @@ def worker_probe():
     import importlib
     from uuid import uuid4
 
-    prefixes = deny_optional_imports("django", "compute_broker.control")
+    prefixes = deny_optional_imports("django", "compute_relay.control")
     # Import every worker implementation module, including new future modules;
     # __main__ is just the executable entry point and would start its run loop.
-    directory = ROOT / "src/compute_broker/worker"
+    directory = ROOT / "src/compute_relay/worker"
     for path in sorted(directory.rglob("*.py")):
         if path.stem == "__main__":
             continue
         parts = path.relative_to(directory).with_suffix("").parts
         if parts[-1] == "__init__":
             parts = parts[:-1]
-        importlib.import_module(".".join(("compute_broker", "worker", *parts)))
-    from compute_broker.worker.journal import Journal
-    from compute_broker.worker.runner import Worker
-    from compute_broker.mcp.facade import ProjectFacade, create_server
+        importlib.import_module(".".join(("compute_relay", "worker", *parts)))
+    from compute_relay.worker.journal import Journal
+    from compute_relay.worker.runner import Worker
+    from compute_relay.mcp.facade import ProjectFacade, create_server
 
     class OfflineClient:
         def __init__(self):
@@ -238,7 +238,7 @@ def worker_probe():
     server = create_server(ProjectFacade(client, str(uuid4())))
     result = asyncio.run(server.call_tool("get_broker_capabilities", {}))
     assert json.loads("".join(item.text for item in result if item.type == "text"))["enabled_extensions"] == []
-    assert_modules_absent([*prefixes, "django", "compute_broker.control"])
+    assert_modules_absent([*prefixes, "django", "compute_relay.control"])
     print(json.dumps({"worker_idle": True, "core_tools_usable": True}))
 
 

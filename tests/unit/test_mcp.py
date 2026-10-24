@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from mcp.server.fastmcp.exceptions import ToolError
 
-from compute_broker.mcp.facade import ProjectFacade, create_server
+from compute_relay.mcp.facade import ProjectFacade, create_server
 
 
 class ClientSpy:
@@ -44,15 +44,6 @@ class FacadeTests(unittest.TestCase):
         facade = ProjectFacade.from_credential(self.client)
         self.assertEqual(facade.project_id, self.project_id)
         self.assertEqual(self.client.calls, [("GET", "/api/v1/context", None, {})])
-
-    def test_legacy_project_constraint_must_match_authenticated_project(self):
-        self.assertEqual(ProjectFacade.from_credential(self.client, expected_project_id=self.project_id).project_id,
-                         self.project_id)
-        with self.assertRaises(ValueError):
-            ProjectFacade.from_credential(self.client, expected_project_id=str(uuid4()))
-        with self.assertRaises(ValueError):
-            ProjectFacade.from_credential(self.client, expected_project_id="not-a-uuid")
-        self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
 
     def test_context_is_refreshed_and_cannot_rebind_the_adapter(self):
         self.assertEqual(self.facade.get_project_context()["project"]["id"], self.project_id)

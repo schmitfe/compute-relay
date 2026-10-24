@@ -10,12 +10,12 @@ from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control import services as core
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Attempt, ExecutionRequest, Job, Project, ProjectCredential
-from compute_broker.extensions.workflows import services
-from compute_broker.extensions.workflows.models import WorkflowRevision, WorkflowRun
-from compute_broker.extensions.workflows.validation import validate_workflow
+from compute_relay.control import services as core
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Attempt, ExecutionRequest, Job, Project, ProjectCredential
+from compute_relay.extensions.workflows import services
+from compute_relay.extensions.workflows.models import WorkflowRevision, WorkflowRun
+from compute_relay.extensions.workflows.validation import validate_workflow
 from test_control import broker, budgeted, decide, prepared_job, submit_receipt
 
 
@@ -222,7 +222,7 @@ def test_reading_run_does_not_admit_and_foreign_project_cannot_read(workflow_bro
     other.pk = None
     other.project = Project.objects.create(owner=context.outsider, name="foreign")
     other.issued_by = context.outsider
-    from compute_broker.control.auth import token_hash
+    from compute_relay.control.auth import token_hash
     other.token_hash = token_hash("synthetic-foreign-workflow-key")
     other.save()
     assert client.get(f"/api/v1/workflow-runs/{run.id}", HTTP_AUTHORIZATION="Bearer synthetic-foreign-workflow-key").status_code == 404

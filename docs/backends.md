@@ -11,7 +11,7 @@ acceptance criteria, including functionality beyond the current alpha.
 Implement a small, first-party Slurm adapter over OpenSSH first. Run it in the protected
 execution connector, behind the control service's approval, authorization, and budget
 transactions. It must work without a scheduler REST API or an always-running process on
-the cluster. Initial deployment supports a Linux device and one local connector; hosted
+the cluster. The local package supports a Linux device and independently saved connectors; future hosted
 control and outbound remote connector pairing are later stages.
 
 Use an explicit transport/backend split:
@@ -166,9 +166,9 @@ per-job caps: a request that fits a cap before rounding can exceed it after roun
 
 `PreparedExecution` must bind the connection's remote identity and immutable
 `connection_revision_sha256`, site-profile version, resolved environment/build dependency,
-package digest, and effective `maximum_allocation` assumptions. New packages retain
-the internal `maximum_charge_duration_seconds` field equal to requested scheduler
-walltime. No termination, overrun or cleanup interval is added to the reservation.
+package digest, and effective `maximum_allocation` assumptions. Requested
+scheduler walltime is the sole reservation duration. No separate charge-duration,
+termination, overrun or cleanup field is accepted or added to the reservation.
 The control service binds approval or budget authorization to this prepared revision.
 Changing any execution-affecting field makes a new revision. If a connector or backend
 cannot reproduce the exact package, it fails instead of rendering a new one after approval.
@@ -251,8 +251,9 @@ Use this sequence:
 
 1. Validate sizes, file counts, entrypoint, resource bounds, and environment requirements.
 2. Resolve administrator-owned site/environment profile versions, immutable connection
-   revision, and dependency digests. Derive the full rounded maximum allocation and charge
-   duration before checking automatic-execution caps, hard caps, and available allowance.
+   revision, and dependency digests. Derive the effective resource allocation after
+   site rounding, then check it and requested walltime against automatic/hard
+   per-job caps and available allowance.
 3. Render all scheduler directives and launch/setup scripts. Review includes exact files,
    resource/usage maximum, environment steps, source references, and outputs.
 4. Store an immutable manifest with SHA-256 file digests, normalized specification,

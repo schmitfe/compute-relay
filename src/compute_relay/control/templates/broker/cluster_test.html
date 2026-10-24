@@ -1,0 +1,27 @@
+{% extends "broker/base.html" %}{% block content %}
+<p><a href="/clusters/">Clusters</a> / <a href="/clusters/{{ cluster.id }}/">{{ cluster }}</a> / Test</p>
+<h1>Test {{ cluster }}</h1>
+<p>This prepares a tiny CPU-only Python job. You will review its exact files and reservation on the normal approval page before anything runs.</p>
+{% if blocked_reason %}<p class="error">{{ blocked_reason }}</p>{% endif %}
+{% if plan %}<p>The script sleeps for two seconds, prints its hostname and Python version, and writes <code>cluster-check.json</code>. It requests {{ plan.resources.cpus }} CPU{{ plan.resources.cpus|pluralize }}, 128 MiB, no GPUs and a one-minute scheduler walltime. Queueing and cleanup can take longer.</p>
+<p>Compute reservation: <strong>{{ plan.reservation_cpu_seconds }} CPU-core seconds</strong>, using the effective CPU allocation and requested scheduler walltime. Approval, lifetime limits, cancellation and final accounting follow the ordinary job path.</p>{% endif %}
+<section><h2>Diagnostic allowance</h2>
+{% if configuration %}<p><a href="/projects/{{ configuration.project_id }}/">{{ configuration.project.name }}</a> · Available: {{ allowance.available.cpu_core_seconds }} CPU-core seconds · Reserved: {{ allowance.reserved.cpu_core_seconds }} · Spent: {{ allowance.spent.cpu_core_seconds }} · Lifetime tests admitted: {{ allowance.jobs.admitted }} / {{ allowance.jobs.limit }}</p>
+{% else %}<p>The first prepared test creates a dedicated project with {{ initial_cpu_allowance }} CPU-core seconds, zero GPU allowance, one active job and at most {{ initial_job_limit }} lifetime admitted jobs. Its allowance and internal credential expire after 30 days.</p>{% endif %}
+<p>Repeating a test never refills funds, resets job counts, renews expiry or replaces a revoked credential. Review the existing diagnostic project to change its settings explicitly.</p></section>
+<section><h2>Prepare a test</h2>
+<form method="post">{% csrf_token %}{{ form.non_field_errors }}
+{% for field in form %}{% include 'broker/configuration_field.html' with field=field %}{% endfor %}
+<button{% if blocked_reason %} disabled{% endif %}>Prepare test for review</button>
+</form>
+<p>The system Python option references an existing interpreter; it installs nothing. A missing interpreter or module on compute nodes appears as an ordinary failed job. Changing the selected recipe does not grant new project permissions.</p></section>
+<details><summary>Python source that will be reviewed</summary><pre>{{ source }}</pre></details>
+{% if configuration %}<section><h2>Recent tests</h2><ul>
+{% for job in recent_jobs %}<li><a href="/review/{{ job.id }}/">{{ job.name }}</a> · {{ job.display_state }}</li>
+{% empty %}<li>No tests prepared yet.</li>{% endfor %}
+</ul></section>
+{% for result in recent_results %}{% if result.attempts %}<section><h2>Results: <a href="/review/{{ result.job.id }}/">{{ result.job.name }}</a></h2>
+{% for attempt in result.attempts %}{% include "broker/attempt_diagnostics.html" with diagnostics=attempt.diagnostics %}
+{% for output in attempt.outputs %}<h3>{{ output.path }}</h3><p>SHA-256: <code>{{ output.sha256 }}</code></p><pre>{{ output.text }}</pre>{% endfor %}
+{% endfor %}</section>{% endif %}{% endfor %}{% endif %}
+{% endblock %}

@@ -7,8 +7,8 @@ not connect to a worker or submit any scheduler jobs.
 from django.template import Context, Template
 from django.test import Client
 
-from compute_broker.control.models import Connection
-from compute_broker.control.templatetags.broker_resource_limits import effective_resource_rows
+from compute_relay.control.models import Connection
+from compute_relay.control.templatetags.broker_resource_limits import effective_resource_rows
 from test_control import broker, prepared_job
 
 

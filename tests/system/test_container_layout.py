@@ -46,7 +46,7 @@ class ContainerLayoutTests(unittest.TestCase):
                 self.assertIn("worker-config", worker_sources)
                 self.assertNotIn("fixture-ssh", mount_sources(services["control"]))
                 self.assertNotIn("fixture-ssh", mount_sources(services["smoke"]))
-                self.assertIn("--management", services["smoke"]["command"])
+                self.assertNotIn("--management", services["smoke"]["command"])
                 self.assertEqual(
                     services["worker"]["environment"]["BROKER_WORKER_CONFIG"],
                     "/run/demo/worker.json",

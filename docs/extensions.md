@@ -2,8 +2,10 @@
 
 The core broker submits ordinary reviewed/budgeted jobs and keeps their accounting.
 Optional functionality lives in separate Python/Django apps under
-`compute_broker.extensions`. The default `BROKER_EXTENSIONS` is empty: no optional
-app, migration, URL or new execution capability is enabled implicitly.
+`compute_relay.extensions`. The normal local launcher enables the bundled storage, environments and workflows
+modules. Their project policies and explicit scopes still govern every operation.
+Lower-level developer entrypoints can select modules with `BROKER_EXTENSIONS`; an
+empty value retains the core-only path for boundary tests.
 
 An operator can enable installed modules with, for example,
 `BROKER_EXTENSIONS=storage,environments,workflows`. Stop the control process, enable
@@ -60,7 +62,10 @@ operator migration. Re-enabling a module may require its documented reconciliati
 procedure before publishing extension results.
 
 `GET /api/v1/capabilities` reports enabled modules to an authenticated project key.
-The endpoint does not grant scopes or project policy. Test settings enable bundled
-apps that actually exist in the checkout; ordinary settings retain opt-in behavior.
+Normal stdio startup queries this authenticated endpoint and registers only
+known bundled modules enabled there. It fails on a rejected, unavailable or
+malformed capability response instead of silently hiding tools. Project scopes
+and policy remain authoritative. Reconnect MCP after changing enabled modules. Test settings enable bundled
+apps that actually exist in the checkout; lower-level direct settings retain explicit module selection.
 This does not create an OS sandbox for trusted plugin code: review and install it
 with the same care as the worker itself.

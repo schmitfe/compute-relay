@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from compute_broker.remote import helper
+from compute_relay.remote import helper
 from test_backends import metadata_module_catalog
 
 

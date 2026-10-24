@@ -12,10 +12,10 @@ from django.test import Client
 from django.utils import timezone
 import pytest
 
-from compute_broker.control.models import Job, Membership, Project, ProjectCredential
-from compute_broker.control.auth import token_hash
-from compute_broker.mcp.facade import ProjectFacade
-from compute_broker.worker.client import ControlError, JsonClient
+from compute_relay.control.models import Job, Project, ProjectCredential
+from compute_relay.control.auth import token_hash
+from compute_relay.mcp.facade import ProjectFacade
+from compute_relay.worker.client import ControlError, JsonClient
 from test_control import broker  # noqa: F401
 
 
@@ -58,8 +58,8 @@ def test_context_does_not_require_or_grant_a_job_scope(broker):
 
 
 @pytest.mark.parametrize("change, status", [("missing", 401), ("invalid", 401), ("worker", 401),
-    ("expired", 401), ("revoked", 401), ("owner_disabled", 403), ("owner_unknown", 403),
-    ("membership_removed", 403)])
+    ("expired", 401), ("revoked", 401), ("owner_disabled", 403),
+    ("foreign_issuer", 403)])
 def test_context_rechecks_credentials_and_issuer_authority(broker, change, status):
     c = broker
     headers = {"HTTP_AUTHORIZATION": "Bearer " + c.token}
@@ -78,10 +78,7 @@ def test_context_rechecks_credentials_and_issuer_authority(broker, change, statu
     elif change == "owner_disabled":
         c.owner.is_active = False
         c.owner.save(update_fields=["is_active"])
-    elif change == "owner_unknown":
-        c.credential.issued_by = None
-        c.credential.save(update_fields=["issued_by"])
-    elif change == "membership_removed":
+    elif change == "foreign_issuer":
         c.credential.issued_by = c.outsider
         c.credential.save(update_fields=["issued_by"])
     response = Client().get("/api/v1/context", **headers)
@@ -91,8 +88,6 @@ def test_context_rechecks_credentials_and_issuer_authority(broker, change, statu
 
 def test_context_allows_a_viewer_key_and_isolates_a_second_projects_key(broker):
     c = broker
-    Membership.objects.create(project=c.project, user=c.outsider, roles=["viewer"])
-    c.credential.issued_by = c.outsider
     c.credential.scopes = ["jobs:read"]
     c.credential.save(update_fields=["issued_by", "scopes"])
     client = Client(HTTP_AUTHORIZATION="Bearer " + c.token)
@@ -119,7 +114,7 @@ def test_real_stdio_session_needs_only_endpoint_and_token_file(broker, context_l
     token_file.chmod(0o600)
 
     async def session():
-        parameters = StdioServerParameters(command=sys.executable, args=["-m", "compute_broker.mcp"],
+        parameters = StdioServerParameters(command=sys.executable, args=["-m", "compute_relay.mcp"],
             env={"PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
                  "BROKER_CONTROL_URL": live_server.url,
                  "BROKER_PROJECT_TOKEN_FILE": str(token_file), "BROKER_EXTENSIONS": ""})

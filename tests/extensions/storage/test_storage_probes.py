@@ -13,17 +13,17 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Job, WorkerIdentity
-from compute_broker.extensions.storage import services
-from compute_broker.extensions.storage.models import StorageObservationLease
-from compute_broker.extensions.storage.protocol import probe_context
-from compute_broker.extensions.storage.remote import REMOTE_SOURCE
-from compute_broker.extensions.storage.worker import execute
-from compute_broker.worker.enrollment import profile_metadata, resolve_connection
-from compute_broker.worker.journal import Journal
-from compute_broker.worker.runner import Worker
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Job, WorkerIdentity
+from compute_relay.extensions.storage import services
+from compute_relay.extensions.storage.models import StorageObservationLease
+from compute_relay.extensions.storage.protocol import probe_context
+from compute_relay.extensions.storage.remote import REMOTE_SOURCE
+from compute_relay.extensions.storage.worker import execute
+from compute_relay.worker.enrollment import profile_metadata, resolve_connection
+from compute_relay.worker.journal import Journal
+from compute_relay.worker.runner import Worker
 
 
 @pytest.fixture

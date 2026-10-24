@@ -1,6 +1,6 @@
 """Only bounded printable names and fixed connector messages reach terminals."""
 
-from compute_broker.worker.connector_status import ConnectorStatus, connector_label, display_label
+from compute_relay.worker.connector_status import ConnectorStatus, connector_label, display_label
 
 
 def test_label_removes_terminal_control_characters_and_is_bounded():

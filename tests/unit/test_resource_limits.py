@@ -4,21 +4,20 @@ from copy import deepcopy
 
 import pytest
 
-from compute_broker.domain.resource_limits import allocation_violations, effective_resource_limits
+from compute_relay.domain.resource_limits import allocation_violations, effective_resource_limits
 
 
 @pytest.fixture
 def policy():
     return {"mode": "budgeted", "per_job_limits": {"cpu_cores": 16, "gpu_devices": 2,
-        "memory_mib": 8192, "time_limit_seconds": 600, "maximum_charge_duration_seconds": 660}}
+        "memory_mib": 8192, "time_limit_seconds": 600}}
 
 
 @pytest.fixture
 def configuration():
     return {"site_profile": {"maximum_cpus": 8, "maximum_gpus": 4,
         "maximum_memory_mib": 16384, "maximum_time_limit_seconds": 1200,
-        "allocated_cpus": 2, "allocated_gpus": 0, "termination_margin_seconds": 10,
-        "overtime_margin_seconds": 20, "cleanup_margin_seconds": 30}}
+        "allocated_cpus": 2, "allocated_gpus": 0}}
 
 
 def test_project_cluster_and_schema_intersection_preserves_inputs(policy, configuration):
@@ -68,11 +67,7 @@ def test_zero_gpu_ceiling_is_valid(policy, configuration):
     assert result["feasible"] is True
 
 
-def test_legacy_charged_caps_and_margins_do_not_affect_new_job_limits(policy, configuration):
-    policy["per_job_limits"]["maximum_charge_duration_seconds"] = 1
-    configuration["site_profile"]["cleanup_margin_seconds"] = 600000
-    configuration["site_profile"]["termination_margin_seconds"] = None
-    configuration["site_profile"]["overtime_margin_seconds"] = True
+def test_planning_reports_the_supported_resource_dimensions(policy, configuration):
     result = effective_resource_limits(policy, configuration)
     assert result["per_job_limits"]["time_limit_seconds"] == 600
     assert result["feasible"] is True
@@ -117,7 +112,7 @@ def test_missing_required_project_cap_does_not_use_cluster_as_substitute(policy,
 
 def test_version_one_caps_are_enforced_even_when_both_sources_are_larger(policy, configuration):
     policy["per_job_limits"] = {"cpu_cores": 10000, "gpu_devices": 10000, "memory_mib": 10**9,
-        "time_limit_seconds": 10**9, "maximum_charge_duration_seconds": 10**9}
+        "time_limit_seconds": 10**9}
     for field in ("maximum_cpus", "maximum_gpus", "maximum_memory_mib", "maximum_time_limit_seconds"):
         configuration["site_profile"][field] = 10**9
     result = effective_resource_limits(policy, configuration)
@@ -144,8 +139,7 @@ def test_impossible_known_ceiling_wins_over_other_unknowns(policy, configuration
 
 def test_all_violations_report_requested_effective_and_project_limits(policy):
     resources = {"cpus": 1, "gpus": 0, "memory_mib": 16384, "time_limit_seconds": 601}
-    allocation = {"cpu_cores": 32, "gpu_devices": 4, "time_limit_seconds": 601,
-        "maximum_charge_duration_seconds": 661}
+    allocation = {"cpu_cores": 32, "gpu_devices": 4, "time_limit_seconds": 601}
     violations = allocation_violations(resources, allocation, policy["per_job_limits"])
     assert [entry["resource"] for entry in violations] == ["cpu_cores", "gpu_devices", "memory_mib", "time_limit_seconds"]
     assert violations[0] == {"resource": "cpu_cores", "requested": 1, "effective": 32, "limit": 16,
@@ -155,11 +149,6 @@ def test_all_violations_report_requested_effective_and_project_limits(policy):
     assert violations[2]["unit"] == "MiB"
     assert violations[-1]["requested"] == 601
     assert violations[-1]["effective"] == 601
-
-
-def test_historical_maximum_charged_duration_is_not_an_envelope_limit(policy):
-    allocation = {**policy["per_job_limits"], "maximum_charge_duration_seconds": 10**9}
-    assert allocation_violations({"memory_mib": 128}, allocation, policy["per_job_limits"]) == []
 
 
 def test_exact_boundaries_are_allowed_including_zero_gpus(policy):

@@ -9,8 +9,8 @@ import json
 
 from django.test import Client
 
-from compute_broker.control import services
-from compute_broker.control.models import Attempt, Connection, Environment, ExecutionRequest, Job, LedgerEntry
+from compute_relay.control import services
+from compute_relay.control.models import Attempt, Connection, Environment, ExecutionRequest, Job, LedgerEntry
 from test_control import broker, prepared_job
 
 
@@ -21,9 +21,8 @@ def client(context):
 def profile(context, **changes):
     current = {"maximum_cpus": 16, "maximum_gpus": 4, "maximum_memory_mib": 4096,
         "maximum_time_limit_seconds": 7200, "allocated_cpus": 4, "allocated_gpus": 0,
-        "partitions": ["debug"], "accounts": ["broker"], "qos": [],
-        "termination_margin_seconds": 900, "overtime_margin_seconds": 800,
-        "cleanup_margin_seconds": 700, "private": "PRIVATE-CLUSTER-CONFIG", **changes}
+        "partitions": ["debug"], "accounts": ["broker"], "qos": [], "automatic_execution_allowed": True,
+        "private": "PRIVATE-CLUSTER-CONFIG", **changes}
     context.connection.configuration["site_profile"] = current
     context.connection.save(update_fields=["configuration"])
 

@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-from compute_broker.transports.async_openssh import AsyncOpenSSHTransport
-from compute_broker.transports.openssh import TransportError
+from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+from compute_relay.transports.openssh import TransportError
 
 
 def transport(timeout=10, **ssh):

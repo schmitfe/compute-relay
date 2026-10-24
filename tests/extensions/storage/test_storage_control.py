@@ -8,12 +8,12 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Connection, Job, Project, ProjectCredential, User, WorkerIdentity
-from compute_broker.extensions.storage import services
-from compute_broker.extensions.storage.models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageEstimateReservation, StorageTarget
-from compute_broker.extensions.storage.planning import ROLES
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Connection, Job, Project, ProjectCredential, User, WorkerIdentity
+from compute_relay.extensions.storage import services
+from compute_relay.extensions.storage.models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageEstimateReservation, StorageTarget
+from compute_relay.extensions.storage.planning import ROLES
 
 
 def enroll(resources):
@@ -238,8 +238,8 @@ def test_plan_body_limit_and_unknown_path_fields_are_rejected(resources):
 
 def pinned_target(resources):
     """Synthetic protected metadata for the future separate-root publishing hook."""
-    from compute_broker.control.services import digest
-    from compute_broker.extensions.storage.planning import default_health_policy
+    from compute_relay.control.services import digest
+    from compute_relay.extensions.storage.planning import default_health_policy
     root = {"alias": "data", "path": "/approved/data", "roles": list(ROLES), "filesystem_id": "volume:test"}
     profile = {**resources.profile, "storage_roots": [root]}
     profile["revision_sha256"] = digest({key: value for key, value in profile.items() if key != "revision_sha256"})

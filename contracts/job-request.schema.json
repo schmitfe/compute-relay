@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://compute-broker.invalid/contracts/job-request.schema.json",
-  "title": "Compute Broker version one job request",
+  "$id": "https://compute-relay.invalid/contracts/job-request.schema.json",
+  "title": "Compute Relay version one job request",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "project_id", "connection_id", "name", "command", "environment", "resources", "files", "outputs"],
   "properties": {

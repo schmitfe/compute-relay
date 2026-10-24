@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://compute-broker.invalid/contracts/project-policy.schema.json",
-  "title": "Compute Broker version one project policy",
+  "$id": "https://compute-relay.invalid/contracts/project-policy.schema.json",
+  "title": "Compute Relay version one project policy",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "project_id", "revision", "mode", "allowed_connection_ids", "allowed_environment_revision_sha256", "allowed_gpu_types", "per_job_limits", "max_active_jobs", "allowance", "admission_expires_at"],
   "properties": {
@@ -19,8 +19,7 @@
         "cpu_cores": {"type": "integer", "minimum": 1, "maximum": 1024},
         "gpu_devices": {"type": "integer", "minimum": 0, "maximum": 16},
         "memory_mib": {"type": "integer", "minimum": 128, "maximum": 16777216},
-        "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60},
-        "maximum_charge_duration_seconds": {"type": "integer", "minimum": 60, "maximum": 1209600, "deprecated": true, "description": "Legacy policy field accepted for existing documents and ignored. Reservations use requested scheduler walltime; final charges use observed allocated runtime."}
+        "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60}
       }
     },
     "max_active_jobs": {"type": "integer", "minimum": 1, "maximum": 100},

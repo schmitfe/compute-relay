@@ -11,7 +11,7 @@ import warnings
 
 import pytest
 
-from compute_broker.mcp import setup
+from compute_relay.mcp import setup
 
 
 TOKEN = "cbp_" + "synthetic_project_credential_" * 2
@@ -19,13 +19,13 @@ TOKEN = "cbp_" + "synthetic_project_credential_" * 2
 
 def test_initialization_creates_private_files_and_only_key_scoped_mcp_config(tmp_path):
     project = setup.initialize(tmp_path / "science", api_key=TOKEN)
-    config = tomllib.loads((project / setup.CONFIG_PATH).read_text())["mcp_servers"]["compute_broker"]
-    assert config == {"command": sys.executable, "args": ["-m", "compute_broker.mcp"],
+    config = tomllib.loads((project / setup.CONFIG_PATH).read_text())["mcp_servers"]["compute_relay"]
+    assert config == {"command": sys.executable, "args": ["-m", "compute_relay.mcp"],
                       "env": {"BROKER_CONTROL_URL": setup.DEFAULT_BROKER_URL,
                               "BROKER_PROJECT_TOKEN_FILE": str(project / setup.KEY_PATH)}}
     assert (project / setup.KEY_PATH).read_text() == TOKEN + "\n"
     assert TOKEN not in (project / setup.CONFIG_PATH).read_text()
-    for path in (project, project / ".codex", project / ".compute-broker"):
+    for path in (project, project / ".codex", project / ".compute-relay"):
         assert stat.S_IMODE(path.stat().st_mode) == 0o700
     for path in (project / setup.KEY_PATH, project / setup.CONFIG_PATH, project / ".gitignore"):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -37,7 +37,7 @@ def test_existing_toml_and_gitignore_are_preserved_and_exclusions_are_effective(
     (tmp_path / ".codex").mkdir()
     config = b'[preferences]\ntheme = "dark"\n[mcp_servers.other]\ncommand = "other-command"'
     (tmp_path / setup.CONFIG_PATH).write_bytes(config)
-    ignore = b"results/\n!/.compute-broker/project.key"
+    ignore = b"results/\n!/.compute-relay/project.key"
     (tmp_path / ".gitignore").write_bytes(ignore)
     setup.initialize(tmp_path, api_key=TOKEN, broker_url="https://broker.example/")
     content = (tmp_path / setup.CONFIG_PATH).read_bytes()
@@ -72,12 +72,12 @@ def test_top_level_cli_initializes_offline_using_a_private_import(tmp_path):
     source.write_text(TOKEN + "\n")
     source.chmod(0o600)
     project = tmp_path / "project"
-    result = subprocess.run([sys.executable, "-m", "compute_broker.cli", "init-mcp", "--directory", str(project),
+    result = subprocess.run([sys.executable, "-m", "compute_relay.cli", "init-mcp", "--directory", str(project),
                              "--key-file", str(source), "--broker-url", "https://offline.invalid"],
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
     assert TOKEN not in result.stdout + result.stderr
-    config = tomllib.loads((project / setup.CONFIG_PATH).read_text())["mcp_servers"]["compute_broker"]
+    config = tomllib.loads((project / setup.CONFIG_PATH).read_text())["mcp_servers"]["compute_relay"]
     assert config["env"] == {"BROKER_CONTROL_URL": "https://offline.invalid",
                               "BROKER_PROJECT_TOKEN_FILE": str(project / setup.KEY_PATH)}
     assert (project / setup.KEY_PATH).read_text() == TOKEN + "\n"
@@ -120,14 +120,14 @@ def test_import_refuses_unsafe_source(tmp_path, unsafe):
     assert not project.exists()
 
 
-@pytest.mark.parametrize("relative", [".compute-broker", ".codex", ".gitignore", ".codex/config.toml", ".compute-broker/project.key"])
+@pytest.mark.parametrize("relative", [".compute-relay", ".codex", ".gitignore", ".codex/config.toml", ".compute-relay/project.key"])
 def test_destination_rejects_symlinks_and_preserves_targets(tmp_path, relative):
     project = tmp_path / "project"
     project.mkdir()
     path = project / relative
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     outside = tmp_path / "outside"
-    if relative in {".compute-broker", ".codex"}:
+    if relative in {".compute-relay", ".codex"}:
         outside.mkdir()
     else:
         outside.write_text("unchanged")
@@ -148,7 +148,7 @@ def test_destination_rejects_ancestor_symlink(tmp_path):
 
 
 def test_existing_key_is_never_overwritten_even_if_config_is_missing(tmp_path):
-    (tmp_path / ".compute-broker").mkdir(mode=0o700)
+    (tmp_path / ".compute-relay").mkdir(mode=0o700)
     path = tmp_path / setup.KEY_PATH
     path.write_text("keep this key")
     with pytest.raises(ValueError, match="already has a broker API key"):
@@ -157,7 +157,7 @@ def test_existing_key_is_never_overwritten_even_if_config_is_missing(tmp_path):
     assert not (tmp_path / ".gitignore").exists()
 
 
-@pytest.mark.parametrize("content", ['[mcp_servers.compute_broker]\ncommand = "existing"',
+@pytest.mark.parametrize("content", ['[mcp_servers.compute_relay]\ncommand = "existing"',
                                            "invalid TOML = [", "mcp_servers = 2",
                                            "mcp_servers = {}"])
 def test_conflicting_or_invalid_toml_is_refused_before_prompting(tmp_path, monkeypatch, content):
@@ -167,7 +167,7 @@ def test_conflicting_or_invalid_toml_is_refused_before_prompting(tmp_path, monke
     with pytest.raises(ValueError):
         setup.initialize(tmp_path)
     assert (tmp_path / setup.CONFIG_PATH).read_text() == content
-    assert not (tmp_path / ".compute-broker").exists()
+    assert not (tmp_path / ".compute-relay").exists()
 
 
 @pytest.mark.parametrize("url", ["http://example.org", "https://user:pass@example.org", "https://@example.org",
@@ -186,7 +186,7 @@ def test_loopback_http_and_https_origins_are_accepted(url):
     assert setup._broker_url(url) == url
 
 
-@pytest.mark.parametrize("relative", [".compute-broker/project.key", ".compute-broker/other-private-file", ".codex/config.toml"])
+@pytest.mark.parametrize("relative", [".compute-relay/project.key", ".compute-relay/other-private-file", ".codex/config.toml"])
 def test_git_tracked_paths_are_refused_including_deleted_credentials(tmp_path, relative):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     target = tmp_path / relative
@@ -240,7 +240,7 @@ def test_write_failure_removes_only_new_files_and_keeps_existing_configuration(t
         setup.initialize(tmp_path, api_key=TOKEN)
     assert config_path.read_bytes() == original
     assert (tmp_path / ".codex").is_dir()
-    assert not (tmp_path / ".compute-broker").exists()
+    assert not (tmp_path / ".compute-relay").exists()
     assert not (tmp_path / ".gitignore").exists()
 
 

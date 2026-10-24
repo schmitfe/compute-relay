@@ -1,0 +1,27 @@
+{% extends "broker/base.html" %}
+{% block content %}
+<p><a href="/clusters/{{ cluster.id }}/configuration/">← Cluster configuration</a></p>
+<h1>Choose a working directory on {{ cluster }}</h1>
+<p>Browse folders through your running personal connector. Only directory names and access metadata are returned. Use New folder to create a private directory before selecting it.</p>
+{% if not connector_ready %}<p class="notice">Restart your personal connector with the updated broker environment to enable directory browsing.</p>{% endif %}
+<form method="post">{% csrf_token %}<input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}">
+<label>Remote directory <input name="path" value="{{ result.path }}" placeholder="Leave empty to open your remote home" maxlength="240"></label>
+<button{% if not connector_ready %} disabled{% endif %}>Open directory</button></form>
+{% if waiting %}<p role="status">Waiting for the connector to list this folder…</p><script>setTimeout(() => location.reload(), 1200);</script>
+{% elif task.state == "failed" %}<p class="error">Directory request failed: {{ task.error_code }}. Check that the connector is running and your account can access the directory.</p>{% endif %}
+{% if result.path %}<section>
+<h2 id="remote-directory" data-path="{{ result.path }}" data-home="{{ result.home }}"><code>{{ result.path }}</code></h2>
+<p>{% if result.writable %}Your HPC account can write here.{% else %}This directory is not writable by your HPC account.{% endif %}</p>
+{% if task.kind == "mkdir" %}<p class="notice">{% if result.created %}Folder created.{% else %}This folder already existed and has been opened. Its contents and permissions were not changed.{% endif %}</p>{% endif %}
+<div class="row"><form method="post">{% csrf_token %}<input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}"><input type="hidden" name="path" value="{{ result.parent }}"><button class="secondary">Parent folder</button></form>
+{% if result.writable and result.path != "/" %}<a class="button" href="/clusters/{{ cluster.id }}/configuration/?remote_root={{ result.path|urlencode }}">Use this working directory</a>{% endif %}</div>
+{% if result.writable %}<details open><summary>New folder</summary>
+{% if not folders_ready %}<p>Restart your personal connector with the updated broker environment to enable folder creation.</p>{% endif %}
+<form method="post">{% csrf_token %}<input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}"><input type="hidden" name="action" value="mkdir"><input type="hidden" name="path" value="{{ result.path }}">
+<label>Folder name <input name="name" maxlength="80" pattern="[A-Za-z0-9_.-]+" placeholder="broker-jobs" required></label>
+<p>Create one private folder here, then open it for selection. Use letters, numbers, dots, underscores or hyphens. Existing files and folders are not overwritten.</p>
+<button{% if not folders_ready %} disabled{% endif %}>Create and open folder</button></form></details>{% endif %}
+{% if result.truncated %}<p class="notice">This is a bounded listing. Some folders were omitted; enter an exact path above to open one.</p>{% endif %}
+<ul>{% for entry in result.entries %}<li><form method="post">{% csrf_token %}<input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}"><input type="hidden" name="path" value="{{ entry.path }}"><button class="secondary">{{ entry.name }}/</button></form></li>{% empty %}<li>No visible subdirectories in this listing.</li>{% endfor %}</ul>
+</section>{% endif %}
+{% endblock %}

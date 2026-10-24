@@ -11,13 +11,13 @@ maintain. The skill is planning guidance; policy enforcement stays in the broker
 Initialize a science workspace, after creating its project key in the portal:
 
 ```sh
-compute-broker init-mcp --client both --with-workflow
+compute-relay init-mcp --client both --with-workflow
 ```
 
 For an existing workspace, explicitly reuse its private key:
 
 ```sh
-compute-broker init-mcp --client both --reuse-key --with-workflow
+compute-relay init-mcp --client both --reuse-key --with-workflow
 ```
 
 Pass the same `--broker-url https://broker.example.org` used at initialization
@@ -90,22 +90,22 @@ performance guarantee.
 
 Run these ordinary CLI operations where the initialized project files live:
 
-Initialization writes `.compute-broker/USAGE.md` with the actual installed
+Initialization writes `.compute-relay/USAGE.md` with the actual installed
 interpreter and workspace path, correctly quoted for the shell. Prefer those
-exact `python -m compute_broker.cli ...` commands when the console script is
+exact `python -m compute_relay.cli ...` commands when the console script is
 absent from the client's search path. Refresh a known generated workflow with
 `init-mcp --reuse-key --with-workflow`; locally modified guidance is preserved
 by refusing an unrecognized replacement.
 
 ```sh
-compute-broker files stage --manifest source-bundle.json
-compute-broker files prepare --bundle BUNDLE_ID --request job.json --idempotency-key STAGE_KEY
-compute-broker files fetch --attempt-id ATTEMPT_UUID --output results/RUN
+compute-relay files stage --manifest source-bundle.json
+compute-relay files prepare --bundle BUNDLE_ID --request job.json --idempotency-key STAGE_KEY
+compute-relay files fetch --attempt-id ATTEMPT_UUID --output results/RUN
 ```
 
 `source-bundle.json` contains explicit relative paths, for example
 `{"files":["main.py","src/model.py"]}`. Positional paths also work:
-`compute-broker files stage main.py src/model.py`. There is no recursive scan,
+`compute-relay files stage main.py src/model.py`. There is no recursive scan,
 implicit upload of the whole workspace, archive extraction or broker-host file
 access. Each command accepts `--directory /absolute/project`.
 

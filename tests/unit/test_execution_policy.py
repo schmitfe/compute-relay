@@ -2,7 +2,7 @@
 
 import pytest
 
-from compute_broker.control.execution_policy import approval_requirements
+from compute_relay.control.execution_policy import approval_requirements
 
 
 @pytest.mark.parametrize("project_mode", ["approval_required", "budgeted", "mixed"])
@@ -17,7 +17,7 @@ def test_every_independent_gate_and_mixed_condition_is_reported(project_mode, ke
         expected.append("PROJECT_REVIEW_REQUIRED")
     if key_mode == "approval_required":
         expected.append("KEY_REVIEW_REQUIRED")
-    if cluster_setting is False:
+    if cluster_setting is not True:
         expected.append("CLUSTER_REVIEW_REQUIRED")
     if project_mode == "mixed" and within is False:
         expected.append("PROJECT_ENVELOPE_REVIEW_REQUIRED")

@@ -6,17 +6,27 @@ automatically. You do not need to register a worker, copy a worker token or edit
 its protected profile by hand.
 
 The broker user, project API key and HPC account remain separate identities.
-Signing in with a local or LDAP account grants no SSH access. Jobs submitted
+Opening the local portal grants no SSH access by itself. Jobs submitted
 with your project key can use only your permitted connection and worker;
-sharing a project's allowance does not delegate another user's HPC account.
+project limits do not replace the cluster account's permissions.
 
-## Save the cluster and download its setup
+## Normal local setup
+
+Start `compute-relay`, create the cluster in the portal, and select **Start
+connector**. The launcher performs the local setup, asks for SSH/key/MFA input
+in its terminal and keeps that connector running. Saved installation connectors
+resume on subsequent launches; no separate worker token or process is needed.
+A browser start action only queues the local operation and never collects SSH
+credentials. The advanced direct setup below remains useful for an explicitly
+selected standalone connector.
+
+## Advanced direct connector setup
 
 1. Sign in to the human portal and open **Clusters → Add a cluster**.
 2. Enter the Slurm login hostname, remote username and SSH port. The working
    directory is optional: choose it interactively through the running connector
    after discovery. If omitted, the connector identifies the remote account's
-   canonical home and proposes `.compute-broker/jobs` beneath it without creating
+   canonical home and proposes `.compute-relay/jobs` beneath it without creating
    that directory. The username is needed before starting the connector.
 3. Leave the SSH key path empty to choose the file with your device's native
    picker at interactive connector startup. You may instead enter SSH key and
@@ -36,20 +46,14 @@ Saving or downloading setup does not contact SSH, create a remote directory or
 submit a compute job. The setup is tied to the current saved cluster revision.
 If those details change, reload the page and obtain a new setup.
 
-An existing Slurm cluster's overview offers the same download button to its
-owner, including connections created through the older manual flow. An
-administrator's ability to inspect a cluster is not permission to enroll a
-personal connector as its owner. Simulator registrations retain the advanced
-manual setup path.
-
 ## Start on your device
 
-Use an installed, reviewed broker client with the worker dependencies. In a
+Use the installed Compute Relay package; runtime dependencies are included. In a
 terminal on the device that should hold the SSH connection, run:
 
 ```sh
 chmod 600 /absolute/private/personal-connector.json
-compute-broker connector \
+compute-relay connector \
   --setup /absolute/private/personal-connector.json \
   --state-directory /absolute/private/connector-state
 ```
@@ -94,7 +98,7 @@ for the subsequent SSH prompts. For a session without a graphical picker,
 supply a local override:
 
 ```sh
-compute-broker connector \
+compute-relay connector \
   --setup /absolute/private/personal-connector.json \
   --identity-file /absolute/path/to/ssh-key \
   --state-directory /absolute/private/connector-state
@@ -129,7 +133,6 @@ single name made of letters, digits, dots, underscores or hyphens. Existing
 directories are opened without changing their contents or permissions; files
 and symbolic links are refused. Creating a folder does not change the selected
 baseline: select **Use this working directory**, then save the configuration.
-An older running connector needs a restart before it offers folder creation.
 
 Select a baseline directory or edit its path, then confirm resource limits and the
 execution review policy. The worker validates access without creating files, saves its
@@ -143,24 +146,18 @@ expose a general command interface. Save the option, then run discovery again.
 See [cluster configuration](cluster-configuration.md) and
 [module discovery](module-discovery.md).
 
-After upgrading an older personal connector, restart with the same state
-directory. When idle, it refreshes discovery and asks for post-login
-configuration confirmation. If old executions still need accounting, their
-existing profile is kept until they settle; automatic migration must not move
-an active execution to another directory or resource binding.
-
 ## Resume and reconnect
 
 For named local shortcuts and labeled startup/activity messages, see
 [local client setup](local-client-setup.md). Register a paired state directory
-once with `compute-broker connectors add NAME --state-directory PATH`, then use
-`compute-broker connectors start NAME`. The original command below continues
+once with `compute-relay connectors add NAME --state-directory PATH`, then use
+`compute-relay connectors start NAME`. The original command below continues
 to work and accepts `--verbose` for sanitized activity messages.
 
 Resume with the same private directory, omitting the downloaded setup:
 
 ```sh
-compute-broker connector --state-directory /absolute/private/connector-state
+compute-relay connector --state-directory /absolute/private/connector-state
 ```
 
 Keep the connector available while jobs need dispatch, observation or collection.
@@ -204,7 +201,7 @@ Its confirmation page is available only to the owner. Removal hides the cluster
 from active configuration, blocks new submissions and discovery, invalidates
 unused pairing files and clears saved local-path hints. A dedicated personal
 connector loses its broker credential, causing its loop to exit and close its
-owned SSH session. A shared legacy worker is retained for its other clusters.
+owned SSH session. Other independent cluster connectors are retained.
 
 Removal is refused while any execution has unsettled accounting. Recorded jobs,
 results and accounting are retained; no remote files or software environments
@@ -229,11 +226,11 @@ does not verify a worst-case cleanup bound or justify unattended execution.
 Institutional MFA/session policy still needs explicit acceptance on each site;
 routine automated tests use synthetic credentials and no institutional cluster.
 See [runtime limitations](runtime.md), [SSH/security boundaries](security.md),
-[hosted architecture](hosted-architecture.md) and [async-worker compatibility](async-workers.md).
+[local architecture](architecture.md) and [async connector behavior](async-workers.md).
 
-This first personal connector runs core Slurm jobs through the async worker.
-Environment-build, workflow and storage extension workers still use the advanced
-manual path. Re-pairing an existing connection preserves its ID and known site
+The personal connector uses the async Slurm worker and advertises the modules
+selected by its local installation. Storage probes, environment finalization and
+workflow hooks use the bundled async implementations and normal scoped leases. Re-pairing an existing connection preserves its ID and known site
 bounds but requires it to have no unsettled executions; do not move an active
 connection to a new state directory. A failed enrollment response can leave its
 one-use code consumed. Obtain a fresh download and use a fresh state directory
@@ -249,11 +246,5 @@ Configuration acknowledgements are replayable. A locally saved configuration
 receipt freezes its canonical path across retries and restarts. If confirmation
 does not reach the broker before the five-minute request expires, new execution
 stays blocked: open **Configure cluster** and explicitly save it again. Do not
-delete local state or roll back an uncertain configuration. Expired account
-verification pauses new setup operations while existing jobs continue through
-the core observation and accounting path; revoked worker credentials still
-close the session.
-
-Advanced operators can still register and bind workers manually from the setup
-page's **Advanced** section. That path retains its explicit profile/target/root
-checks and is useful for simulators and managed installations.
+delete local state or roll back an uncertain configuration. Revoked worker credentials close the session; existing job records remain
+retained for recovery and accounting.

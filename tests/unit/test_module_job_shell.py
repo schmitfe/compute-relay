@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from compute_broker.backends.environments import render_environment
+from compute_relay.backends.environments import render_environment
 
 
 @pytest.mark.parametrize("initializer", ["", "/usr/share/lmod/lmod/init/bash"])

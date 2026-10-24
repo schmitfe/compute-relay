@@ -126,7 +126,7 @@ def cluster_check(human, demo):
     page = human.request("POST", path, fields.values, form=True, binary=True)
     review_path = redirected_path(human)
     require(review_path.startswith("/review/"), "Cluster check did not open execution review")
-    require(b"compute-broker-cluster-check-v1" in page, "Review lacks the diagnostic source")
+    require(b"compute-relay-cluster-check-v1" in page, "Review lacks the diagnostic source")
     fields = ConfigurationFields();fields.feed(page.decode())
     require("execution_request_id" in fields.values, "Cluster check bypassed human approval")
     human.request("POST", review_path, {**fields.values, "decision": "approve",
@@ -146,7 +146,7 @@ def cluster_check(human, demo):
             result = json.loads(block["text"])
         except ValueError:
             continue
-        if isinstance(result, dict) and result.get("marker") == "compute-broker-cluster-check-v1":
+        if isinstance(result, dict) and result.get("marker") == "compute-relay-cluster-check-v1":
             require(result.get("hostname") and result.get("python"), "Cluster check lacks remote identity")
             require("fixture-python/1.0" in result.get("loaded_modules", "").split(":"),
                     "The cluster-provided module command did not load the selected module")
@@ -177,7 +177,7 @@ def run():
         root = Path(temp);root.chmod(0o700)
         path = root / "setup.json";path.write_text(json.dumps(setup));path.chmod(0o600)
         directory = root / "connectors" / "lab"
-        command = [sys.executable, "-m", "compute_broker.cli", "connector", "--state-directory", str(directory),
+        command = [sys.executable, "-m", "compute_relay.cli", "connector", "--state-directory", str(directory),
             "--non-interactive", "--allow-insecure-http"]
         log = root / "connector.log"
         with log.open("wb") as output:

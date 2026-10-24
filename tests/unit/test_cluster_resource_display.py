@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from django.template.loader import render_to_string
 import pytest
 
-from compute_broker.control import scheduler_display
-from compute_broker.control.scheduler_display import partition_resources
+from compute_relay.control import scheduler_display
+from compute_relay.control.scheduler_display import partition_resources
 
 
 def node(name, partition="", **values):

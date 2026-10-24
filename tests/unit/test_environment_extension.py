@@ -19,12 +19,12 @@ from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control import services as core
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Attempt, Connection, Environment, Grant, Job, Project, ProjectCredential, User, WorkerIdentity, WorkerReport
-from compute_broker.extensions.environments import rendering
-from compute_broker.extensions.environments.remote import REMOTE_SOURCE
+from compute_relay.control import services as core
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Attempt, Connection, Environment, Grant, Job, Project, ProjectCredential, User, WorkerIdentity, WorkerReport
+from compute_relay.extensions.environments import rendering
+from compute_relay.extensions.environments.remote import REMOTE_SOURCE
 
 
 def policy(base):
@@ -79,17 +79,16 @@ def test_pinned_wheel_names_versions_and_hashes_are_bound():
 
 @pytest.fixture
 def context(db, settings, tmp_path):
-    if not apps.is_installed("compute_broker.extensions.environments"):
+    if not apps.is_installed("compute_relay.extensions.environments"):
         pytest.skip("Run with BROKER_EXTENSIONS=environments to test the optional app")
-    from compute_broker.extensions.environments import services
+    from compute_relay.extensions.environments import services
     settings.ARTIFACT_ROOT = tmp_path / "objects"
     owner = User.objects.create_user(username="environment-owner", password=None)
     outsider = User.objects.create_user(username="environment-outsider", password=None)
     worker = WorkerIdentity.objects.create(owner=owner, name="environment-worker", token_hash=token_hash("environment-worker"),
         supported_extensions=["environments"])
     connection = Connection.objects.create(owner=owner, worker=worker, name="synthetic-native", backend="slurm",
-        configuration={"remote_root": "/managed/jobs", "site_profile": {"partitions": ["debug"], "accounts": ["broker"], "qos": [],
-            "termination_margin_seconds": 0, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 0}}, revision_sha256="c" * 64)
+        configuration={"remote_root": "/managed/jobs", "site_profile": {"partitions": ["debug"], "accounts": ["broker"], "qos": [], "automatic_execution_allowed": True}}, revision_sha256="c" * 64)
     base = Environment.objects.create(owner=owner, connection=connection, name="bootstrap", configuration={"interpreter": "/usr/bin/python3"}, revision_sha256="e" * 64)
     project = Project.objects.create(owner=owner, name="environment-project")
     project.connections.add(connection)
@@ -100,7 +99,7 @@ def context(db, settings, tmp_path):
     grant = Grant.objects.create(project=project, policy={"schema_version": "1.0", "project_id": str(project.id), "revision": 1,
         "mode": "budgeted", "allowed_connection_ids": [str(connection.id)], "allowed_environment_revision_sha256": [base.revision_sha256],
         "allowed_gpu_types": [], "per_job_limits": {"cpu_cores": 1, "gpu_devices": 0, "memory_mib": 1024,
-            "time_limit_seconds": 600, "maximum_charge_duration_seconds": 600}, "max_active_jobs": 10, "max_total_jobs": 10,
+            "time_limit_seconds": 600}, "max_active_jobs": 10, "max_total_jobs": 10,
         "allowance": {"cpu_core_seconds": 10000, "gpu_device_seconds": 0}, "admission_expires_at": (timezone.now()+timedelta(days=1)).isoformat()})
     build_policy = services.update_policy(project, owner, policy(base.id))
     return SimpleNamespace(owner=owner, outsider=outsider, worker=worker, connection=connection, base=base,
@@ -108,7 +107,7 @@ def context(db, settings, tmp_path):
 
 
 def prepared(context):
-    from compute_broker.extensions.environments.models import EnvironmentBuild
+    from compute_relay.extensions.environments.models import EnvironmentBuild
     created, _ = context.services.create_build(context.key, context.document)
     build = EnvironmentBuild.objects.get(id=created["id"])
     context.services.prepare_build(build, context.key)
@@ -211,6 +210,43 @@ def test_real_verified_settled_build_publishes_without_broadening_project_grant(
     context.services.sync_attempt(attempt, metadata)
     build.refresh_from_db()
     assert build.environment_id == before
+
+
+def test_async_worker_environment_receipt_publishes_via_durable_core_report(context, tmp_path, django_capture_on_commit_callbacks):
+    from compute_relay.worker.async_runner import AsyncWorker
+    from compute_relay.worker.journal import Journal
+    from test_async_worker import Backend, Control
+    build, attempt = executed(context)
+    metadata = finalization(build, attempt)
+    attempt.dispatch_started = True
+    attempt.state = "queued"
+    attempt.save()
+    lease = core.lease_work(context.worker)["lease"]
+    assert lease["operation"] == "observe"
+    assert lease["extension_context"]["environments"]["build_id"] == str(build.id)
+    backend, control = Backend(), Control()
+    backend.connection = {**context.connection.configuration, "backend": "slurm", "revision_sha256": context.connection.revision_sha256}
+    helper_calls = []
+    async def helper(source, request):
+        helper_calls.append((source, request))
+        await asyncio.sleep(0)
+        return metadata
+    backend.transport = SimpleNamespace(call_helper=helper)
+    worker = AsyncWorker(control, {str(context.connection.id): backend.connection}, Journal(tmp_path / "journal"),
+        owner_id=context.owner.id, backend_factory=lambda configuration: backend, extensions=["environments"])
+    asyncio.run(worker.execute(lease))
+    payload = control.calls[-1][2]
+    assert payload["extension_data"]["environments"]["generation"] == lease["generation"]
+    assert helper_calls[0][0] == REMOTE_SOURCE
+    assert helper_calls[0][1]["native_identity"] == attempt.native_identity
+    with django_capture_on_commit_callbacks(execute=True):
+        response = core.report(context.worker, attempt.id, payload)
+    assert response["accepted"] is True
+    build.refresh_from_db();attempt.refresh_from_db();context.grant.refresh_from_db()
+    assert build.state == "ready" and attempt.accounting_state == "settled"
+    assert build.environment.configuration["prefix"] == metadata["prefix"]
+    assert context.grant.spent_cpu == 2 and context.grant.reserved_cpu == 0
+    assert build.environment.revision_sha256 not in context.grant.policy["allowed_environment_revision_sha256"]
 
 
 @pytest.mark.parametrize("case", ["fake", "failed", "unsettled", "stale", "wrong_spec", "wrong_prefix", "wrong_platform", "policy_changed"])
@@ -358,7 +394,7 @@ def test_durable_worker_metadata_can_recover_publication_without_remote_io(conte
 
 
 def test_worker_finalizes_only_metadata_and_fake_results_never_look_verified():
-    from compute_broker.extensions.environments import worker
+    from compute_relay.extensions.environments import worker
     attempt, build = str(uuid4()), str(uuid4())
     native = {"attempt_id": attempt}
     context = {"attempt_id": attempt, "build_id": build, "spec_sha256": "a" * 64, "generation": 7}
@@ -374,7 +410,7 @@ def test_worker_finalizes_only_metadata_and_fake_results_never_look_verified():
 
 
 def test_optional_mcp_tools_have_no_human_policy_or_shell_authority():
-    from compute_broker.mcp.facade import ProjectFacade, create_server
+    from compute_relay.mcp.facade import ProjectFacade, create_server
     facade = ProjectFacade(SimpleNamespace(), str(uuid4()), enabled_extensions=["environments"])
     tools = asyncio.run(create_server(facade).list_tools())
     names = {tool.name for tool in tools}

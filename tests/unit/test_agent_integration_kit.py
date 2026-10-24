@@ -43,10 +43,10 @@ def test_generator_references_only_project_token_path_without_reading_it(tmp_pat
 
     monkeypatch.setattr(Path, "open", protected_open)
     destination = generated(tmp_path)
-    codex = tomllib.loads((destination / ".codex/config.toml").read_text())["mcp_servers"]["compute_broker"]
-    claude = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_broker"]
+    codex = tomllib.loads((destination / ".codex/config.toml").read_text())["mcp_servers"]["compute_relay"]
+    claude = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_relay"]
     assert codex["command"] == sys.executable  # Preserve the venv executable, do not resolve its symlink.
-    assert codex["args"] == ["-m", "compute_broker.mcp"]
+    assert codex["args"] == ["-m", "compute_relay.mcp"]
     assert claude["type"] == "stdio" and claude["env"] == codex["env"]
     assert codex["env"]["BROKER_PROJECT_TOKEN_FILE"] == str(token)
     assert "BROKER_PROJECT_ID" not in codex["env"]
@@ -62,7 +62,7 @@ def test_generator_refuses_overwrite_and_outside_destination(tmp_path):
     project = generated(tmp_path)
     before = (project / "PROMPT.md").read_bytes()
     with pytest.raises(ValueError):
-        kit.create("00", project, "http://localhost", str(uuid4()), "/tmp/project-token", sys.executable)
+        kit.create("00", project, "http://localhost", "/tmp/project-token", sys.executable)
     assert (project / "PROMPT.md").read_bytes() == before
     with pytest.raises(ValueError):
         kit._destination(ROOT / "examples/should-not-exist")
@@ -79,18 +79,9 @@ def test_create_cli_needs_no_project_id_and_stays_offline(tmp_path):
         "--project-token-file", str(tmp_path / "does-not-exist.key"), "--python", sys.executable],
         capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
-    env = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_broker"]["env"]
+    env = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_relay"]["env"]
     assert "BROKER_PROJECT_ID" not in env
     assert env["BROKER_CONTROL_URL"] == "https://offline.invalid"
-
-
-def test_generator_preserves_optional_legacy_identity_assertion(tmp_path):
-    project_id = str(uuid4())
-    destination = kit.create("00", tmp_path / "legacy-project", "http://localhost", project_id,
-                             str(tmp_path / "does-not-exist.key"), sys.executable)
-    env = json.loads((destination / ".mcp.json").read_text())["mcpServers"]["compute_broker"]["env"]
-    assert env["BROKER_PROJECT_ID"] == project_id
-    assert json.loads((destination / "project.json").read_text())["expected_project_id"] == project_id
 
 
 @pytest.mark.parametrize("url", ["https://user:pass@host.invalid", "http://remote.invalid", "https://host.invalid/path", "https://host.invalid/?key=secret", "file:///tmp/x"])
@@ -171,10 +162,10 @@ def test_recorder_accepts_complete_local_evidence_without_claiming_cluster_work(
 
 def test_operator_client_extensions_are_explicit_and_disabled_by_default(tmp_path):
     project = generated(tmp_path)
-    env = json.loads((project / ".mcp.json").read_text())["mcpServers"]["compute_broker"]["env"]
+    env = json.loads((project / ".mcp.json").read_text())["mcpServers"]["compute_relay"]["env"]
     assert env["BROKER_EXTENSIONS"] == ""
-    other = kit.create("03", tmp_path / "workflow-project", "https://broker.invalid", str(uuid4()), "/tmp/nonexistent-project-token", sys.executable, "workflows,environments")
-    enabled = json.loads((other / ".mcp.json").read_text())["mcpServers"]["compute_broker"]["env"]
+    other = kit.create("03", tmp_path / "workflow-project", "https://broker.invalid", "/tmp/nonexistent-project-token", sys.executable, "workflows,environments")
+    enabled = json.loads((other / ".mcp.json").read_text())["mcpServers"]["compute_relay"]["env"]
     assert enabled["BROKER_EXTENSIONS"] == "environments,workflows"
     assert json.loads((other / "project.json").read_text())["requested_client_extensions"] == ["environments", "workflows"]
 
@@ -256,7 +247,7 @@ def feasible(dense):
     local = {"supported": True, "cgroup_resolution_complete": True, "effective_limit_bytes": 8 * 1024**3,
              "effective_available_bytes": 6 * 1024**3}
     grants = {"memory_mib": 16384, "storage_available_bytes": 2 * 1024**2, "cpu_core_seconds_available": 10000,
-              "wall_seconds": 120, "maximum_charge_duration_seconds": 180, "maximum_flops": 10**13}
+              "wall_seconds": 120, "maximum_flops": 10**13}
     return p, pilot, local, grants
 
 
@@ -267,13 +258,13 @@ def test_dense_preflight_is_arithmetic_only_and_accounts_for_all_work(science, m
     plan = dense.preflight(p, pilot, local, grants)
     assert plan["costs"]["matrix_bytes"] > local["effective_limit_bytes"]
     assert plan["costs"]["peak_bytes"] <= grants["memory_mib"] * 1024**2
-    assert plan["reserved_cpu_core_seconds"] == 360
+    assert plan["reserved_cpu_core_seconds"] == 240
     assert plan["costs"]["matmul_flops"] == 2 * p["n"]**2 * p["replicas"] * p["steps"] * p["disorders"]
     with pytest.raises(ValueError):
         dense.simulate_numpy(p)  # Cannot bypass the explicit resource plan through the public helper.
 
 
-@pytest.mark.parametrize("reason", ["fits_local", "unknown_cgroup", "ram", "storage", "cpu", "wall", "charge", "flops", "pilot"])
+@pytest.mark.parametrize("reason", ["fits_local", "unknown_cgroup", "ram", "storage", "cpu", "wall", "flops", "pilot"])
 def test_dense_preflight_rejects_infeasible_or_unverified_plans_before_allocation(science, reason):
     _, dense, _ = science
     p, pilot, local, grants = feasible(dense)
@@ -283,7 +274,6 @@ def test_dense_preflight_rejects_infeasible_or_unverified_plans_before_allocatio
     elif reason == "storage": grants["storage_available_bytes"] = 1
     elif reason == "cpu": grants["cpu_core_seconds_available"] = 1
     elif reason == "wall": grants["wall_seconds"] = 61
-    elif reason == "charge": grants["maximum_charge_duration_seconds"] = 60
     elif reason == "flops": grants["maximum_flops"] = 1
     else: pilot["matmul_flops_per_second"] = 1
     with pytest.raises(ValueError):

@@ -7,7 +7,7 @@ import pytest
 from django.template import Context, Template
 from django.template.loader import render_to_string
 
-from compute_broker.control.job_diagnostics import MAX_LOG_BYTES, build_attempt_diagnostics
+from compute_relay.control.job_diagnostics import MAX_LOG_BYTES, build_attempt_diagnostics
 
 
 def attempt(**changes):

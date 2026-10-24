@@ -8,7 +8,7 @@ from uuid import uuid4
 from django.template.loader import render_to_string
 import pytest
 
-from compute_broker.control import cluster_configuration as configuration
+from compute_relay.control import cluster_configuration as configuration
 from test_cluster_configuration import form_data, snapshot
 
 

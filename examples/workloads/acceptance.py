@@ -13,7 +13,7 @@ import socket
 import sys
 
 
-marker = sys.argv[1] if len(sys.argv) == 2 else "compute-broker-acceptance"
+marker = sys.argv[1] if len(sys.argv) == 2 else "compute-relay-acceptance"
 payload = bytes(range(256)) * 256
 result = {
     "marker": marker,

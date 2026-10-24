@@ -114,8 +114,6 @@ def validate_prepared(data: dict) -> None:
     if allocation["time_limit_seconds"] != requested["time_limit_seconds"]:
         raise ValueError("Walltime changed after request preparation")
     duration = requested["time_limit_seconds"]
-    if allocation["maximum_charge_duration_seconds"] != duration:
-        raise ValueError("Legacy charge duration must equal requested scheduler walltime")
     expected = {
         "cpu_core_seconds": allocation["cpu_cores"] * duration,
         "gpu_device_seconds": allocation["gpu_devices"] * duration,

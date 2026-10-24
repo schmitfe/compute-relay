@@ -10,12 +10,12 @@ from django.test import Client
 from django.urls import path
 from django.utils import timezone
 
-from compute_broker.control import cluster_checks, services
-from compute_broker.control.models import (Artifact, Attempt, ClusterCheckConfiguration, ExecutionRequest,
+from compute_relay.control import cluster_checks, services
+from compute_relay.control.models import (Artifact, Attempt, ClusterCheckConfiguration, ExecutionRequest,
     Grant, Job, LedgerEntry, Project, ProjectCredential, User)
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.storage import read_blob, store_blob
-from compute_broker.control.urls import urlpatterns as core_urls
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.storage import read_blob, store_blob
+from compute_relay.control.urls import urlpatterns as core_urls
 from test_management import management, human, form_post
 
 
@@ -177,18 +177,15 @@ def test_unsafe_or_unaffordable_cpu_only_shape_is_not_given_a_bigger_grant(diagn
     assert not ClusterCheckConfiguration.objects.exists()
 
 
-def test_cluster_check_uses_requested_walltime_without_legacy_margin_requirements(diagnostic):
-    from compute_broker.domain.cluster_configuration import TIMING_FIELDS
+def test_cluster_check_uses_requested_walltime_and_explicit_allocation(diagnostic):
     profile = diagnostic.connection.configuration["site_profile"]
-    profile.update(termination_margin_seconds=None, overtime_margin_seconds=6000, cleanup_margin_seconds=-1,
-        automatic_execution_allowed=False)
+    profile.update(automatic_execution_allowed=False)
     profile["allocated_cpus"] = 4
     profile["maximum_cpus"] = 4
     diagnostic.connection.save(update_fields=["configuration"])
     plan = cluster_checks.resource_plan(diagnostic.connection)
     assert plan["reservation_cpu_seconds"] == 240
     assert plan["profile"]["automatic_execution_allowed"] is False
-    assert not set(plan["profile"]) & set(TIMING_FIELDS)
     config, job = prepared(diagnostic)
     assert config.project.grant.policy["per_job_limits"] == {"cpu_cores": 4, "gpu_devices": 0,
         "memory_mib": 128, "time_limit_seconds": 60}
@@ -329,11 +326,11 @@ def test_results_are_bounded_escaped_owner_only_and_need_no_revealed_token(diagn
     attempt = Attempt.objects.get(job=job)
     attempt.stdout = "<script>not executable</script>"
     attempt.save(update_fields=["stdout"])
-    blob = store_blob(config.project, b'{"marker":"compute-broker-cluster-check-v1","note":"<script>"}\n')
+    blob = store_blob(config.project, b'{"marker":"compute-relay-cluster-check-v1","note":"<script>"}\n')
     Artifact.objects.create(attempt=attempt, path="cluster-check.json", blob=blob)
     page = human(diagnostic.owner).get(diagnostic.path)
     assert page.status_code == 200
-    assert b"compute-broker-cluster-check-v1" in page.content
+    assert b"compute-relay-cluster-check-v1" in page.content
     assert b"&lt;script&gt;not executable&lt;/script&gt;" in page.content
     assert b"<script>not executable</script>" not in page.content
     assert blob.sha256.encode() in page.content
@@ -371,7 +368,7 @@ def test_missing_or_unreadable_result_does_not_break_test_page(diagnostic, error
     with transaction.atomic():
         services.decide(job, diagnostic.owner, {"execution_request_id": str(job.execution_requests.get().id),
             "manifest_sha256": job.manifest_sha256, "approved": True})
-    blob = store_blob(config.project, b'{"marker":"compute-broker-cluster-check-v1"}\n')
+    blob = store_blob(config.project, b'{"marker":"compute-relay-cluster-check-v1"}\n')
     Artifact.objects.create(attempt=Attempt.objects.get(job=job), path="cluster-check.json", blob=blob)
     with patch.object(cluster_checks, "read_blob", side_effect=error("private-path-not-disclosed")):
         page = human(diagnostic.owner).get(diagnostic.path)
@@ -388,5 +385,5 @@ def test_account_expiry_recheck_and_forged_resource_fields_cannot_bypass_review(
     job = Job.objects.get(project=config.project)
     assert job.request["resources"]["gpus"] == 0 and job.request["resources"]["cpus"] == 2
     assert job.execution_requests.get().state == "awaiting_approval" and not job.attempts.exists()
-    monkeypatch.setattr(cluster_checks, "cached_user_active", lambda user: False)
+    monkeypatch.setattr(cluster_checks, "current_user_active", lambda user: False)
     assert human(diagnostic.owner).get(diagnostic.path).status_code == 403

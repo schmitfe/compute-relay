@@ -1,6 +1,6 @@
 {
   "command": "/ABSOLUTE/PATH/TO/.venv/bin/python",
-  "args": ["-m", "compute_broker.mcp"],
+  "args": ["-m", "compute_relay.mcp"],
   "env": {
     "BROKER_CONTROL_URL": "http://127.0.0.1:8768",
     "BROKER_PROJECT_TOKEN_FILE": "/ABSOLUTE/PATH/TO/agent-project-token"

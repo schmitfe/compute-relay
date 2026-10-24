@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://compute-broker.invalid/contracts/prepared-job.schema.json",
-  "title": "Compute Broker version one prepared manifest",
+  "$id": "https://compute-relay.invalid/contracts/prepared-job.schema.json",
+  "title": "Compute Relay version one prepared manifest",
   "type": "object", "additionalProperties": false,
   "required": ["schema_version", "job_revision_id", "backend", "adapter_version", "helper_sha256", "profile_revision", "connection_revision_sha256", "request", "files", "batch_script", "environment_wrapper", "maximum_allocation", "reservation"],
   "properties": {
-    "extension_name": {"type": "string", "enum": ["storage", "environments", "workflows", "transfers"]},
+    "extension_name": {"type": "string", "enum": ["storage", "environments", "workflows"]},
     "schema_version": {"const": "1.0"},
     "job_revision_id": {"$ref": "common.schema.json#/$defs/uuid"},
     "backend": {"const": "slurm"},
@@ -19,12 +19,11 @@
     "environment_wrapper": {"const": "_broker/environment.sh"},
     "maximum_allocation": {
       "type": "object", "additionalProperties": false,
-      "required": ["cpu_cores", "gpu_devices", "time_limit_seconds", "maximum_charge_duration_seconds"],
+      "required": ["cpu_cores", "gpu_devices", "time_limit_seconds"],
       "properties": {
         "cpu_cores": {"type": "integer", "minimum": 1, "maximum": 1024},
         "gpu_devices": {"type": "integer", "minimum": 0, "maximum": 16},
-        "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60},
-        "maximum_charge_duration_seconds": {"type": "integer", "minimum": 60, "maximum": 1209600}
+        "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60}
       }
     },
     "reservation": {"$ref": "common.schema.json#/$defs/usageVector"}

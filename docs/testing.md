@@ -1,180 +1,68 @@
-# Verification and public-release plan
+# Testing the local package
 
-Status: target verification and release plan. Runtime unit/database/SSH/helper/MCP tests and CI definitions now exist; see [implemented scope](runtime.md) and [container acceptance evidence](container-testing.md) for current coverage. The IDs below include unimplemented future gates and are not all passing. Contract checks alone demonstrate no runtime or isolation guarantees. Turn every accepted P0 requirement into an appropriate runtime test before enabling its feature by default.
+Default checks use SQLite, temporary directories and synthetic identities. They
+do not require Docker, a database server, LDAP, institutional connectivity or a
+real cluster. Run from a source checkout with Python 3.12 or 3.13:
 
-## Gates and evidence
-
-| Gate | Required evidence |
-| --- | --- |
-| Planning contracts (M0) | Planning schemas/examples and negative cases pass offline; local documentation links resolve. No runtime, SSH, budget, or isolation result is inferred. |
-| Foundation (M1) | Typed backend contract, deterministic package preparation, authenticated project API, database migrations, and failure taxonomy pass tests using the fake backend. |
-| Local review (M1 → M2) | M1's packaged fake install completes prepare → review → approve/reject → submit → collect with restart recovery. M2 repeats with protected installation and Slurm; secret/isolation acceptance belongs to M2, not the development demonstration. |
-| Slurm and MFA (M2) | Protected VM installation and disposable Slurm tests pass; each configured real cluster passes explicit review-mode acceptance. Human MFA expiry and recovery are exercised without authentication loops. |
-| Budgeted execution (M3) | Real SQLite and PostgreSQL concurrency, crash/reconciliation, accounting, and allocation-bound tests pass. Failures preserve reservations and stop unsafe admissions. |
-| Software environments (M4) | Authorized build jobs, immutable cache/provenance, failure charging, hostile build isolation, and explicitly permitted GPU environment acceptance pass. M2 uses curated named environments only. |
-| Hosted multi-user (M5) | Project authorization, organizational identity mapping, connector pairing, artifact isolation, deployment isolation, and backup/restore acceptance pass. |
-| Public release (M6) | Clean-checkout contributor workflow, sanitized fixtures, supported-version matrix, security guidance, ownership/license decision, and reproducible release checklist are complete. |
-
-P0 means a release blocker for the gate that introduces the feature. P1 means required before claiming that feature is supported publicly. A later feature cannot waive an earlier gate. Record unsupported cases as explicit errors and documented limitations, not skipped tests presented as support.
-
-## Test layers
-
-1. **Unit and property tests:** `pytest` and Hypothesis check validation, immutable manifests, script generation, state transitions, quota arithmetic, accounting normalization, parsers, and archive/path handling. A fake clock controls expiry; decimal or integer reference models check arithmetic. No network or real credentials.
-2. **API and database integration:** exercise the Django/DRF application, ORM/migrations, and transaction code, with HTTP clients against both SQLite files and a disposable PostgreSQL server. Use independent processes/connections, barriers, rollback, and worker termination. Use Django `TransactionTestCase` or the equivalent transaction-enabled pytest-django fixture for real commits; ordinary test transaction wrapping can hide defects. An in-memory SQLite database or a mocked repository does not demonstrate concurrency correctness. Worker integration talks to the protected worker API, not a database mounted into that worker.
-3. **SSH command contracts:** fake command-runner responses cover old/new Slurm outputs, exit status, byte limits, disconnects, and ambiguous results. A disposable SSH server with restricted synthetic accounts tests real OpenSSH invocation, host-key handling, quoting, transfer, and session reuse. A fake scheduler verifies command construction; it does not prove scheduling or SSH isolation.
-4. **Disposable Slurm integration:** a pinned, project-owned fixture image runs a controller, a compute node, and accounting storage in an isolated network. Install documented Slurm packages or build their pinned source; do not depend on an unreviewed third-party image. Execute tiny CPU jobs, failure/timeout/cancellation, accounting delay, requeue if supported, and worker recovery. GRES fixtures test GPU metadata; CPU containers do not prove real GPU execution.
-5. **Browser end-to-end tests:** Playwright runs the review UI against actual APIs, databases, and fake/disposable backends. Assert displayed package digest and code match execution inputs, escaping of untrusted content, rejection feedback, roles, reconnect state, and result retrieval. Browser automation cannot prove a click came from a human when an agent controls that browser.
-6. **Deployment and real-cluster acceptance:** a disposable Linux VM tests distinct agent/service OS identities, file ownership, sockets, Docker access, and process visibility. Opt-in site acceptance verifies actual partitions, account restrictions, accounting, GPU behavior, and MFA with a human present. These checks run outside public PR CI.
-
-Proposed test tree:
-
-```text
-tests/
-  unit/                 # policies, manifests, rendering, state machines, parsers
-  property/             # ledger models, paths, event sequences, parser fuzz cases
-  contracts/            # planning schemas/examples now; backend conformance later
-  api/                  # authorization, jobs, approvals, artifacts
-  database/             # independent-process SQLite/PostgreSQL tests
-  ssh/                  # disposable SSH endpoint and command transport
-  slurm/                # actual disposable scheduler + accounting
-  browser/              # browser review and agent-shaped API workflow
-  deployment/           # isolated VM checks, never the contributor host
-  acceptance/           # opt-in internal/university cluster tests
-  fixtures/
-    slurm/<version>/    # provenance notes, expected normalized records
-    packages/           # tiny synthetic jobs, malformed archives
-    identities/         # ephemeral test keys generated at runtime
+```sh
+python -m pip install -c requirements.lock '.[test]'
+python -m pytest -q
+python tools/check_contracts.py
+python -m unittest discover -s tests/contracts -v
+python tools/local_smoke.py
+python tools/local_smoke.py --mode budgeted
+python tools/package_smoke.py
 ```
 
-When the runtime suite is introduced, provide markers `unit`, `property`, `contract`, `integration`, `slurm`, `e2e`, `deployment`, and `real_cluster`; its default test command excludes the last two. The current planning-contract command remains separate. The Slurm fixture suite requires a dedicated disposable runtime. Ordinary tests must never inspect a contributor's SSH configuration, reuse their ssh-agent, or load an ambient cluster configuration. Tests fail if a real-cluster destination is supplied without the separate acceptance opt-in.
+## Layers and evidence
 
-## Wire validation and canonicalization matrix
+| Layer | What it verifies |
+| --- | --- |
+| Contracts | Schemas, examples, canonical manifests and documented bounds |
+| Unit and HTTP integration | Local owner authority, project scopes, review, CSRF, policy, job state and bounded output |
+| SQLite transactions | Durable reservations/holds, lifetime caps, settlement uniqueness, process races and restart recovery |
+| Worker and SSH fixtures | Fixed arguments, no fallback login, time/output limits, journal replay, uncertain submission and native identity checks |
+| Module suites | Enabled/disabled boundaries, storage estimates, scheduled environment publication and workflow materialization |
+| Native local smoke | A real loopback HTTP service with synthetic jobs and an idle/fake worker |
+| Installed distribution | Wheel and sdist completeness, clean-venv plain install, runtime imports, HTML templates, launcher start, Ctrl-C and same-state restart |
 
-| ID | Priority / gate | Layer | Required assertions |
-| --- | --- | --- | --- |
-| WIRE-01 | P0 / Foundation | Contract/property/API | Reject duplicate object keys, including equivalent escaped key spellings, before schema validation or hashing. Reject nonfinite numeric values, unpaired Unicode surrogates, malformed UTF-8, unknown fields, and excessive nesting/body size consistently at every JSON entry point. A parser's last-key-wins behavior cannot select a different request from the reviewed one. |
-| WIRE-02 | P0 / Foundation | Contract/property/API/DB | Every duration, count, size, and charge field obeys its integer type, domain minimum, and at most `2^53 - 1` wire bound; reject booleans, fractional values, and larger integers rather than rounding through a float. Test boundary round trips through Python and browser JSON, including values immediately below/at/above the bound. Checked BIGINT arithmetic protects internal multiplication/addition and rejects overflow; an outbound value outside the wire contract cannot silently truncate. |
-| WIRE-03 | P0 / Foundation | Unit/property/cross-language | A vetted RFC 8785 implementation produces fixed expected UTF-8 bytes and SHA-256 digests for cross-language vectors, escaped/unescaped strings, supplementary Unicode key ordering, numeric spellings, and reordered object members. Test that composed/decomposed Unicode is not silently normalized. Strict parsing precedes canonicalization; merely validating a schema or sorting Python dictionary keys is not evidence of RFC 8785 implementation. |
+`tools/package_smoke.py` copies only public source/package inputs into a temporary
+build directory. It builds both distributions, verifies runtime resource coverage,
+installs the wheel with no extras into a clean environment, checks dependencies
+and starts the installed launcher with private disposable state and no
+connectors. It uses loopback HTTP and restarts the same state directory. It may
+need registry access for build/runtime packages. `--skip-launch` is available
+only for diagnosing packaging; that option does not establish launcher acceptance.
 
-## Authorization, secrets, and trust-boundary matrix
+The fake backend never executes uploaded code in the portal or connector.
+Passing synthetic tests does not establish actual Slurm behavior or operating-
+system isolation. SQLite uses immediate write transactions; admission and
+settlement correctness must not depend solely on a process-local mutex.
 
-| ID | Priority / gate | Layer | Required assertions |
-| --- | --- | --- | --- |
-| AUTH-01 | P0 / Foundation | API | Missing, malformed, expired, revoked, and wrong-project tokens cannot prepare/submit/read/cancel jobs. Token hashes are stored; creation returns the secret once. Lists, guessed IDs, pagination, downloads, and error details enforce the same project scope. |
-| AUTH-02 | P0 / Local review | API/E2E | Agent tokens cannot approve/reject, grant budgets, add credentials, pair privileged connectors, or change identity mappings. Separate human roles authorize those actions; CSRF, cross-origin requests, session expiry, and replay are rejected. |
-| AUTH-03 | P0 / Budgeted execution | API/DB | Multiple keys and subagents share one project ledger. Key rotation adds no allowance. Revocation blocks new admissions and follows an explicit policy for authorized but not-yet-submitted jobs. Concurrent revocation and dispatch cannot create an unchecked authorization window. |
-| AUTH-04 | P0 / Hosted multi-user | API/DB | Membership removal, connector ownership, project roles, and external subject mapping resist cross-tenant access. LDAP/OIDC display-name or email changes do not silently create a new privileged identity. Untrusted forwarded headers do not establish identity. |
-| SEC-01 | P0 / Slurm and MFA (M2) | Deployment | The unprivileged agent OS identity cannot read service-owned keys, database/backups, secret mounts, environment/proc metadata, control sockets, SSH multiplex sockets, image/deployment configuration, or service runtime directories. The identity cannot access the broker's Docker socket or daemon group. Test both reads and attempts to replace files/configuration. |
-| SEC-02 | P0 / Slurm and MFA (M2) | Deployment | Same-UID/rootless deployment is refused as a protected-secrets profile or labeled unsupported before secrets are enrolled. Agent-writable source, bind mounts, update paths, PATH entries, plugin locations, and container startup hooks cannot inject code into the protected service. Root/admin or daemon-control access is explicitly outside the supported protection boundary. |
-| SEC-03 | P0 / Slurm and MFA (M2); builds M4 | Integration/Deployment | Submission files and environment build code never execute in credential-bearing broker processes/containers. Job scripts receive no local private key, reusable SSH socket, internal service credential, database token, or human session. Fault logs, tracebacks, telemetry, support exports, and test reports do not emit synthetic secret sentinels. |
-| SEC-04 | P0 / Slurm and MFA (M2) | E2E/Acceptance | The supported approval channel is explicit. A same-desktop button is never described as resistant to an agent controlling the desktop. If resistant human approval is advertised, demonstrate a separate trusted device/session and bound, expiring approval challenge; a project key or browser-controlled session cannot complete it. |
-| SEC-05 | P0 / Slurm and MFA (M2); remote connectors M5 | Contract/Integration | Online execution grants are authenticated and bound to worker/connection/job/package digest, reservation, and expiry, with server-recorded nonce/lease state preventing replay. Worker dispatch revalidates authority through the private control API; no custom signature scheme is mandatory for the initial online protocol. A worker cannot grant budget or self-approve. Offline connectors cannot spend cached allowance. Revoked workers/connectors cannot receive new work. |
-| SEC-06 | P0 / Slurm and MFA | Acceptance | Verify the actual remote UID boundary. Jobs sharing one remote UID may read/alter each other's files and submit directly to Slurm; API project isolation does not isolate those remote processes. Hosted multi-tenant claims require separate remote identities or site-enforced isolation and corresponding attack tests. A same-UID staging hash check alone must not be claimed to eliminate TOCTOU tampering. |
+## CI
 
-Deployment checks prove behavior for the tested OS, configuration, and privilege assumptions only. Never infer filesystem/credential protection from permission mocks or Docker Compose syntax validation.
+The default runtime workflow runs Python 3.12/3.13 on hosted Linux runners. It
+installs the complete package plus the test extra, runs SQLite and contract
+checks, verifies all bundled migrations, exercises synthetic workflows and
+performs the clean-wheel acceptance. No default job starts Docker, PostgreSQL or
+LDAP. Planning contracts can also run independently.
 
-## Exact approval, job lifecycle, and Slurm matrix
+The manual `Optional disposable Slurm acceptance` workflow builds a synthetic
+SSH/Slurm/accounting cluster and runs the personal-connector smoke test. See
+[container testing](container-testing.md). Its credentials and data are generated
+for the fixture and are removed afterward. It never accesses a real site.
 
-| ID | Priority / gate | Layer | Required assertions |
-| --- | --- | --- | --- |
-| JOB-01 | P0 / Foundation | Unit/property | Canonical manifest covers every executable/source file, generated batch script, input references, environment/build definition, immutable image/dependency references, requested resources and prepared effective charge envelope, adapter/helper versions, profile revision, and immutable connection revision digest. Deterministic preparation yields the same digest; any material byte/target/resource change yields a new version. Mutable external dependencies are identified as an explicit reproducibility limit. |
-| JOB-02 | P0 / Local review | Integration/E2E | The UI displays the bytes associated with the reviewed digest. Approval binds actor, policy/resource request, package digest, and expiry. Executor checks that digest before staging and submission; intervening edits invalidate approval. Mutate a connection's host, remote user/root, credential reference, trusted SSH configuration, or bound site profile while retaining its friendly alias: the connection revision and prepared digest must change, and old approval/grants must not authorize the new target. Code files display as text and cannot manipulate the approval page. |
-| JOB-03 | P0 / Local review | Integration | Denial with comment creates no executable authorization. Agent can retrieve the comment and create a new version; previous approval is not inherited. Concurrent approve/reject, duplicate requests, and cancellation/dispatch races have one durable outcome and audit history. |
-| JOB-04 | P0 / Slurm and MFA | Contract/Slurm | `sbatch --parsable` IDs, optional cluster suffix, stderr warnings, malformed output, nonzero exits, and array/step records normalize correctly. Account/partition/QOS/resource settings are generated only from validated fields and approved capability snapshots. Unknown resources or unsupported features fail closed. |
-| JOB-05 | P0 / Slurm and MFA | SSH/Property | Newlines, quotes, shell substitution, leading options, Unicode, control characters, hostile job names/paths/account/partition values, and hostile SSH config values cannot inject extra commands or scheduler directives. Application-level argv is not assumed to become remote argv safely through SSH. Host/credential selection remains administrator-controlled. |
-| JOB-06 | P0 / Slurm and MFA | Integration/Slurm | A disconnect after scheduler acceptance produces an uncertain submission, retains reservation, and triggers reconciliation using durable correlation metadata and bounded scheduler/accounting search. It never blindly calls `sbatch` again. One confirmed match adopts its ID; zero inconclusive matches or multiple matches remain blocked for reconciliation/manual resolution. No exactly-once guarantee is claimed from an SSH command alone. |
-| JOB-07 | P0 / Local review | Integration | Kill the worker before/after reservation, queue commit, staging, scheduler acceptance, ID persistence, and terminal settlement. Restart reconciles durable state. Lease expiry or duplicate delivery does not automatically resubmit an uncertain external operation. Outbox/queue retries never roll back an already accepted scheduler job. |
-| JOB-08 | P0 / Slurm and MFA | Contract/Slurm | Pending/running/completing/completed/failed/cancelled/timeout/node failure/preemption/requeue map without premature terminal settlement. Missing `squeue` output is not proof of completion. Accounting lag, duplicate/out-of-order events, temporary unknown states, reused job IDs, and truncated responses preserve identity and uncertainty. |
-| JOB-09 | P0 / Slurm and MFA | SSH/Acceptance | Discovery includes capabilities, timestamp/version, accessible accounts and explicit unknowns. Authentication, scheduler outages, and permission-denied queries are distinguished. Failure never overwrites a last-good snapshot with an empty successful result. A stale snapshot does not promise current availability. |
-| JOB-10 | P0 / Slurm and MFA | SSH/Acceptance | Initial MFA and expired multiplex sessions enter login-required state without repeated prompts/pushes or password guessing. Agent/MCP responses never contain MFA codes. Human reconnect adopts an approved session, validates host identity, resumes monitoring, and reconciles work. Changed host keys fail closed. No fallback to unknown keys or uncontrolled SSH agents. |
-| JOB-11 | P1 / Slurm and MFA | Slurm/Acceptance | Tiny Python success/failure, bounded stdout/stderr, walltime, cancellation, resource rejection, environment bootstrap/build failure, working directory, exit code, and output hashes agree across worker, API, and actual scheduler. Environment-build compute is authorized and charged. GPU acceptance runs only on explicitly permitted real GPUs. |
-| JOB-12 | P1 / Hosted multi-user | Integration | Artifact staging, connector restart, bounded retries/backoff, service/DB downtime, partial transfer, disk full, and quota exhaustion retain diagnosable job state. Queue polling and log retrieval are bounded; no outage causes a retry storm. |
-| JOB-13 | P0 / Local review | API/Real DB | A human approval authorizes one execution request/attempt in version one and is consumed atomically with its durable admission. Race independent execution requests using the same revision, digest, and approval: at most one succeeds. An idempotent retry of that same execution request returns the existing outcome without consuming twice; a new request needs a new human approval even when all bytes match. A crash after approval consumption cannot make it reusable or create another scheduler attempt; uncertain submissions follow `JOB-06`. Budgeted repeat execution needs fresh policy admission and reservation, rather than recycling prior approval or allowance. |
+## Real-cluster acceptance
 
-## Budget and accounting matrix
+Real clusters are opt-in and outside normal CI. Use a reviewed test project,
+account/partition and tiny finite resource limits. Confirm the actual compute
+node can find the interpreter/modules, review the exact batch/script content,
+then check native accounting, output hashes and zero residual reservation.
+Queue presence or cancellation acknowledgement alone is not settlement proof.
+Test SSH MFA with human participation; never place institutional credentials in
+public CI or run untrusted pull-request code with them.
 
-Use integer CPU core-seconds and GPU device-seconds in checked storage counters, with the exact wire bounds in `WIRE-02`. Convert to display hours at the edge. Maintain independent CPU and GPU balances and explicit permitted GPU types; weighted credits are a separate future policy, not part of initial admission. The model oracle tracks grants, reservations, actual charges, releases, and corrections as separate immutable events.
-
-| ID | Priority / gate | Layer | Required assertions |
-| --- | --- | --- | --- |
-| BUD-01 | P0 / Budgeted execution | Unit/property | Reserve effective allocated CPU cores/GPU devices × requested walltime, including site allocation rounding and authorized environment-build jobs. New manifests keep their internal `maximum_charge_duration_seconds` equal to requested walltime; deprecated policy caps and legacy timing properties do not change the reservation. Missing/unbounded requested time, unsupported arrays/heterogeneous requests, untrusted resource overrides and unknown resource allocation are rejected. Boundary values, overflow, fractional units and rounding cannot create free compute. |
-| BUD-02 | P0 / Budgeted execution | Real DB | With allowance 100 units and twenty independent processes each reserving 10, at most ten commit. Race a CPU and GPU request against both balances; no partial debit survives a failure. Run on SQLite files and PostgreSQL with real isolation/locking and bounded transaction retry. An application mutex is not the correctness mechanism. |
-| BUD-03 | P0 / Budgeted execution | Real DB | API retries with the same project idempotency key return one job/reservation; changed payload with that key conflicts. Different project keys do not share idempotency scope accidentally. Crash/replay at every commit boundary preserves ledger uniqueness and does not double-reserve, charge, release, or grant. |
-| BUD-04 | P0 / Budgeted execution | Contract/Slurm | Charges use allocated resources and elapsed allocation time, not Python CPU time, GPU utilization, or queue wait. Normalize Slurm allocation/step records without counting parent, batch, extern, and task records multiple times. Retain raw accounting evidence and the charge-policy version. |
-| BUD-05 | P0 / Budgeted execution | Integration/Slurm | Queued jobs retain reservations without accumulating usage; terminal jobs release only confirmed unused allowance. Cancel requests, missing accounting, lost SSH, uncertain submission, and worker shutdown do not release reservations prematurely. Requeue/restart includes all charged execution attempts; disabled automatic requeue policy is verified rather than assumed. |
-| BUD-06 | P0 / Budgeted execution | Property/Real DB | Repeated settlement and corrected accounting are idempotent. Race settlement with reservation, cancel, grant, key revocation, and allowance expiry. Charges remain attributable after the key expires; expiry cannot erase debt or free an outstanding commitment. Ledger reconstruction equals materialized balances. |
-| BUD-07 | P0 / Budgeted execution | Integration | Known allocation > authorized bound blocks execution or requires fresh policy/approval. If actual usage nevertheless exceeds a reservation (scheduler/site changes, runtime overrun, requeue), record the full charge, expose debt, freeze affected new admissions, and retain evidence. Do not clamp actual usage to conceal overrun or claim a strict physical cap for unbounded site behavior. |
-| BUD-08 | P0 / Budgeted execution | Property | In the bounded model, committed new reservations never exceed available grant in any resource dimension. In the observed-overrun model, available is floored at zero for admissions and debt is explicit. Uncertainty may reduce availability but cannot increase it. Random event sequences match the reference ledger. |
-| BUD-09 | P0 / Budgeted execution | Acceptance/docs | Document and demonstrate that service enforcement covers service submissions. User code under a cluster UID may bypass the broker with nested `sbatch`, direct scheduler calls, or another login. A total account ceiling requires site-side controls; no mock test or API denylist proves such a ceiling. |
-| BUD-10 | P0 / Budgeted execution | Contract/property/Slurm/Acceptance | Scheduler requests accept only positive whole-minute `time_limit_seconds` (multiples of 60); test 0/59/61 rejection and valid 60/120, with exact rendered directives and no hidden Slurm rounding. For 8 effective CPU cores and one GPU at a 3,600-second limit, reserve 28,800 core-seconds and 3,600 GPU-seconds. Final accounting at 3,660 elapsed seconds charges all 29,280 core-seconds and 3,660 GPU-seconds; no reservation cap conceals overtime. Test debt and later admission blocking. |
-| BUD-11 | P0 / Budgeted execution | Property/API/Acceptance | Check the prepared effective allocation against current project and cluster limits after site rounding. Advertise their effective minima for CPU, GPU, memory and requested walltime, and report each violated dimension with requested/effective/limit/excess values, source and unit in `RESOURCE_LIMIT` errors. A request under a cap cannot automatically admit a rounded allocation over it. Crossing automatic limits while remaining within hard limits requires fresh review; review cannot override hard limits or reuse a smaller reservation. Configuration changes invalidate old prepared admission. Test omitted deprecated charged-duration policy fields, optional ignored legacy values, CPU/GPU rounding, memory caps, insufficient post-rounding allowance, changing live policy and safe MCP error propagation. |
-
-Slurm field semantics and site charging policy must be recorded with each supported cluster profile. Consult the installed version's [Slurm accounting documentation](https://slurm.schedmd.com/sacct.html). Database tests must exercise the implementation against actual [SQLite write isolation](https://www.sqlite.org/isolation.html) and [PostgreSQL transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html); sharing an ORM does not imply equivalent locking behavior.
-
-## Files, outputs, and data exposure matrix
-
-| ID | Priority / gate | Layer | Required assertions |
-| --- | --- | --- | --- |
-| FILE-01 | P0 / Foundation | Property/Integration | Reject absolute/traversal/encoded traversal paths, duplicate normalized names, NUL/control characters, symlink/hardlink escapes, named pipes/devices, excessive paths, archive bombs, and oversized/sparse inputs. Test swap-after-validation attacks; extraction and final writes remain confined under the chosen platform's safe file operations. |
-| FILE-02 | P0 / Local review | API/SSH | Stage into controlled per-job roots with quotas, exclusive creation, and no traversal through remote symlinks. A remote path returned by a backend cannot nominate arbitrary local destinations. Inputs/outputs cannot overwrite scripts, service configuration, or another project. Cross-UID tests supplement, rather than replace, shared-UID limitations. |
-| FILE-03 | P0 / Local review | API/E2E | Every artifact/list/range/log/download checks project permissions. HTML/SVG/script-bearing files and terminal escape sequences do not execute in the review UI; serve unsafe types as downloads with safe headers. Huge, binary, malformed UTF-8, and continuously appended logs remain bounded and report truncation. |
-| FILE-04 | P0 / Local review | API/E2E | Output is untrusted data. Malicious logs asking to reveal secrets, approve another job, or change budgets cannot change authorization or cause server-side tool execution. Models are given data/source labels; this is not claimed as a complete defense against model prompt injection. |
-| FILE-05 | P1 / Hosted multi-user | Integration | Artifact expiry, deletion, signed URL expiry, revoked membership, caches, backups, and support bundles respect retention/access policy. Audit records omit secrets and sensitive file content while retaining necessary job provenance. Previously downloaded copies cannot be revoked and are documented accordingly. |
-| FILE-06 | P0 / Foundation | Property/API/Real DB/Storage | Reserve in-flight bytes atomically against both project and global storage quotas before writes; enforce per-file limits, total object/file counts, bounded streaming, and minimum disk headroom. Race many unused uploads across projects; concurrent streams cannot collectively exceed their reservations or fill storage through tiny objects. Unknown-length streams reserve bounded chunks before accepting them. Aborted streams, disconnects, crashes, failed finalization, deduplicated objects, shared references, and retries settle logical/physical charges consistently without double release or quota bypass. Orphan TTL/GC reclaims only eligible unreferenced data and expired upload reservations; it never deletes active/referenced artifacts, approval packages, uncertain-submission journals, or evidence needed for unsettled jobs/accounting. Test GC racing finalization/reference creation and actual disk-full errors; failure preserves diagnostics and never silently drops ledger evidence. |
-
-## Backend compatibility and fixtures
-
-- The backend conformance suite runs against a deterministic fake, the Slurm-over-SSH adapter, and later each REST/HTCondor/Kubernetes adapter. It checks semantics, capability errors, uncertainty, cancellation, allocation accounting, and immutable preparation; it does not force Slurm concepts onto other schedulers.
-- Keep transport tests separate from scheduler parser tests. Fixtures declare producing command, scheduler version, output format, locale, feature flags, and whether synthetic or sanitized real output. Fixtures contain no institutional hostnames, usernames, cluster IDs, file paths, job content, or secrets.
-- Pin the initial supported Slurm versions after discovery of the two sites. Cover both site versions, the oldest advertised version, and a current version through scheduled compatibility runs. Prefer machine-readable output where verified, with bounded parsers and explicit fallback contracts. Unsupported versions warn/fail according to an explicit support policy.
-- Test CPU/GPU TRES variants, memory units, empty/forbidden fields, unavailable JSON support, job arrays and heterogeneous jobs if enabled, locale differences, GPU model strings, cluster suffixes, and accounting disabled/delayed. Never interpret inaccessible accounting as zero usage.
-- Keep feature capability flags conservative. Arrays, elastic allocations, federation, interactive jobs, and automatic requeue remain rejected until their admission/accounting tests exist.
-
-## Deferred cluster-side agent runtime
-
-The [RASER paper assessment](references/paper-2609-03598.md) motivates additional tests only if a persistent runtime/task queue is added. This capability is outside the initial single-node broker scope. Existing `BUD-01`, `BUD-05`, `JOB-01`, `SEC-03`, and `FILE-01` already cover allocation bounds, retries/requeue accounting, runtime artifact immutability, credential separation, and archive extraction; those invariants apply unchanged.
-
-| ID | Priority / gate | Layer | Required assertions |
-| --- | --- | --- | --- |
-| RUN-01 | P0 / Optional runtime, future | Property/Integration/Acceptance | Pause a worker beyond its lease while its task continues, reassign that task, then resume the original worker. Ownership epochs fence stale task-state/result writes; task claims remain atomic under real site filesystem semantics. External side effects use idempotency/reconciliation, rather than an exactly-once claim from heartbeat expiry. Test lock contention and disconnected clients on the actual shared filesystem before claiming support. |
-| RUN-02 | P0 / Optional runtime, future | Integration/Slurm/Acceptance | Kill during checkpoint write/restore; only a complete, compatible, authorized checkpoint can resume. Corrupt, stale, partial, and version-mismatched checkpoints fail visibly. Recovery journals prevent silent duplicate irreversible effects. Validate actual preemption signal/grace behavior and cap restart attempts; restoration never renews a walltime/budget authorization or cancels an operator's terminal cancellation. Report lost work and duplicate attempts separately from makespan. |
-
-## CI and public contribution safety
-
-The repository includes credential-free contract, Python runtime, native smoke, and disposable container CI definitions. Hosted workflow runs have not been claimed merely from writing them. Add the remaining workflows with their implementation milestones; documenting a future workflow is not a passing CI gate.
-
-| Workflow | Trigger | Scope and restrictions |
-| --- | --- | --- |
-| Fast checks | PR and branch push | Formatting, lint/type checking, unit/property/contract tests, API tests, generated-schema drift, documentation links, dependency/license checks, secret scanning. Read-only repository token; no deployment credentials. |
-| Database matrix | PR and branch push | File-backed SQLite and disposable pinned PostgreSQL. Independent-process budget races, migrations, persistence/recovery. Fresh throwaway storage for each run. |
-| Local system integration | PR or trusted branch, according to runner isolation | Disposable SSH and Slurm accounting containers on ephemeral hosted runners; no institutional network, SSH keys, shared Docker host, or production mounts. Bound CPU/time and clean all resources. If runner restrictions prevent Slurm, report a separate pending required gate rather than replace it with mocks. |
-| Browser/package | PR and branch push | Review workflow and clean-install smoke tests from built wheel/container, fake/disposable cluster only. Verify distributions include required assets and no keys, .env, databases, local settings, or test outputs. |
-| Compatibility/security | Scheduled trusted branch | Supported Python/database/Slurm combinations, vulnerability and base-image scans, dependency updates, deployment VM checks. Disposable synthetic identities only. |
-| Site acceptance | Explicit operator run, outside public PR CI | Dedicated test partition/account, allowlisted cluster, small maximum resource/time allowance, human MFA, and explicit cleanup. Record sanitized results, not credentials. Never run untrusted PR code with cluster credentials or on a private self-hosted runner. |
-| Release | Reviewed trusted tag plus protected release environment | Build locked source, wheel and digest-pinned images; generate SBOM/provenance; scan and sign artifacts; publish only after explicit maintainer authorization. No release credentials in PR jobs. |
-
-Pin GitHub Actions to reviewed immutable commit IDs and grant permissions per job. Do not execute fork PR code through privileged `pull_request_target` or `workflow_run` jobs, reuse untrusted caches in release builds, or automatically consume PR-produced artifacts as trusted release input. These controls follow [GitHub's secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use).
-
-All public CI is credential-free with respect to real clusters and broker deployments. Public tests may fetch locked build dependencies but must never submit outbound institutional jobs. Acceptance configuration lives outside the repository and is never autoloaded by ordinary tests.
-
-## Real-cluster acceptance protocol
-
-1. Operator selects one cluster, explicit SSH identity, dedicated working root, permitted account/partition, and a tiny resource/time ceiling. Print the intended test plan for review; do not discover and silently use arbitrary cluster access available on the host.
-2. Save sanitized capabilities and installed versions; verify host identity and account permissions. Confirm effective allocation rounding, finite requested walltime and usable final accounting. Reservations use requested walltime; settlement charges actual observed allocated runtime, including overtime. Verify effective project/cluster limits and debt admission behavior before enabling automatic mode. A tiny job alone does not establish a physical usage ceiling.
-3. Prepare a tiny Python package, inspect exact scripts, reject once with a comment, revise, approve, submit, and fetch expected output. Verify package digest and actual scheduler resources.
-4. Exercise failure, time limit, cancel, disconnection after acceptance, accounting delay, and worker restart. Each real job has an operator-visible correlation ID and cleanup record. Tests must not manufacture ambiguous submissions by repeatedly resubmitting.
-5. On the university cluster, the operator completes MFA, then intentionally expires the service session. Verify login-required state, no unattended retry prompts, continued scheduler execution, and recovery after reauthentication.
-6. If GPUs are enabled, explicitly permit one short GPU probe and compare requested versus allocated TRES. Do not infer runtime compatibility from inventory alone.
-7. Reconcile every test job and reservation before teardown. Unknown states remain visible; never delete their ledger merely to make acceptance green. Store site acceptance date, versions, relevant policy settings, test IDs, result, and acknowledged limitations privately; publish only sanitized summaries with permission.
-
-## Open-source readiness and release gate
-
-- Choose the repository/package name, ownership, maintainer responsibilities, and license with the owners before public release. Do not invent a license or claim third-party code is ours. Inventory dependencies and any copied/adapted upstream code; record licenses, compatibility, copyright notices, and attribution. Link to upstream designs when no code is incorporated.
-- Include README with an honest feature/support matrix, local setup and uninstall instructions, architecture/ADRs, configuration reference, threat model, security reporting policy, contribution guide, code of conduct if adopted, tests, deployment/migration/backup guides, changelog, and release procedure.
-- Document the exact protection assumptions: separate trusted service account; no agent root/Docker-daemon access; trusted service updates; separate approval authority when the desktop is agent-controlled; remote UID and service-only budget limits. Avoid advertising the product as a sandbox for arbitrary hostile code.
-- Commit dependency lockfiles and pin runtime/base images by digest. Verify locked clean installs and deterministic manifests; compare build outputs and investigate differences before claiming byte-for-byte reproducibility. Generate software bill of materials and build provenance for published artifacts. Archive build inputs, test reports, and vulnerability/license review results.
-- Publish example configuration with placeholders and synthetic fixtures only. Scan the entire staged publication/history and build context for keys, identities, infrastructure names, datasets, cached artifacts, and local settings. A clean working tree alone is not sufficient evidence.
-- Test installation from the release artifacts on a clean supported Linux host, including the one-time privileged creation of the protected service account, daily unprivileged use, upgrade, rollback limits, backup restore, and secret rotation. Do not claim Windows/macOS protected local support until their separate identity/VM deployment and acceptance are defined and tested.
-- A maintainer reviews the release candidate's P0 gates, unresolved vulnerabilities, dependency/license findings, known limitations, and migration notes. Explicit authorization is required to publish packages/images or make the repository public; planning this repository does not perform publication.
-
-Coverage is a diagnostic aid, not a security claim. Require every P0 invariant and every fixed correctness/security defect to have an observable regression test. Release notes should distinguish unit-tested behavior, disposable scheduler integration, deployment isolation checks, and real-site acceptance.
+The prior PostgreSQL/LDAP fixtures and migration-transfer tests are available on
+`codex/archive-multi-user-server` at `520effc`, not supported by this local
+package. Schema/data migrations preserving local job and budget history remain
+part of the SQLite suite.

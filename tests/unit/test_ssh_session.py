@@ -1,6 +1,7 @@
 """Private control-socket ownership and fixed interactive OpenSSH commands."""
 
 from copy import deepcopy
+import asyncio
 import os
 from pathlib import Path
 import shutil
@@ -11,9 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from compute_broker.transports.openssh import OpenSSHTransport, TransportError
-from compute_broker.worker import ssh_session
-from compute_broker.worker.ssh_session import SSHSession
+from compute_relay.transports.openssh import OpenSSHTransport, TransportError
+from compute_relay.worker import ssh_session
+from compute_relay.worker.ssh_session import SSHSession
 
 
 @pytest.fixture
@@ -135,6 +136,69 @@ def test_master_control_operations_cannot_fall_back_to_authentication(connection
     assert "BatchMode=yes" in options(command)
     assert execution["stdin"] == execution["stdout"] == execution["stderr"] == subprocess.DEVNULL
     session.close()
+
+
+def test_async_session_checks_and_shutdown_use_native_bounded_ssh_without_identity_fallback(connection, state, runner, monkeypatch):
+    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    session = SSHSession(connection, state).start()
+    calls = []
+    async def native_run(transport, arguments, payload):
+        await asyncio.sleep(0)
+        calls.append((arguments, payload, transport.connection))
+        return b""
+    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", native_run)
+    monkeypatch.setattr(asyncio, "to_thread", lambda *a, **kw: pytest.fail("Session control used a thread-pool SSH bridge"))
+    async def scenario():
+        assert await session.check_async()
+        await session.close_async()
+    asyncio.run(scenario())
+    assert [arguments[arguments.index("-O") + 1] for arguments, _, _ in calls] == ["check", "exit"]
+    for arguments, payload, configuration in calls:
+        assert "-i" not in arguments and "-M" not in arguments and payload == b""
+        assert "ProxyCommand=/bin/false" in options(arguments)
+        assert "IdentityFile=none" in options(arguments) and "BatchMode=yes" in options(arguments)
+        assert configuration["command_timeout_seconds"] == 10 and "identity_file" not in configuration["ssh"]
+    assert session._directory_fd is None
+    session.close()
+
+
+def test_async_shutdown_finishes_owned_exit_when_cancelled(connection, state, runner, monkeypatch):
+    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    session = SSHSession(connection, state).start()
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def native_run(*args):
+        entered.set()
+        await release.wait()
+        return b""
+    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", native_run)
+    async def scenario():
+        task = asyncio.create_task(session.close_async())
+        await entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and session._directory_fd is not None
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert session._directory_fd is None
+    asyncio.run(scenario())
+
+
+def test_async_control_never_contacts_a_replacement_socket(connection, state, runner, monkeypatch):
+    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    session = SSHSession(connection, state).start()
+    path = state / "s"
+    path.unlink()
+    foreign = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    foreign.bind(str(path));os.chmod(path, 0o600);runner.sockets.append(foreign)
+    async def forbidden(*args):
+        pytest.fail("A replacement socket was contacted")
+    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", forbidden)
+    async def scenario():
+        assert await session.check_async() is False
+        await session.close_async()
+    asyncio.run(scenario())
+    assert path.exists() and session._directory_fd is None
 
 
 @pytest.mark.parametrize("failure", ["returncode", "timeout", "cancelled", "oserror", "check"])

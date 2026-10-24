@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from compute_broker import connector_profiles as profiles
+from compute_relay import connector_profiles as profiles
 
 
 @pytest.fixture
@@ -50,10 +50,10 @@ def test_relative_state_path_is_resolved_without_reading_state(registry, state, 
 
 def test_registry_uses_xdg_config_and_home_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    assert profiles.ConnectorProfiles().directory == tmp_path / "config/compute-broker"
+    assert profiles.ConnectorProfiles().directory == tmp_path / "config/compute-relay"
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", "relative-config")
-    assert profiles.ConnectorProfiles().directory == tmp_path / "home/.config/compute-broker"
+    assert profiles.ConnectorProfiles().directory == tmp_path / "home/.config/compute-relay"
 
 
 @pytest.mark.parametrize("name", ["", ".", "../agmn", "agmn\nnew line", "agmn label", "a" * 65, "-option"])
@@ -179,7 +179,7 @@ def parser():
 
 
 def test_start_invokes_connector_in_same_process_with_explicit_label(registry, state, monkeypatch, capsys):
-    from compute_broker.worker import personal_connector
+    from compute_relay.worker import personal_connector
     registry.add("Ramses", state)
     received = []
     monkeypatch.setattr(personal_connector, "main", received.append)
@@ -197,7 +197,7 @@ def test_start_invokes_connector_in_same_process_with_explicit_label(registry, s
 
 
 def test_start_all_delegates_one_ordered_foreground_runner(registry, state, tmp_path, monkeypatch, capsys):
-    from compute_broker.worker import personal_connector
+    from compute_relay.worker import personal_connector
     second = tmp_path / "second"
     second.mkdir(mode=0o700)
     (second / "state.json").write_text("synthetic-second-token")
@@ -219,7 +219,7 @@ def test_start_all_delegates_one_ordered_foreground_runner(registry, state, tmp_
 
 
 def test_start_all_validates_every_state_before_authentication(registry, state, tmp_path, monkeypatch, capsys):
-    from compute_broker.worker import personal_connector
+    from compute_relay.worker import personal_connector
     registry.add("agmn", state)
     (state / "state.json").unlink()
     monkeypatch.setattr(personal_connector, "main_many", lambda _: pytest.fail("Invalid state opened SSH"), raising=False)
@@ -264,7 +264,7 @@ def test_cli_add_list_remove_and_errors_are_safe(registry, state, capsys):
         args = command.parse_args([*prefix, *operation])
         args.run(args)
     output = capsys.readouterr().out
-    assert "compute-broker connectors start agmn" in output
+    assert "compute-relay connectors start agmn" in output
     assert "agmn\t" + str(state) in output
     assert "state and cluster configuration are preserved" in output
     args = command.parse_args([*prefix, "start", "agmn"])

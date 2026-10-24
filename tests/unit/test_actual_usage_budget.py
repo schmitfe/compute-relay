@@ -5,9 +5,9 @@ from copy import deepcopy
 from django.db import transaction
 import pytest
 
-from compute_broker.control import services
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import Attempt, ExecutionRequest, Job
+from compute_relay.control import services
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Attempt, ExecutionRequest, Job
 from test_control import broker, budgeted, dispatched, prepared_job, submit_receipt  # noqa: F401
 
 
@@ -67,11 +67,8 @@ def test_queued_job_rechecks_actual_usage_before_first_dispatch(broker, actual, 
     assert not broker.project.paused
 
 
-def test_legacy_charge_cap_does_not_reduce_configured_walltime(broker):
+def test_longer_walltime_increases_the_reservation(broker):
     budgeted(broker, cpu=10000, gpu=0)
-    broker.grant.refresh_from_db()
-    broker.grant.policy["per_job_limits"]["maximum_charge_duration_seconds"] = 60
-    broker.grant.save(update_fields=["policy"])
     first = prepared_job(broker)
     request = deepcopy(first.request)
     request["resources"]["time_limit_seconds"] = 120
@@ -80,19 +77,17 @@ def test_legacy_charge_cap_does_not_reduce_configured_walltime(broker):
     job = Job.objects.get(id=created["id"])
     services.prepare_job(job)
     job.refresh_from_db()
-    assert job.manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == 120
+    assert job.manifest["maximum_allocation"]["time_limit_seconds"] == 120
     assert job.manifest["reservation"]["cpu_core_seconds"] == 120
     with transaction.atomic():
         result, _ = services.request_execution(job, broker.credential)
     assert ExecutionRequest.objects.get(id=result["id"]).state == "authorized"
 
 
-def test_new_preparation_ignores_legacy_margin_values(broker):
+def test_reservation_uses_only_configured_walltime(broker):
     broker.connection.configuration["site_profile"] = {
-        "partitions": ["debug"], "accounts": ["broker"],
-        "termination_margin_seconds": None, "overtime_margin_seconds": -1,
-        "cleanup_margin_seconds": "obsolete"}
+        "partitions": ["debug"], "accounts": ["broker"]}
     broker.connection.save(update_fields=["configuration"])
     job = prepared_job(broker)
-    assert job.manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == 60
+    assert job.manifest["maximum_allocation"] == {"cpu_cores": 1, "gpu_devices": 0, "time_limit_seconds": 60}
     assert job.manifest["reservation"] == {"cpu_core_seconds": 60, "gpu_device_seconds": 0}

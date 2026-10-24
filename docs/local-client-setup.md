@@ -1,8 +1,8 @@
 # Local project and connector setup
 
-These commands run on the user's device with the broker package installed.
-They do not start the broker web service, create a project or issue an API key;
-create the project and key in the portal first. Activate the broker's Python
+Start the local portal and its saved connectors with `compute-relay`. The
+project/client commands below run separately in your science workspace; create
+the project and API key in the portal first. Activate the broker's Python
 environment before using the commands so the generated MCP configuration uses
 that installed interpreter.
 
@@ -11,36 +11,36 @@ that installed interpreter.
 Enter the science project directory and run:
 
 ```sh
-compute-broker init-mcp
+compute-relay init-mcp
 ```
 
 The default is Codex. For Claude Code, use `--client claude`; for both clients and
 shared compute guidance, use:
 
 ```sh
-compute-broker init-mcp --client both --with-workflow
+compute-relay init-mcp --client both --with-workflow
 ```
 
 Paste the project API key at the hidden terminal prompt. The default broker is
 `http://127.0.0.1:8768`. To use a different broker or directory:
 
 ```sh
-compute-broker init-mcp --directory /path/to/science-project \
+compute-relay init-mcp --directory /path/to/science-project \
   --broker-url https://broker.example.org
 ```
 
 The command creates `.codex/config.toml` for Codex, `.mcp.json` for Claude Code, or
-both, sharing one private `.compute-broker/project.key`. Private
-`.compute-broker/connection.json` records the broker origin and workspace root for
+both, sharing one private `.compute-relay/project.key`. Private
+`.compute-relay/connection.json` records the broker origin and workspace root for
 the file helper, without key contents. Git exclusions cover the selected client
 configurations and private directory. Initialization preserves unrelated
 configuration and refuses conflicting existing broker configuration or keys.
-It also writes `.compute-broker/USAGE.md`: a secret-free, ignored guide with
+It also writes `.compute-relay/USAGE.md`: a secret-free, ignored guide with
 the actual installed Python interpreter and workspace paths, shell-quoted for
 direct use even when they contain spaces. Its commands use absolute
-`python -m compute_broker.cli` invocations and do not depend on a console script
+`python -m compute_relay.cli` invocations and do not depend on a console script
 being on `PATH`. Initialization prints the guide's path. The same interpreter
-can initialize a project through `-m compute_broker.cli init-mcp` if needed.
+can initialize a project through `-m compute_relay.cli init-mcp` if needed.
 The key is never printed or passed as a command-line argument. Initialization
 does not contact the broker; the MCP adapter verifies the key and resolves its
 project when the client connects. The broker retains only the key's hash.
@@ -56,7 +56,7 @@ To add the other client or workflow to an already initialized project, explicitl
 reuse its key; retain the original `--broker-url` for a remote service:
 
 ```sh
-compute-broker init-mcp --client both --reuse-key --with-workflow
+compute-relay init-mcp --client both --reuse-key --with-workflow
 ```
 
 The opt-in workflow copies the same provider-neutral skill to Codex's
@@ -66,19 +66,19 @@ project `AGENTS.md`/`CLAUDE.md` files. Existing instructions and permission
 settings are preserved. No client-wide settings, hooks or automatic approvals
 are installed. The secret-free workflow files can be reviewed and committed.
 Existing different skills or managed blocks require review instead of overwrite.
-Explicit `--reuse-key --with-workflow` can safely refresh unchanged earlier
-generated skills and managed blocks to link the usage guide. Exact known
-versions are recognized; user edits and conflicting user guides remain untouched.
+Explicit `--reuse-key --with-workflow` can retain exact current generated
+skills, managed blocks and the helper guide. Different templates, user edits
+and conflicting guides are refused before prompting or writing.
 
 For sources and outputs, copy the complete commands from
-`.compute-broker/USAGE.md`, which is linked by the shared skill and project
+`.compute-relay/USAGE.md`, which is linked by the shared skill and project
 guidance. The helper keeps chat responses to bounded receipts. Its general syntax
 is shown below; the guide supplies the actual interpreter path:
 
 ```sh
-/absolute/path/to/python -m compute_broker.cli files stage --directory /path/to/science-project --manifest source-bundle.json
-/absolute/path/to/python -m compute_broker.cli files prepare --directory /path/to/science-project --bundle BUNDLE_ID --request job.json --idempotency-key RUN_STAGE
-/absolute/path/to/python -m compute_broker.cli files fetch --directory /path/to/science-project --attempt-id ATTEMPT_UUID --output results/RUN
+/absolute/path/to/python -m compute_relay.cli files stage --directory /path/to/science-project --manifest source-bundle.json
+/absolute/path/to/python -m compute_relay.cli files prepare --directory /path/to/science-project --bundle BUNDLE_ID --request job.json --idempotency-key RUN_STAGE
+/absolute/path/to/python -m compute_relay.cli files fetch --directory /path/to/science-project --attempt-id ATTEMPT_UUID --output results/RUN
 ```
 
 Stage only explicit relative paths; the source manifest contains
@@ -94,9 +94,9 @@ After pairing a connector through its cluster's downloaded setup, save a name
 for its permanent state directory:
 
 ```sh
-compute-broker connectors add lab --state-directory /absolute/private/lab-state
-compute-broker connectors add university --state-directory /absolute/private/university-state
-compute-broker connectors list
+compute-relay connectors add lab --state-directory /absolute/private/lab-state
+compute-relay connectors add university --state-directory /absolute/private/university-state
+compute-relay connectors list
 ```
 
 The registry stores names and directory paths only. It does not copy SSH keys,
@@ -107,16 +107,16 @@ existing state directory remains authoritative for pairing and recovery.
 Start one saved connector with:
 
 ```sh
-compute-broker connectors start lab
+compute-relay connectors start lab
 ```
 
-Or use `compute-broker connectors start` to select a saved name interactively.
+Or use `compute-relay connectors start` to select a saved name interactively.
 The connector runs in that terminal and labels the target before OpenSSH asks
 for a key passphrase or MFA response. To start all saved connectors in one
 terminal:
 
 ```sh
-compute-broker connectors start --all
+compute-relay connectors start --all
 ```
 
 The command signs into the clusters sequentially so their passphrase and MFA
@@ -130,18 +130,18 @@ broker handshake have succeeded; the process then waits for broker work.
 For additional sanitized activity messages:
 
 ```sh
-compute-broker connectors start lab --verbose
+compute-relay connectors start lab --verbose
 ```
 
 The original command also accepts `--verbose`:
 
 ```sh
-compute-broker connector --state-directory /absolute/private/lab-state --verbose
+compute-relay connector --state-directory /absolute/private/lab-state --verbose
 ```
 
 Idle polling stays quiet. Activity messages describe operations without printing
 credentials, private-key paths, raw commands, job scripts or workload output.
-Removing a shortcut with `compute-broker connectors remove lab` removes only
+Removing a shortcut with `compute-relay connectors remove lab` removes only
 that registry entry. It does not stop a running connector, revoke its broker
 identity, delete local state or cancel jobs.
 

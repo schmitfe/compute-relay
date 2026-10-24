@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-from datetime import datetime, timedelta, timezone
 import hashlib
 from html.parser import HTMLParser
 import http.cookiejar
@@ -152,148 +151,6 @@ def revealed_key(human, html):
     return values[0], str(UUID(match.group(1).decode()))
 
 
-class ClusterBindingFields(HTMLParser):
-    """Read only the public binding choices rendered by the human setup page."""
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.profiles, self.revision = [], None
-        self.selected = None
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "select":
-            self.selected = attrs.get("name")
-        elif tag == "option" and self.selected == "credential_profile":
-            self.profiles.append(attrs.get("value", ""))
-        elif tag == "input" and attrs.get("name") == "setup_revision":
-            self.revision = attrs.get("value")
-
-    def handle_endtag(self, tag):
-        if tag == "select":
-            self.selected = None
-
-
-def cluster_binding_fields(page, alias):
-    parsed = ClusterBindingFields()
-    parsed.feed(page.decode("utf-8"))
-    profiles = [value for value in parsed.profiles if re.fullmatch(re.escape(alias) + r":[0-9a-f]{64}", value)]
-    require(len(profiles) == 1 and parsed.revision is not None and re.fullmatch(r"[1-9][0-9]*", parsed.revision),
-            "Saved cluster setup did not offer one current worker profile and revision")
-    return {"credential_profile": profiles[0], "setup_revision": parsed.revision}
-
-
-def discover_through_portal(human, demo, timeout, suffix):
-    target = demo.get("cluster_form")
-    if target:
-        human.request("POST", "/clusters/new/", {"name": "Container discovery " + suffix, "backend": demo["backend"],
-            **{field: target[field] for field in ("host", "user", "port", "remote_root")}}, form=True, binary=True)
-        draft = re.fullmatch(r"/clusters/setup/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
-        require(draft is not None, "Cluster details did not save independently of worker enrollment")
-        setup_id = str(UUID(draft.group(1)))
-        binding = f"/clusters/setup/{setup_id}/bind/"
-        page = human.request("GET", binding + "?worker=" + target["worker"], binary=True)
-        fields = cluster_binding_fields(page, target["credential_profile"])
-        human.request("POST", binding, {**fields, "worker": target["worker"], "remote_root": target["remote_root"]}, form=True, binary=True)
-        match = re.fullmatch(r"/clusters/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
-        require(match is not None, "Cluster enrollment did not open the new cluster")
-        connection_id = str(UUID(match.group(1)))
-    else:
-        connection_id = demo["connection_id"]
-        human.request("POST", f"/clusters/{connection_id}/discover/", {}, form=True, binary=True)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        html = human.request("GET", f"/clusters/{connection_id}/", binary=True)
-        if b"Discovery: <strong>failed</strong>" in html:
-            raise SmokeFailure("Portal cluster discovery failed; inspect the protected fixture worker")
-        if b"Discovery: <strong>ready</strong>" in html:
-            parsed = PreformattedText()
-            parsed.feed(html.decode("utf-8"))
-            for block in reversed(parsed.blocks):
-                try:
-                    snapshot = json.loads(block["text"])
-                except ValueError:
-                    continue
-                software = snapshot.get("software", {}) if isinstance(snapshot, dict) else {}
-                if software.get("scope") == "login_node":
-                    require(software.get("verified_on_compute") is False, "Discovery incorrectly certifies compute-node software")
-                    return connection_id
-        time.sleep(1)
-    raise SmokeFailure("Portal cluster discovery did not produce its bounded software snapshot")
-
-
-def management_setup(human, demo, timeout):
-    """Exercise ordinary HTML management forms; retain secrets only in memory."""
-    suffix = uuid4().hex[:12]
-    discovered_id = discover_through_portal(human, demo, timeout, suffix)
-    # A recipe belongs to the cluster named in its URL, independently of the
-    # cluster just enrolled above. Exercise the ordinary form and navigation.
-    environment_path = f"/clusters/{demo['connection_id']}/environments/"
-    human.request("GET", environment_path + "new/", binary=True)
-    environment_name = "Cluster Python " + suffix
-    page = human.request("POST", environment_path + "new/", {
-        "name": environment_name, "kind": "system", "interpreter": "/usr/bin/python3",
-    }, form=True, binary=True)
-    require(urllib.parse.urlsplit(human.last_url).path == environment_path,
-            "Recipe creation did not return to its cluster's environments")
-    require(environment_name.encode() in page, "Created cluster recipe is missing from its list")
-    other_page = human.request("GET", f"/clusters/{discovered_id}/environments/", binary=True)
-    if discovered_id != demo["connection_id"]:
-        require(environment_name.encode() not in other_page, "Recipe leaked into another cluster's list")
-    expiry = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
-    project_fields = {"name": "Container managed project " + suffix, "mode": "budgeted",
-                      "cpu_hours": "2", "gpu_hours": "0", "max_cpus": "1", "max_gpus": "0",
-                      "memory_mib": "128", "wall_minutes": "1",
-                      "max_active_jobs": "2", "max_total_jobs": "1", "expires_at": expiry, "connections": [demo["connection_id"]],
-                      "environments": [demo["environment_id"]], "allowed_gpu_types": ""}
-    human.request("POST", "/projects/new/", project_fields, form=True, binary=True)
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
-    require(match is not None, "Project creation did not open the new project")
-    project_id = str(UUID(match.group(1)))
-    key_fields = {"name": "Container Codex key", "expires_at": expiry,
-                  "scopes": ["objects:write", "jobs:read", "jobs:write", "jobs:execute", "jobs:cancel", "artifacts:read"],
-                  "cluster_access": "inherit", "allowed_connections": [], "execution_mode": "approval_required", "submission_id": str(uuid4())}
-    key_path = f"/projects/{project_id}/keys/new/"
-    first_html = human.request("POST", key_path, key_fields, form=True, binary=True)
-    first_secret, first_id = revealed_key(human, first_html)
-    first_agent = Client(human.base, token=first_secret)
-    initial_budget = first_agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
-    initial_budget.pop("compute", None)  # Current planning observations are not shared ledger state.
-    require(initial_budget["limit"]["cpu_core_seconds"] == 7200, "Created project has the wrong CPU allowance")
-    second_html = human.request("POST", key_path, {**key_fields, "name": "Container Claude key", "submission_id": str(uuid4())},
-                                form=True, binary=True)
-    second_secret, second_id = revealed_key(human, second_html)
-    second_agent = Client(human.base, token=second_secret)
-    second_budget = second_agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
-    second_budget.pop("compute", None)
-    require(second_budget == initial_budget,
-            "Additional project key created a separate allowance")
-    replay = human.request("POST", key_path, key_fields, form=True, binary=True, expected=(409,))
-    require(first_secret.encode() not in replay, "Repeated creation disclosed an existing key")
-    rotated_html = human.request("POST", f"/projects/{project_id}/keys/{first_id}/rotate/",
-                                 {"submission_id": str(uuid4())}, form=True, binary=True)
-    secret, key_id = revealed_key(human, rotated_html)
-    first_agent.request("GET", "/api/v1/connections", expected=(401,), binary=True)
-    agent = Client(human.base, token=secret)
-    rotated_budget = agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
-    rotated_budget.pop("compute", None)
-    require(rotated_budget == initial_budget,
-            "Key rotation reset project funds")
-    human.request("POST", f"/projects/{project_id}/keys/{second_id}/revoke/", {}, form=True, binary=True)
-    second_agent.request("GET", "/api/v1/connections", expected=(401,), binary=True)
-    edit_path = f"/projects/{project_id}/keys/{key_id}/edit/"
-    human.request("POST", edit_path, {**key_fields, "cluster_access": "restrict", "allowed_connections": []}, form=True, binary=True)
-    require(agent.request("GET", "/api/v1/connections")["connections"] == [], "Deny-all key access became inherited access")
-    human.request("POST", edit_path, key_fields, form=True, binary=True)
-    require(any(item["id"] == demo["connection_id"] for item in agent.request("GET", "/api/v1/connections")["connections"]),
-            "Restored inherited access does not include the project cluster")
-    for path in (f"/projects/{project_id}/", key_path):
-        html = human.request("GET", path, binary=True)
-        require(all(value.encode() not in html for value in (first_secret, second_secret, secret)), "Portal redisplayed a full key")
-    return {**demo, "project_id": project_id}, secret, {
-        "project_fields": project_fields, "key_fields": key_fields, "discovered_connection_id": discovered_id,
-    }
-
-
 def create_job(agent, demo, backend, source, name, *, previous_job_id=None):
     descriptor = agent.request(
         "POST", f"/api/v1/projects/{demo['project_id']}/objects",
@@ -317,7 +174,7 @@ def create_job(agent, demo, backend, source, name, *, previous_job_id=None):
     return job["id"], prepared["manifest_sha256"], execution["id"]
 
 
-def run(base_url, demo_file, timeout, *, management=False):
+def run(base_url, demo_file, timeout):
     demo = json.loads(demo_file.read_bytes())
     token_file = demo_file.parent / "agent-token"
     token = token_file.read_text().strip() if token_file.exists() else demo.get("agent_token")
@@ -325,10 +182,6 @@ def run(base_url, demo_file, timeout, *, management=False):
     agent = Client(base_url, token=token)
     human = Client(base_url)
     human.login(demo["owner_username"], demo["owner_password"])
-    management_data = None
-    if management:
-        demo, token, management_data = management_setup(human, demo, timeout)
-        agent = Client(base_url, token=token)
     inventory = agent.request("GET", "/api/v1/connections")["connections"]
     connection = next((item for item in inventory if item["id"] == demo["connection_id"]), None)
     require(connection is not None, "Bootstrapped connection is absent from project inventory")
@@ -414,34 +267,12 @@ def run(base_url, demo_file, timeout, *, management=False):
             "Final allocated CPU usage was not charged as expected")
     require(budget["debt"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0},
             "Tiny demo exceeded its authorized compute envelope")
-    if management_data:
-        project_page = human.request("GET", f"/projects/{demo['project_id']}/", binary=True)
-        for label in (job["name"], job["owner"]["username"], job["submitted_using"]["name"], "Completed"):
-            require(label.encode() in project_page, "Project job list lacks name, attribution, or latest execution status")
-        human.request("POST", f"/projects/{demo['project_id']}/",
-                      {**management_data["project_fields"], "cpu_hours": "3"}, form=True, binary=True)
-        updated = agent.request("GET", f"/api/v1/projects/{demo['project_id']}/allowance")
-        require(updated["limit"]["cpu_core_seconds"] == 10800 and updated["spent"] == budget["spent"]
-                and updated["reserved"] == budget["reserved"], "Editing limits reset usage or did not change the total")
-        require(updated.get("jobs", {}).get("admitted") == 1 and updated["jobs"].get("remaining") == 0,
-                "Lifetime job cap was not retained after accounting or a limit edit")
-        automatic_html = human.request("POST", f"/projects/{demo['project_id']}/keys/new/",
-                                       {**management_data["key_fields"], "name": "Container automatic key",
-                                        "execution_mode": "automatic", "submission_id": str(uuid4())}, form=True, binary=True)
-        automatic_secret, _ = revealed_key(human, automatic_html)
-        automatic_agent = Client(base_url, token=automatic_secret)
-        blocked = automatic_agent.request("POST", f"/api/v1/jobs/{job_id}/execution-requests", {}, expected=(409,))
-        require(blocked.get("error", {}).get("code") == "TOTAL_JOB_LIMIT", "A new key bypassed the project's lifetime job cap")
-        after_cap = automatic_agent.request("GET", f"/api/v1/projects/{demo['project_id']}/allowance")
-        require(after_cap["spent"] == updated["spent"] and after_cap["reserved"] == updated["reserved"]
-                and after_cap["jobs"]["admitted"] == 1, "Blocked admission changed the ledger or job count")
     native_job_id = str(final.get("native_identity", {}).get("job_id", ""))
     require(native_job_id.isdigit(), "Completed attempt lacks its native job identifier")
     print(json.dumps({"ok": True, "backend": backend, "simulated": backend == "fake",
                       "rejected_job_id": denied_id, "job_id": job_id, "attempt_id": attempt_id,
                       "native_job_id": native_job_id, "accounting_state": final["accounting_state"],
-                      "spent": budget["spent"], "reserved": budget["reserved"], "management": management,
-                      "discovered_connection_id": management_data["discovered_connection_id"] if management_data else None}))
+                      "spent": budget["spent"], "reserved": budget["reserved"]}))
 
 
 def main():
@@ -449,12 +280,11 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--demo-file", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=180)
-    parser.add_argument("--management", action="store_true", help="Also exercise human portal management and cluster discovery")
     args = parser.parse_args()
     if not 1 <= args.timeout <= 900:
         parser.error("timeout must be from 1 through 900 seconds")
     try:
-        run(args.base_url, args.demo_file, args.timeout, management=args.management)
+        run(args.base_url, args.demo_file, args.timeout)
     except SmokeFailure as error:
         print("Smoke failed: " + str(error), file=sys.stderr)
         return 1

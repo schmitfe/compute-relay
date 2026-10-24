@@ -4,12 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from compute_broker.backends import BackendError, prepare
-from compute_broker.backends.discovery import parse_discovery
-from compute_broker.control.resource_api import planned_allocation
-from compute_broker.domain.allocation import allocated_cpus, cpu_allocation_candidate
-from compute_broker.domain.cluster_configuration import validate_cluster_configuration, ClusterConfigurationError
-from compute_broker.domain.resource_limits import effective_resource_limits
+from compute_relay.backends import BackendError, prepare
+from compute_relay.backends.discovery import parse_discovery
+from compute_relay.control.resource_api import planned_allocation
+from compute_relay.domain.allocation import allocated_cpus, cpu_allocation_candidate
+from compute_relay.domain.cluster_configuration import validate_cluster_configuration, ClusterConfigurationError
+from compute_relay.domain.resource_limits import effective_resource_limits
 from test_backends import sample, REVISION  # noqa: F401
 from test_control import broker, prepared_job  # noqa: F401
 from test_connector_setup import personal, configuration_fields, lease, reply  # noqa: F401
@@ -82,12 +82,12 @@ def test_only_selected_partitions_contribute_to_candidate():
     assert cpu_allocation_candidate(snapshot, ["cpu"])["value"] == 2
 
 
-def test_new_and_legacy_node_discovery_formats_are_supported():
-    result = parse_discovery({"nodes": {"stdout": "n0|cpu*|40|180000|(null)|idle|2|10|2\nn1|legacy|8|1024|(null)|down"}}, {})
+def test_node_discovery_requires_the_current_topology_columns():
+    result = parse_discovery({"nodes": {"stdout": "n0|cpu*|40|180000|(null)|idle|2|10|2\nn1|invalid|8|1024|(null)|down"}}, {})
     assert result["nodes"][0]["threads_per_core"] == "2"
     assert result["nodes"][0]["cores_per_socket"] == "10"
     assert result["nodes"][0]["partition"] == "cpu"
-    assert "threads_per_core" not in result["nodes"][1]
+    assert len(result["nodes"]) == 1
 
 
 def test_preparation_rounds_odd_counts_without_changing_requested_cpus_or_walltime(sample):
@@ -124,8 +124,8 @@ def test_context_describes_request_limit_unit_and_unknown_prediction(sample):
 
 
 def test_rounded_reservation_is_held_before_approval_and_cannot_overbook(broker):
-    from compute_broker.control import services
-    from compute_broker.control.errors import BrokerError
+    from compute_relay.control import services
+    from compute_relay.control.errors import BrokerError
     broker.connection.configuration = {**broker.connection.configuration, "site_profile": {"cpu_allocation_quantum": 2}}
     broker.connection.save(update_fields=["configuration"])
     job = prepared_job(broker)
@@ -147,8 +147,8 @@ def test_rounded_reservation_is_held_before_approval_and_cannot_overbook(broker)
 
 @pytest.mark.django_db
 def test_cpu_unit_requires_updated_worker_and_normal_configuration_acknowledgement(personal):
-    from compute_broker.control.models import ConnectorTask
-    from compute_broker.worker.enrollment import profile_metadata, resolve_connection
+    from compute_relay.control.models import ConnectorTask
+    from compute_relay.worker.enrollment import profile_metadata, resolve_connection
     context = personal
     path = f"/clusters/{context.connection.id}/configuration/"
     data = configuration_fields(context, cpu_allocation_quantum=2)

@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.cluster_services import lease_discovery, report_discovery
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.forms import ClusterForm, owned_environments, owned_workers
-from compute_broker.control.models import (
+from compute_relay.control.auth import token_hash
+from compute_relay.control.cluster_services import lease_discovery, report_discovery
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.forms import owned_environments
+from compute_relay.control.models import (
     Attempt, Connection, Environment, ExecutionRequest, Grant, Job, Project, User, WorkerIdentity,
 )
-from compute_broker.control.services import digest
+from compute_relay.control.services import digest
 
 
 @pytest.fixture
@@ -36,19 +36,8 @@ def resources(db):
                            profile=profile, configuration=configuration)
 
 
-def test_historical_connection_does_not_delegate_another_owners_worker(resources):
-    assert owned_workers(resources.alice).filter(id=resources.worker.id).exists()
-    assert not owned_workers(resources.bob).filter(id=resources.worker.id).exists()
-    form = ClusterForm(user=resources.bob)
-    assert not form.fields["worker"].queryset.filter(id=resources.worker.id).exists()
-    assert "alice-private" not in {alias for alias, _ in form.fields["credential_profile"].choices}
 
 
-def test_unowned_legacy_worker_requires_explicit_enrollment_owner(resources):
-    resources.worker.owner = None
-    resources.worker.save(update_fields=["owner"])
-    assert not owned_workers(resources.alice).filter(id=resources.worker.id).exists()
-    assert not owned_workers(resources.bob).filter(id=resources.worker.id).exists()
 
 
 def test_project_or_connection_link_cannot_override_explicit_environment_owner(resources):
@@ -93,7 +82,7 @@ def test_discovery_can_refresh_snapshot_but_cannot_rebind_unsettled_jobs(resourc
     assert resources.connection.discovery_snapshot == {"version": "same-revision-refresh"}
 
     updated = copy.deepcopy(original)
-    updated["site_profile"] = {"termination_margin_seconds": 30}
+    updated["site_profile"] = {"maximum_cpus": 30}
     updated["credential_profile_revision_sha256"] = "b" * 64
     resources.profile.update(site_profile=updated["site_profile"], revision_sha256="b" * 64)
     resources.worker.profiles = [resources.profile]

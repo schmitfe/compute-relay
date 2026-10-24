@@ -125,15 +125,6 @@ class SmokeClientTests(unittest.TestCase):
         html = f'<pre id="api-secret">{secret}</pre><p>Identifier: {identifier}</p>'.encode()
         self.assertEqual(SMOKE.revealed_key(client, html), (secret, identifier))
 
-    def test_cluster_setup_parser_binds_current_profile_fingerprint_and_revision(self):
-        choice = "fixture-profile:" + "a" * 64
-        page = f'<input name="setup_revision" value="3"><select name="credential_profile"><option value="{choice}">fixture-profile</option></select>'.encode()
-        self.assertEqual(SMOKE.cluster_binding_fields(page, "fixture-profile"),
-                         {"credential_profile": choice, "setup_revision": "3"})
-        with self.assertRaises(SMOKE.SmokeFailure):
-            SMOKE.cluster_binding_fields(page, "another-profile")
-        with self.assertRaises(SMOKE.SmokeFailure):
-            SMOKE.cluster_binding_fields(page.replace(b'value="3"', b'value="0"'), "fixture-profile")
 
 
 if __name__ == "__main__":

@@ -277,19 +277,11 @@ a remote file write, job, directory listing or retained-usage scan. Small fixtur
 filesystems may correctly produce a blocked planning assessment under the
 default operational free-space floors.
 
-### Project ownership validation (2026-10-23)
+### Historical acceptance
 
-The PostgreSQL regression run passed 1,975 tests and 65 subtests; one optional
-scientific acceptance test was skipped because NumPy was not installed. The
-storage tests cover project and key isolation, shared-project administrators
-using their own cluster accounts, exact personal-directory receipts, legacy
-adoption, and a forward migration from storage schema `0003` to `0004` in a
-separate synthetic database. A schema drift check reported no pending model
-changes.
-
-The Docker Slurm acceptance test passed with a fresh `statvfs` observation,
-unknown native quota, unverified filesystem identity and zero admitted jobs.
-The smoke client's exact fixture-identity guard has 18 focused passing tests.
-Browser verification used a separate synthetic portal to check the project
-chooser, directory selection and confirmation, default roles and shared budget
-settings. Institutional cluster files were not used for these checks.
+The earlier shared-server/PostgreSQL ownership acceptance and its exact counts
+are archived on `codex/archive-multi-user-server` at `520effc`. Current storage
+checks use the local owner and SQLite while preserving project/key isolation,
+exact directory receipts, advisory planning, schema migrations and bounded
+capacity probes. Run the current suite rather than treating historical server
+results as local-package acceptance.

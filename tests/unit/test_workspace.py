@@ -16,11 +16,11 @@ from uuid import uuid4
 from django.test import Client
 import pytest
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.models import Artifact, Attempt, ExecutionRequest, Job, Project
-from compute_broker.control.storage import store_blob
-from compute_broker import workspace as workspace_module
-from compute_broker.workspace import WorkspaceClient, MAX_SOURCE_BYTES, main
+from compute_relay.control.auth import token_hash
+from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Job, Project
+from compute_relay.control.storage import store_blob
+from compute_relay import workspace as workspace_module
+from compute_relay.workspace import WorkspaceClient, MAX_SOURCE_BYTES, main
 from test_control import broker, budgeted, execution, prepared_job  # noqa: F401
 from test_project_context import context_live_server  # noqa: F401
 
@@ -31,7 +31,7 @@ PROJECT = str(uuid4())
 
 def workspace(path, url="http://127.0.0.1:8768", token=TOKEN):
     path.mkdir(exist_ok=True)
-    private = path / ".compute-broker"
+    private = path / ".compute-relay"
     private.mkdir(mode=0o700)
     (private / "project.key").write_text(token)
     (private / "project.key").chmod(0o600)
@@ -163,7 +163,7 @@ def test_interrupted_private_write_does_not_publish_partial_files_or_receipts(tm
             if operation == "stage": helper.stage(["main.py"])
             else: helper.fetch(str(uuid4()), "results/interrupted")
     if operation == "stage":
-        assert list((root / ".compute-broker/bundles").iterdir()) == []
+        assert list((root / ".compute-relay/bundles").iterdir()) == []
         recovered = helper.stage(["main.py"])
         receipt = root / recovered["receipt"]
         assert hashlib.sha256(receipt.read_bytes()).hexdigest() == recovered["bundle_id"]
@@ -171,7 +171,7 @@ def test_interrupted_private_write_does_not_publish_partial_files_or_receipts(tm
         assert not any(path.is_file() for path in (root / "results/interrupted").rglob("*"))
         recovered = helper.fetch(str(uuid4()), "results/recovered")
         assert (root / recovered["receipt"]).is_file()
-    assert not list(root.rglob(".compute-broker-transfer-*"))
+    assert not list(root.rglob(".compute-relay-transfer-*"))
 
 
 def test_concurrent_identical_staging_accepts_atomic_winner_and_durable_private_receipt(tmp_path, monkeypatch):
@@ -208,7 +208,7 @@ def test_concurrent_identical_staging_accepts_atomic_winner_and_durable_private_
 
 
 @pytest.mark.parametrize("selection", [[], ["missing.py"], ["../escape"], ["/etc/passwd"], ["a/../b"],
-    [".compute-broker/project.key"], [".codex/config.toml"], [".claude/skills/x"], [".git/config"],
+    [".compute-relay/project.key"], [".codex/config.toml"], [".claude/skills/x"], [".git/config"],
     [".ssh/id_ed25519"], [".aws/credentials"], ["_broker/entrypoint.sh"], ["same", "same"], [{}]])
 def test_stage_rejects_unsafe_selection_before_network(tmp_path, selection):
     client = TransferClient()
@@ -247,8 +247,8 @@ def test_source_links_special_files_and_oversize_are_never_read_or_uploaded(tmp_
 @pytest.mark.parametrize("change", ["public_key", "public_config", "root_mismatch", "key_symlink", "metadata_symlink"])
 def test_saved_connection_and_secret_must_be_private_and_bound_to_workspace(tmp_path, change):
     root = workspace(tmp_path / "science")
-    key = root / ".compute-broker/project.key"
-    config = root / ".compute-broker/connection.json"
+    key = root / ".compute-relay/project.key"
+    config = root / ".compute-relay/connection.json"
     if change == "public_key":
         key.chmod(0o644)
     elif change == "public_config":
@@ -301,8 +301,8 @@ def test_fetch_inventory_rejected_before_creating_destination_or_downloading(tmp
     client = TransferClient()
     entry = artifact(client)
     if kind in {"traversal", "absolute", "secret", "reserved_receipt"}:
-        entry["path"] = {"traversal": "../escape", "absolute": "/tmp/escape", "secret": ".compute-broker/project.key",
-            "reserved_receipt": ".compute-broker-receipt.json"}[kind]
+        entry["path"] = {"traversal": "../escape", "absolute": "/tmp/escape", "secret": ".compute-relay/project.key",
+            "reserved_receipt": ".compute-relay-receipt.json"}[kind]
     elif kind == "duplicate":
         artifact(client)
     elif kind == "prefix_collision":
@@ -358,7 +358,7 @@ def test_real_http_cli_stages_prepares_idempotently_and_fetches_without_executin
     source = b"raise RuntimeError('BROKER-MUST-NOT-EXECUTE-THIS-SOURCE')\n"
     (root / "main.py").write_bytes(source)
     def cli(*arguments):
-        result = subprocess.run([sys.executable, "-m", "compute_broker.cli", "files", *arguments,
+        result = subprocess.run([sys.executable, "-m", "compute_relay.cli", "files", *arguments,
             "--directory", str(root)], capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stderr
         assert TOKEN not in result.stdout + result.stderr and source.decode().strip() not in result.stdout + result.stderr
@@ -409,7 +409,7 @@ def test_content_lookup_checks_scope_project_size_and_stored_integrity(broker):
     assert post({"objects": entries}).status_code == 403
     c.credential.scopes = ["objects:write"]
     c.credential.save(update_fields=["scopes"])
-    from compute_broker.control.storage import blob_path
+    from compute_relay.control.storage import blob_path
     blob_path(blob).write_bytes(b"oops")
     corrupted = post({"objects": entries[:1]})
     assert corrupted.status_code == 409 and corrupted.json()["error"]["code"] == "OBJECT_INTEGRITY"
@@ -421,7 +421,7 @@ def test_content_lookup_checks_scope_project_size_and_stored_integrity(broker):
 
 
 def test_attempt_accounting_distinguishes_requested_allocated_and_actual(broker):
-    from compute_broker.control.services import serialize_attempt
+    from compute_relay.control.services import serialize_attempt
     budgeted(broker)
     attempt = execution(broker, prepared_job(broker)).attempt
     attempt.state = "succeeded"

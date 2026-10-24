@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import pytest
 
-from compute_broker.worker import personal_setup
-from compute_broker.worker.client import ControlError
-from compute_broker.worker.enrollment import profile_metadata, resolve_connection
-from compute_broker.worker.journal import Journal
-from compute_broker.worker.personal_connector import read_private, runtime_profile, write_private
+from compute_relay.worker import personal_setup
+from compute_relay.worker.client import ControlError
+from compute_relay.worker.enrollment import profile_metadata, resolve_connection
+from compute_relay.worker.journal import Journal
+from compute_relay.worker.personal_connector import read_private, runtime_profile, write_private
 
 
 @pytest.fixture
@@ -76,39 +76,17 @@ def test_configuration_is_private_persistent_and_becomes_worker_scope(runtime):
     assert "/local/opaque-key-path" not in str(body) and "cbw_synthetic" not in str(body)
 
 
-def test_legacy_configure_request_strips_obsolete_timing_without_enabling_automatic_execution(runtime):
+def test_unsupported_configuration_fields_fail_without_changing_private_state(runtime):
     current = task()
-    current["request"]["site_profile"].update(termination_margin_seconds=30, overtime_margin_seconds=0,
-        cleanup_margin_seconds=None)
+    current["request"]["site_profile"]["cleanup_margin_seconds"] = 30
     runtime.client.queue = [current]
+    before = read_private(runtime.directory / "state.json")
     asyncio.run(runtime.worker.setup_once())
-    stored = read_private(runtime.directory / "state.json")
-    assert stored["site_profile"] == site()
-    assert runtime.client.calls[-1][1]["configuration"]["site_profile"] == site()
+    assert read_private(runtime.directory / "state.json") == before
+    report = runtime.client.calls[-1][1]
+    assert report["outcome"] == "failed" and "configuration" not in report
 
 
-def test_historical_connection_keeps_immutable_binding_without_rewriting_private_state(runtime):
-    from compute_broker.backends import canonical_json_bytes
-    import hashlib
-    runtime.state["site_profile"] = {**site(), "termination_margin_seconds": 30,
-        "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30}
-    before = deepcopy(runtime.state)
-    alias, profile = runtime_profile(runtime.state, runtime.session)
-    fingerprint = hashlib.sha256(canonical_json_bytes(profile)).hexdigest()
-    metadata = profile_metadata(alias, profile)
-    assert metadata["revision_sha256"] == fingerprint
-    assert metadata["site_profile"] == site()
-    historical = {"backend": "slurm", "credential_profile": alias,
-        "ssh": {"host": "cluster.example", "user": "researcher", "port": 22},
-        "remote_root": "/home/researcher/jobs", "profile_revision": 1,
-        "credential_profile_revision_sha256": fingerprint, "site_profile": deepcopy(runtime.state["site_profile"])}
-    revision = hashlib.sha256(canonical_json_bytes(historical)).hexdigest()
-    private, public, actual_revision = resolve_connection({**historical, "revision_sha256": revision}, {alias: profile})
-    assert public == historical and actual_revision == revision
-    assert private["site_profile"] == site()
-    _, refreshed, new_revision = resolve_connection(historical, {alias: profile}, refresh=True)
-    assert refreshed["site_profile"] == site() and new_revision != revision
-    assert runtime.state == before
 
 
 def test_lost_ack_replays_same_configuration_without_incrementing_again(runtime):
@@ -176,7 +154,7 @@ def test_module_avail_setting_is_persisted_published_and_replayable(runtime):
 
 
 def test_default_root_is_identified_after_login_without_creating_it(runtime):
-    assert asyncio.run(personal_setup.default_work_root(runtime.session)) == "/home/researcher/.compute-broker/jobs"
+    assert asyncio.run(personal_setup.default_work_root(runtime.session)) == "/home/researcher/.compute-relay/jobs"
 
 
 def test_discovery_initializes_maxima_once_then_preserves_user_configuration(runtime):
@@ -243,7 +221,7 @@ def test_new_folder_retries_use_receipt_and_do_not_repeat_mutation(runtime, monk
 
 
 def test_verbose_setup_progress_does_not_print_paths_remote_errors_or_credentials(runtime, monkeypatch, capsys):
-    from compute_broker.worker.connector_status import ConnectorStatus
+    from compute_relay.worker.connector_status import ConnectorStatus
     runtime.worker.status = ConnectorStatus(runtime.state, verbose=True)
     async def unavailable(*args, **kwargs):
         raise ValueError("remote-secret-response")
@@ -257,7 +235,7 @@ def test_verbose_setup_progress_does_not_print_paths_remote_errors_or_credential
 
 
 def test_verbose_job_progress_is_meaningful_without_repeating_observation_polls(runtime, monkeypatch, capsys):
-    from compute_broker.worker.connector_status import ConnectorStatus
+    from compute_relay.worker.connector_status import ConnectorStatus
     runtime.worker.status = ConnectorStatus(runtime.state, verbose=True)
     operations = []
     async def execute(_worker, lease):

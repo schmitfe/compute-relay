@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from compute_broker.worker import file_picker
-from compute_broker.worker.file_picker import (
+from compute_relay.worker import file_picker
+from compute_relay.worker.file_picker import (
     FileSelectionCancelled, FileSelectionUnavailable, choose_identity_file,
 )
 

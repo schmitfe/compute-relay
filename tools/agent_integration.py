@@ -57,7 +57,7 @@ def _absolute_reference(value, label):
     return str(path)
 
 
-def create(case, destination, broker_url, project_id=None, project_token_file=None, python=None, extensions=""):
+def create(case, destination, broker_url, project_token_file, python, extensions=""):
     if case not in CASES:
         raise ValueError("Unknown numbered case")
     destination = _destination(destination)
@@ -67,8 +67,6 @@ def create(case, destination, broker_url, project_id=None, project_token_file=No
     environment = {"BROKER_CONTROL_URL": _broker_url(broker_url),
                    "BROKER_PROJECT_TOKEN_FILE": _absolute_reference(project_token_file, "Project token file"),
                    "BROKER_EXTENSIONS": ",".join(selected_extensions)}
-    if project_id is not None:
-        environment["BROKER_PROJECT_ID"] = str(UUID(project_id))
     command = _absolute_reference(python, "MCP Python interpreter")
     config = json.loads((KIT / CASES[case] / "case.json").read_text())
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -85,17 +83,17 @@ def create(case, destination, broker_url, project_id=None, project_token_file=No
             content = source.read_bytes()
             _private_write(destination / relative, content)
             hashes[str(relative)] = hashlib.sha256(content).hexdigest()
-        args = ["-m", "compute_broker.mcp"]
-        toml = "[mcp_servers.compute_broker]\ncommand = " + json.dumps(command) + "\nargs = " + json.dumps(args) + "\n\n[mcp_servers.compute_broker.env]\n"
+        args = ["-m", "compute_relay.mcp"]
+        toml = "[mcp_servers.compute_relay]\ncommand = " + json.dumps(command) + "\nargs = " + json.dumps(args) + "\n\n[mcp_servers.compute_relay.env]\n"
         toml += "".join(key + " = " + json.dumps(value) + "\n" for key, value in environment.items())
         _private_write(destination / ".codex/config.toml", toml)
-        _private_write(destination / ".mcp.json", json.dumps({"mcpServers": {"compute_broker": {"type": "stdio", "command": command, "args": args, "env": environment}}}, indent=2) + "\n")
+        _private_write(destination / ".mcp.json", json.dumps({"mcpServers": {"compute_relay": {"type": "stdio", "command": command, "args": args, "env": environment}}}, indent=2) + "\n")
         record = {"schema_version": "1.0", "case_id": case, "status": "not_run", "client": {"name": "", "version": "", "model": ""},
                   "checks": [{"id": check["id"], "status": "pending", "detail": ""} for check in config["rubric"]],
                   "executions": [], "artifacts": [], "usage": {key: None for key in ("cpu_core_seconds", "gpu_device_seconds", "reserved_cpu_core_seconds", "reserved_gpu_device_seconds", "storage_bytes", "wall_seconds")}, "notes": []}
         _private_write(destination / "record.template.json", json.dumps(record, indent=2) + "\n")
         _private_write(destination / "project.json", json.dumps({"schema_version": "1.0", "case_id": case,
-                       "project_identity_source": "api_key", "expected_project_id": environment.get("BROKER_PROJECT_ID"),
+                       "project_identity_source": "api_key",
                        "broker_origin": environment["BROKER_CONTROL_URL"], "generated_at": datetime.now(timezone.utc).isoformat(),
                        "source_sha256": hashes, "required_extensions": config["required_extensions"],
                        "requested_client_extensions": selected_extensions}, indent=2) + "\n")
@@ -178,7 +176,6 @@ def main():
     new.add_argument("--case", choices=CASES, required=True)
     for name in ("destination", "broker-url", "project-token-file", "python"):
         new.add_argument("--" + name, required=True)
-    new.add_argument("--project-id", help="Optional legacy identity assertion; must match the API key's project")
     new.add_argument("--extensions", default="", help="Operator-selected client extensions; disabled by default; grants remain server-controlled")
     saved = commands.add_parser("record")
     saved.add_argument("--project", required=True)
@@ -189,7 +186,7 @@ def main():
         if args.command == "list":
             print("\n".join(key + " " + value for key, value in CASES.items()))
         elif args.command == "create":
-            path = create(args.case, args.destination, args.broker_url, args.project_id, args.project_token_file, args.python, args.extensions)
+            path = create(args.case, args.destination, args.broker_url, args.project_token_file, args.python, args.extensions)
             print(f"Private acceptance project created: {path}\nStart a fresh supported agent there and use PROMPT.md.")
         else:
             print(record(args.project, args.input, args.name))

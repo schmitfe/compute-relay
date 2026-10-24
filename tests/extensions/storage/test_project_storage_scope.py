@@ -3,17 +3,17 @@
 from datetime import timedelta
 from uuid import uuid4
 
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 import pytest
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (AuditEvent, ClusterRegistration, ConnectorEnrollment,
-    Membership, Project, ProjectCredential)
-from compute_broker.extensions.storage import services
-from compute_broker.extensions.storage.models import (ProjectStorageBinding, ProjectStorageBudget,
-    StorageEstimateReservation, StorageTarget, StorageTargetRegistration)
-from compute_broker.extensions.storage.planning import ROLES, plan_storage
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import ClusterRegistration, ConnectorEnrollment, Project
+from compute_relay.extensions.storage import services
+from compute_relay.extensions.storage.models import (ProjectStorageBinding, ProjectStorageBudget,
+    StorageTarget, StorageTargetRegistration)
+from compute_relay.extensions.storage.planning import ROLES, plan_storage
 
 
 def enroll(resources, *, project=None, user=None, alias="staging-root-0", **kwargs):
@@ -51,7 +51,7 @@ def complete(registration):
     task.save(update_fields=["state", "result"])
 
 
-def test_new_enrollment_requires_explicit_project_and_project_admin(resources):
+def test_new_enrollment_requires_explicit_project_and_its_owner(resources):
     with pytest.raises(TypeError):
         services.register_target(resources.owner, resources.connection, "staging-root-0", "Missing project")
     with pytest.raises(BrokerError) as denied:
@@ -59,10 +59,6 @@ def test_new_enrollment_requires_explicit_project_and_project_admin(resources):
     assert denied.value.code == "STORAGE_PROJECT_REQUIRED"
     project = Project.objects.create(owner=resources.outsider, name="Other administrator")
     project.connections.add(resources.connection)
-    with pytest.raises(BrokerError) as denied:
-        enroll(resources, project=project)
-    assert denied.value.code == "SCOPE_DENIED"
-    Membership.objects.create(project=project, user=resources.owner, roles=["viewer"])
     with pytest.raises(BrokerError) as denied:
         enroll(resources, project=project)
     assert denied.value.code == "SCOPE_DENIED"
@@ -82,39 +78,33 @@ def test_enrollment_rejects_unassigned_or_disabled_cluster(resources, change):
     assert not StorageTarget.objects.exists()
 
 
-def test_project_admin_can_use_own_hpc_account_in_another_owners_project(resources):
-    project = Project.objects.create(owner=resources.outsider, name="Shared research project")
+def test_owner_cannot_enroll_cluster_into_another_owners_project(resources):
+    project = Project.objects.create(owner=resources.outsider, name="Foreign research project")
     project.connections.add(resources.connection)
-    Membership.objects.create(project=project, user=resources.owner, roles=["project_admin"])
-    target = enroll(resources, project=project)
-    assert target.owner_id == resources.connection.owner_id != project.owner_id
-    assert target.project_id == project.id
-    assert services.target_current(target)
-    assert list(services.selected_targets(project, resources.connection)) == [target]
-    binding = ProjectStorageBinding.objects.get(project=project, connection=resources.connection)
-    assert all(getattr(binding, f"{role}_id") == target.id for role in ROLES)
-    assert not ProjectStorageBudget.objects.exists()
-    services.save_project_storage(resources.owner, project, resources.connection,
-        {"bytes_budget": 100, "data": target, "retained_bytes_estimate": 1})
-    reservation = services.reserve_estimate(project, target, uuid4(), 10, 1)
-    assert reservation.project_id == project.id
-    key = ProjectCredential.objects.create(project=project, issued_by=resources.owner, name="Own cluster planner",
-        token_hash=token_hash("synthetic-scope-project-key"), scopes=["jobs:read"],
-        expires_at=timezone.now() + timedelta(days=1))
-    inventory = services.inventory(project, credential=key)
-    assert inventory["targets"][0]["project_id"] == str(project.id)
-    assert inventory["bindings"][0]["targets"]["data"] == str(target.id)
-    assert target.root not in str(inventory)
-    key.issued_by = resources.outsider
-    key.save(update_fields=["issued_by"])
-    assert services.inventory(project, credential=key)["targets"] == []
+    with pytest.raises(BrokerError) as denied:
+        enroll(resources, project=project)
+    assert denied.value.code == "SCOPE_DENIED"
+    assert not StorageTarget.objects.exists()
 
 
-def test_project_admin_does_not_gain_another_users_cluster(resources):
-    Membership.objects.create(project=resources.project, user=resources.outsider, roles=["project_admin"])
+def test_foreign_user_cannot_register_project_storage(resources):
     with pytest.raises(BrokerError) as denied:
         enroll(resources, user=resources.outsider)
-    assert denied.value.code == "STORAGE_TARGET_DENIED"
+    assert denied.value.code == "SCOPE_DENIED"
+
+
+@pytest.mark.parametrize("kind", ["target", "registration"])
+def test_database_rejects_removing_a_storage_locations_project(resources, kind):
+    if kind == "registration":
+        make_personal(resources)
+        record = queue(resources)
+    else:
+        record = enroll(resources)
+    with transaction.atomic():
+        with pytest.raises(IntegrityError):
+            type(record).objects.filter(id=record.id).update(project=None)
+    record.refresh_from_db()
+    assert record.project_id == resources.project.id
 
 
 def test_same_published_root_is_registered_per_project_with_a_shared_capacity_pool(resources):
@@ -175,72 +165,16 @@ def test_new_default_bindings_never_overwrite_existing_choices_or_budget(resourc
     assert all(getattr(budget, field) == value for field, value in before.items())
 
 
-def test_legacy_four_role_target_stays_current_and_only_explicit_reenrollment_adds_data(resources):
+def test_managed_target_roles_must_match_current_published_metadata(resources):
     target = enroll(resources)
     target.roles = [role for role in ROLES if role != "data"]
     target.save(update_fields=["roles"])
     ProjectStorageBinding.objects.filter(project=resources.project).update(data=None)
-    assert services.target_current(target)
-    assert services.inventory(resources.project)["bindings"][0]["targets"]["data"] is None
-    refreshed = enroll(resources)
-    assert refreshed.id == target.id and "data" in refreshed.roles
-    assert ProjectStorageBinding.objects.get(project=resources.project).data_id == target.id
-    assert AuditEvent.objects.filter(project=resources.project, action="storage.target_roles_refreshed").count() == 1
-
-
-def quarantine(target):
-    StorageTarget.objects.filter(id=target.id).update(project=None)
-    target.refresh_from_db()
-    return target
-
-
-def test_unassigned_legacy_target_is_hidden_until_explicit_owner_adoption(resources):
-    target = quarantine(enroll(resources))
     assert not services.target_current(target)
-    assert list(services.selected_targets(resources.project, resources.connection)) == []
     assert services.inventory(resources.project)["targets"] == []
     with pytest.raises(BrokerError) as denied:
-        services.reserve_estimate(resources.project, target, uuid4(), 1, 1)
-    assert denied.value.code == "STORAGE_TARGET_DENIED"
-    root, pool = target.root, target.pool_id
-    adopted = services.adopt_target(resources.owner, resources.project, target)
-    assert adopted.project_id == resources.project.id
-    assert adopted.root == root and adopted.pool_id == pool and services.target_current(adopted)
-    assert services.adopt_target(resources.owner, resources.project, adopted).id == target.id
-    assert AuditEvent.objects.filter(action="storage.target_adopted").count() == 1
-
-
-@pytest.mark.parametrize("reference", ["binding", "held_estimate", "released_estimate"])
-def test_adoption_never_moves_targets_with_another_projects_references(resources, reference):
-    target = quarantine(enroll(resources))
-    project = other_project(resources)
-    if reference == "binding":
-        ProjectStorageBinding.objects.create(project=project, connection=resources.connection, data=target)
-    else:
-        StorageEstimateReservation.objects.create(project=project, target=target, reference=uuid4(),
-            bytes_estimate=10, inodes_estimate=1, state="released" if reference == "released_estimate" else "held")
-    with pytest.raises(BrokerError) as denied:
-        services.adopt_target(resources.owner, resources.project, target)
-    assert denied.value.code == "STORAGE_TARGET_AMBIGUOUS"
-    target.refresh_from_db()
-    assert target.project_id is None
-
-
-def test_adoption_requires_location_owner_project_admin_and_assigned_cluster(resources):
-    target = quarantine(enroll(resources))
-    Membership.objects.create(project=resources.project, user=resources.outsider, roles=["project_admin"])
-    with pytest.raises(BrokerError) as denied:
-        services.adopt_target(resources.outsider, resources.project, target)
-    assert denied.value.code == "STORAGE_TARGET_DENIED"
-    project = Project.objects.create(owner=resources.outsider, name="No membership")
-    project.connections.add(resources.connection)
-    with pytest.raises(BrokerError) as denied:
-        services.adopt_target(resources.owner, project, target)
-    assert denied.value.code == "SCOPE_DENIED"
-    resources.project.connections.remove(resources.connection)
-    with pytest.raises(BrokerError) as denied:
-        services.adopt_target(resources.owner, resources.project, target)
-    assert denied.value.code == "STORAGE_TARGET_DENIED"
+        enroll(resources)
+    assert denied.value.code == "STORAGE_TARGET_STALE"
 
 
 def test_personal_registration_and_exact_receipt_belong_to_one_project(resources):
@@ -260,32 +194,25 @@ def test_personal_registration_and_exact_receipt_belong_to_one_project(resources
     assert services.target_current(target)
 
 
-@pytest.mark.parametrize("change", ["connection_removed", "project_role_removed", "legacy_registration"])
+@pytest.mark.parametrize("change", ["connection_removed", "project_owner_changed"])
 def test_personal_finish_rechecks_project_authority_after_worker_receipt(resources, change):
     make_personal(resources)
-    if change == "project_role_removed":
-        project = Project.objects.create(owner=resources.outsider, name="Member-managed project")
-        project.connections.add(resources.connection)
-        membership = Membership.objects.create(project=project, user=resources.owner, roles=["project_admin"])
-    else:
-        project = resources.project
+    project = resources.project
     registration = queue(resources, project=project)
     complete(registration)
     if change == "connection_removed":
         project.connections.remove(resources.connection)
-    elif change == "project_role_removed":
-        membership.delete()
     else:
-        registration.project = None
-        registration.save(update_fields=["project"])
+        project.owner = resources.outsider
+        project.save(update_fields=["owner"])
     with pytest.raises(BrokerError) as denied:
         services.finish_personal_target(resources.owner, registration, confirmed_root=registration.root)
-    assert denied.value.code in {"STORAGE_TARGET_DENIED", "SCOPE_DENIED", "STORAGE_PROJECT_REQUIRED"}
+    assert denied.value.code in {"STORAGE_TARGET_DENIED", "SCOPE_DENIED"}
     assert not StorageTarget.objects.exists()
 
 
 def test_detached_personal_registration_is_rejected_before_connector_locks(resources, monkeypatch):
-    from compute_broker.control import connector_setup
+    from compute_relay.control import connector_setup
     make_personal(resources)
     registration = queue(resources)
     complete(registration)
@@ -301,7 +228,7 @@ def test_detached_personal_registration_is_rejected_before_connector_locks(resou
 
 @pytest.mark.parametrize("operation", ["queue", "finish"])
 def test_assignment_removed_before_connector_lock_never_takes_an_additional_project_lock(resources, monkeypatch, operation):
-    from compute_broker.control import connector_setup
+    from compute_relay.control import connector_setup
     make_personal(resources)
     registration = queue(resources) if operation == "finish" else None
     if registration:
@@ -330,18 +257,3 @@ def test_assignment_removed_before_connector_lock_never_takes_an_additional_proj
     assert len(locks) == 1
     assert not StorageTarget.objects.exists()
     assert StorageTargetRegistration.objects.count() == (1 if registration else 0)
-
-
-def test_adoption_updates_personal_registration_without_changing_receipt_or_budget(resources):
-    make_personal(resources)
-    registration = queue(resources)
-    complete(registration)
-    target = services.finish_personal_target(resources.owner, registration, confirmed_root=registration.root)
-    quarantine(target)
-    StorageTargetRegistration.objects.filter(id=registration.id).update(project=None)
-    original_receipt = dict(registration.task.result)
-    adopted = services.adopt_target(resources.owner, resources.project, target)
-    registration.refresh_from_db()
-    assert registration.project_id == resources.project.id and services.target_current(adopted)
-    assert registration.task.result == original_receipt
-    assert not ProjectStorageBudget.objects.exists()

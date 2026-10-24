@@ -8,8 +8,8 @@ import sys
 
 import pytest
 
-from compute_broker.control.cluster_configuration import ClusterConfigurationForm
-from compute_broker.domain.cluster_configuration import (
+from compute_relay.control.cluster_configuration import ClusterConfigurationForm
+from compute_relay.domain.cluster_configuration import (
     ClusterConfigurationError, derive_cluster_configuration, validate_cluster_configuration,
 )
 from test_backends import sample, REVISION
@@ -122,11 +122,10 @@ def test_missing_and_malformed_discovery_remains_unknown_without_minimum_guesses
 
 def test_owner_limits_empty_allowlists_and_existing_verified_safety_are_not_overwritten(snapshot):
     current = {"maximum_cpus": 16, "accounts": [], "qos": [], "allocated_cpus": 8,
-        "allocated_gpus": 0, "termination_margin_seconds": 5, "overtime_margin_seconds": 0,
-        "cleanup_margin_seconds": 30, "automatic_execution_allowed": True}
+        "allocated_gpus": 0, "automatic_execution_allowed": True}
     original = deepcopy(current)
     result = derive_cluster_configuration(snapshot, current)
-    assert all(result["site_profile"][key] == value for key, value in current.items() if "margin_seconds" not in key)
+    assert all(result["site_profile"][key] == value for key, value in current.items())
     assert not any("margin_seconds" in key for key in result["site_profile"])
     assert current == original
     result["site_profile"]["accounts"].append("different")
@@ -140,23 +139,22 @@ def test_new_suggestion_cannot_contradict_retained_allocation_floor():
 
 
 def test_resource_discovery_prepares_without_timing_assumptions_but_preserves_review_gate(sample):
-    from compute_broker.backends import prepare
+    from compute_relay.backends import prepare
     request, environment, connection, _ = sample
     connection["backend"] = "slurm"
     connection["site_profile"] = derive_cluster_configuration({"nodes": [{"partition": "debug", "cpus": "4",
         "memory_mib": "8192", "gres": "(null)"}], "partitions": [{"PartitionName": "debug", "MaxTime": "01:00:00"}],
         "association_query_status": "available", "associations": [{"account": "broker"}]})["site_profile"]
     manifest = prepare(request, environment, connection, REVISION)["manifest"]
-    assert manifest["maximum_allocation"]["maximum_charge_duration_seconds"] == request["resources"]["time_limit_seconds"]
+    assert manifest["maximum_allocation"]["time_limit_seconds"] == request["resources"]["time_limit_seconds"]
     assert connection["site_profile"]["automatic_execution_allowed"] is False
 
 
 def test_verified_allocation_rounding_uses_scheduler_walltime_for_prepared_reservation(sample):
-    from compute_broker.backends import prepare
+    from compute_relay.backends import prepare
     request, environment, connection, _ = sample
     connection["backend"] = "slurm"
-    current = {"partitions": ["debug"], "accounts": ["broker"], "allocated_cpus": 4,
-        "termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30}
+    current = {"partitions": ["debug"], "accounts": ["broker"], "allocated_cpus": 4}
     connection["site_profile"] = derive_cluster_configuration({"nodes": [{"partition": "debug", "cpus": "32",
         "memory_mib": "8192", "gres": "(null)"}]}, current)["site_profile"]
     manifest = prepare(request, environment, connection, REVISION)["manifest"]
@@ -169,11 +167,11 @@ def test_domain_import_and_derivation_work_with_controller_and_django_imports_bl
     program = """import builtins
 original = builtins.__import__
 def checked(name, *args, **kwargs):
-    if name == 'django' or name.startswith('django.') or name.startswith('compute_broker.control'):
+    if name == 'django' or name.startswith('django.') or name.startswith('compute_relay.control'):
         raise AssertionError('controller dependency in worker configuration')
     return original(name, *args, **kwargs)
 builtins.__import__ = checked
-from compute_broker.domain.cluster_configuration import derive_cluster_configuration
+from compute_relay.domain.cluster_configuration import derive_cluster_configuration
 assert derive_cluster_configuration({})['site_profile']['automatic_execution_allowed'] is False
 """
     result = subprocess.run([sys.executable, "-c", program], env={"PYTHONPATH": str(source), "PATH": os.defpath},
@@ -187,7 +185,7 @@ def test_form_uses_maximal_missing_defaults_and_preserves_auto_review(snapshot):
     assert form.initial["maximum_gpus"] == 8
     assert form.initial["partitions"] == "cpu, gpu"
     form = ClusterConfigurationForm(form_data(automatic_execution_allowed=True, allocated_cpus=1),
-        snapshot=snapshot, current_profile={"automatic_execution_allowed": False, "cleanup_margin_seconds": 30})
+        snapshot=snapshot, current_profile={"automatic_execution_allowed": False})
     assert form.is_valid(), form.errors
     profile = form.site_profile()
     assert profile["automatic_execution_allowed"] is False and "cleanup_margin_seconds" not in profile
@@ -196,8 +194,7 @@ def test_form_uses_maximal_missing_defaults_and_preserves_auto_review(snapshot):
 
 def test_form_keeps_checked_automatic_setting_and_does_not_edit_verified_floor(snapshot):
     form = ClusterConfigurationForm(form_data(allow_automatic_execution=True), snapshot=snapshot,
-        current_profile={"automatic_execution_allowed": True, "allocated_cpus": 8,
-            "termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30})
+        current_profile={"automatic_execution_allowed": True, "allocated_cpus": 8})
     assert form.is_valid(), form.errors
     assert form.site_profile()["automatic_execution_allowed"] is True
     lower = ClusterConfigurationForm(form_data(maximum_cpus=4), snapshot=snapshot, current_profile={"allocated_cpus": 8})
@@ -255,12 +252,6 @@ def test_unknown_facts_require_explicit_owner_values_and_allow_manual_safe_names
     assert "cleanup_margin_seconds" not in result and "allocated_cpus" not in result
 
 
-def test_scheduler_timing_facts_are_not_configuration_fields_or_defaults(snapshot):
-    snapshot["timing_candidates"] = {"cpu": {"termination_margin_seconds": 5, "overtime_margin_seconds": 0},
-        "gpu": {"termination_margin_seconds": 30, "overtime_margin_seconds": 120, "cleanup_margin_seconds": 0}}
-    form = ClusterConfigurationForm(snapshot=snapshot)
-    for field in ["termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"]:
-        assert field not in form.fields and field not in form.initial
 
 
 def test_cluster_configuration_accepts_resources_without_separate_timing_fields(snapshot):
@@ -269,30 +260,10 @@ def test_cluster_configuration_accepts_resources_without_separate_timing_fields(
     assert not any("margin_seconds" in field for field in form.site_profile())
 
 
-def test_legacy_timing_is_removed_without_changing_explicit_automatic_flag(snapshot):
-    current = {"termination_margin_seconds": 5, "overtime_margin_seconds": 0, "cleanup_margin_seconds": 30,
-        "automatic_execution_allowed": True}
-    retained = ClusterConfigurationForm(form_data(allow_automatic_execution=True), snapshot=snapshot, current_profile=current)
-    assert retained.is_valid(), retained.errors
-    assert retained.site_profile()["automatic_execution_allowed"] is True
-    assert not any("margin_seconds" in field for field in retained.site_profile())
-    changed = ClusterConfigurationForm(form_data(cleanup_margin_seconds=0, allow_automatic_execution=True), snapshot=snapshot, current_profile=current)
-    assert changed.is_valid(), changed.errors
-    assert changed.site_profile()["automatic_execution_allowed"] is True
 
 
-@pytest.mark.parametrize("field,value", [("termination_margin_seconds", -1), ("overtime_margin_seconds", 604801),
-    ("cleanup_margin_seconds", ""), ("cleanup_margin_seconds", "infinite")])
-def test_legacy_timing_post_fields_do_not_affect_configuration(snapshot, field, value):
-    form = ClusterConfigurationForm(form_data(**{field: value}), snapshot=snapshot)
-    assert form.is_valid(), form.errors
-    assert field not in form.site_profile()
 
 
-def test_legacy_margin_payload_does_not_change_supported_walltime(snapshot):
-    form = ClusterConfigurationForm(form_data(termination_margin_seconds=604800, cleanup_margin_seconds=604800), snapshot=snapshot)
-    assert form.is_valid(), form.errors
-    assert form.site_profile()["maximum_time_limit_seconds"] == 172800
 
 
 @pytest.mark.parametrize("profile", [{"maximum_cpus": True}, {"maximum_memory_mib": 2**53},
@@ -300,3 +271,9 @@ def test_legacy_margin_payload_does_not_change_supported_walltime(snapshot):
 def test_pure_validation_rejects_noncanonical_or_unsupported_values(profile):
     with pytest.raises(ClusterConfigurationError):
         validate_cluster_configuration(profile, require_limits=False)
+
+
+@pytest.mark.parametrize("field", ["termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds", "unsupported_limit"])
+def test_profile_rejects_unknown_settings_instead_of_silently_rewriting_them(field):
+    with pytest.raises(ClusterConfigurationError, match="unsupported"):
+        validate_cluster_configuration({field: 30}, require_limits=False)

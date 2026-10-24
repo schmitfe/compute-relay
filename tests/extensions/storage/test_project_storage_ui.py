@@ -5,9 +5,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from django.test import Client
 
-from compute_broker.control.models import ConnectorTask, Membership, Project
-from compute_broker.extensions.storage import services
-from compute_broker.extensions.storage.models import ProjectStorageBinding, StorageTarget, StorageTargetRegistration
+from compute_relay.control.models import ConnectorTask, Project
+from compute_relay.extensions.storage import services
+from compute_relay.extensions.storage.models import StorageTarget, StorageTargetRegistration
 from test_personal_storage_targets import complete, document, personal, queue, target_path
 from test_storage_control import enroll
 
@@ -24,15 +24,6 @@ def other_project(resources, *, owner=None, name="Second storage project"):
     return project
 
 
-def legacy_target(resources, *, name="Legacy data"):
-    target = enroll(resources)
-    ProjectStorageBinding.objects.filter(project=resources.project).delete()
-    target.project = None
-    target.name = name
-    target.save(update_fields=["project", "name"])
-    return target
-
-
 def test_global_overview_is_a_project_chooser_without_remote_paths(resources):
     enroll(resources)
     foreign = other_project(resources, owner=resources.outsider, name="Hidden foreign project")
@@ -46,15 +37,14 @@ def test_global_overview_is_a_project_chooser_without_remote_paths(resources):
     assert b"1 location" in response.content
 
 
-def test_legacy_enrollment_navigation_requires_an_explicit_project(resources):
+def test_creation_and_directory_operations_require_project_routes(resources):
     client = human(resources.owner)
-    assert client.get("/storage/targets/new/").url == "/storage/targets/"
-    response = client.get(f"/storage/targets/new/?project={resources.project.id}&connection={resources.connection.id}")
-    assert response.url == target_path(resources, f"new/?connection={resources.connection.id}")
+    assert client.get("/storage/targets/new/").status_code == 404
+    assert client.get(f"/storage/targets/new/?project={resources.project.id}&connection={resources.connection.id}").status_code == 404
+    assert client.get(f"/storage/targets/directories/{resources.connection.id}/").status_code == 404
     response = client.post("/storage/targets/new/", {"name": "Unscoped", "connection": resources.connection.id,
         "root_alias": "staging-root-0"})
-    assert response.status_code == 400
-    assert b"STORAGE_PROJECT_REQUIRED" in response.content
+    assert response.status_code == 404
     assert not ConnectorTask.objects.exists() and not StorageTarget.objects.exists()
 
 
@@ -94,13 +84,12 @@ def test_unassigned_cluster_is_hidden_and_cannot_queue_browser_work(personal):
     assert not ConnectorTask.objects.exists()
 
 
-def test_project_admin_cannot_use_another_members_ssh_identity(personal):
-    Membership.objects.create(project=personal.project, user=personal.outsider, roles=["project_admin"])
+def test_foreign_account_cannot_use_another_owners_ssh_identity(personal):
     client = human(personal.outsider)
     page = client.get(target_path(personal, f"new/?connection={personal.connection.id}"))
-    assert page.status_code == 200 and personal.connection.name.encode() not in page.content
+    assert page.status_code == 403 and personal.connection.name.encode() not in page.content
     assert client.post(target_path(personal, f"directories/{personal.connection.id}/"),
-        {"path": "/scratch", "connection_revision": personal.connection.revision_sha256}).status_code == 404
+        {"path": "/scratch", "connection_revision": personal.connection.revision_sha256}).status_code == 403
     assert not ConnectorTask.objects.exists()
 
 
@@ -136,46 +125,4 @@ def test_registration_receipt_cannot_be_confirmed_in_another_project(personal):
     registration.refresh_from_db()
     assert registration.project_id == personal.project.id and not registration.target_id
     assert not StorageTarget.objects.exists()
-    legacy = personal.human.get(f"/storage/targets/registrations/{registration.id}/")
-    assert legacy.url == target_path(personal, f"registrations/{registration.id}/")
-
-
-def test_shared_project_admin_can_adopt_their_own_assigned_cluster_location(resources):
-    target = legacy_target(resources)
-    shared = other_project(resources, owner=resources.outsider, name="Shared research")
-    Membership.objects.create(project=shared, user=resources.owner, roles=["project_admin"])
-    client = human(resources.owner)
-    response = client.get(f"/projects/{shared.id}/storage/")
-    assert target.name.encode() in response.content
-    response = client.post(f"/projects/{shared.id}/storage/targets/{target.id}/adopt/")
-    assert response.status_code == 302 and response.url == f"/projects/{shared.id}/storage/"
-    target.refresh_from_db()
-    assert target.project_id == shared.id
-    binding = ProjectStorageBinding.objects.get(project=shared, connection=resources.connection)
-    assert binding.data_id == binding.results_id == target.id
-
-
-def test_legacy_adoption_is_post_csrf_protected_and_rejects_other_project_references(resources):
-    target = legacy_target(resources)
-    other = other_project(resources)
-    ProjectStorageBinding.objects.create(project=other, connection=resources.connection, data=target)
-    path = f"/projects/{resources.project.id}/storage/targets/{target.id}/adopt/"
-    client = human(resources.owner, csrf=True)
-    assert client.get(path).status_code == 405
-    assert client.post(path).status_code == 403
-    client.get(f"/projects/{resources.project.id}/storage/")
-    response = client.post(path, HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value)
-    assert response.status_code == 409 and b"references to another project" in response.content
-    target.refresh_from_db()
-    assert target.project_id is None
-
-
-def test_legacy_claim_list_hides_targets_on_unassigned_clusters(resources):
-    target = legacy_target(resources)
-    resources.project.connections.clear()
-    response = human(resources.owner).get(f"/projects/{resources.project.id}/storage/")
-    assert response.status_code == 200 and target.name.encode() not in response.content
-    assert human(resources.owner).post(
-        f"/projects/{resources.project.id}/storage/targets/{target.id}/adopt/").status_code == 403
-    target.refresh_from_db()
-    assert target.project_id is None
+    assert personal.human.get(f"/storage/targets/registrations/{registration.id}/").status_code == 404

@@ -16,16 +16,16 @@ from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.backends import verify_package
-from compute_broker.control import services
-from compute_broker.control.auth import token_hash
-from compute_broker.control.errors import BrokerError
-from compute_broker.control.models import (
+from compute_relay.backends import verify_package
+from compute_relay.control import services
+from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import (
     ApprovalDecision, Artifact, Attempt, Blob, Connection, Environment,
     ExecutionRequest, Grant, Job, LedgerEntry, Project, ProjectCredential,
     StoragePool, UploadReservation, User, WorkerIdentity,
 )
-from compute_broker.control.storage import read_blob, store_blob
+from compute_relay.control.storage import read_blob, store_blob
 
 
 @pytest.fixture
@@ -35,7 +35,8 @@ def broker(db, settings, tmp_path):
     outsider = User.objects.create_user(username="outsider", password=None)
     worker = WorkerIdentity.objects.create(owner=owner, name="synthetic-worker", token_hash=token_hash("synthetic-worker-token"))
     connection = Connection.objects.create(owner=owner, worker=worker, name="fake", backend="fake",
-                                           configuration={"state_directory": str(tmp_path / "fake")},
+                                           configuration={"state_directory": str(tmp_path / "fake"),
+                                               "site_profile": {"automatic_execution_allowed": True}},
                                            revision_sha256="c" * 64)
     environment = Environment.objects.create(name="python", owner=owner, connection=connection,
                                               configuration={"interpreter": "/usr/bin/python3"},
@@ -53,7 +54,7 @@ def broker(db, settings, tmp_path):
               "allowed_environment_revision_sha256": [environment.revision_sha256],
               "allowed_gpu_types": ["a100"], "per_job_limits": {
                   "cpu_cores": 8, "gpu_devices": 1, "memory_mib": 512,
-                  "time_limit_seconds": 3600, "maximum_charge_duration_seconds": 3600},
+                  "time_limit_seconds": 3600},
               "max_active_jobs": 100,
               "allowance": {"cpu_core_seconds": 10000, "gpu_device_seconds": 10000},
               "admission_expires_at": (timezone.now() + timedelta(days=1)).isoformat()}
@@ -456,7 +457,7 @@ def test_global_quota_applies_across_projects(broker, settings):
 
 
 def test_failed_disk_write_releases_persistent_upload_reservation(broker):
-    with patch("compute_broker.control.storage.tempfile.mkstemp", side_effect=OSError("synthetic disk failure")):
+    with patch("compute_relay.control.storage.tempfile.mkstemp", side_effect=OSError("synthetic disk failure")):
         with pytest.raises(OSError):
             store_blob(broker.project, b"source")
     broker.project.refresh_from_db()
@@ -519,22 +520,22 @@ from threading import Barrier
 from django.core.management import call_command
 from django.db import close_old_connections, transaction
 from django.utils import timezone
-from compute_broker.control.models import *
-from compute_broker.control.auth import token_hash
-from compute_broker.control import services
-from compute_broker.control.errors import BrokerError
+from compute_relay.control.models import *
+from compute_relay.control.auth import token_hash
+from compute_relay.control import services
+from compute_relay.control.errors import BrokerError
 call_command("migrate", run_syncdb=True, verbosity=0)
 owner=User.objects.create_user(username="isolated", password=None)
 worker=WorkerIdentity.objects.create(owner=owner,name="fake",token_hash=token_hash("synthetic-worker"))
-connection=Connection.objects.create(owner=owner,worker=worker,name="fake",backend="fake",configuration={},revision_sha256="c"*64)
+connection=Connection.objects.create(owner=owner,worker=worker,name="fake",backend="fake",configuration={"site_profile":{"automatic_execution_allowed":True}},revision_sha256="c"*64)
 environment=Environment.objects.create(owner=owner,connection=connection,name="fake Python",configuration={},revision_sha256="e"*64)
 project=Project.objects.create(owner=owner,name="race")
 project.connections.add(connection)
 project.environments.add(environment)
 credential=ProjectCredential.objects.create(project=project, issued_by=project.owner,name="agent",prefix="fake",token_hash=token_hash("synthetic-project"),scopes=["jobs:submit"],expires_at=timezone.now()+timedelta(days=1))
-policy={"schema_version":"1.0","project_id":str(project.id),"revision":1,"mode":"budgeted","allowed_connection_ids":[str(connection.id)],"allowed_environment_revision_sha256":["e"*64],"allowed_gpu_types":[],"per_job_limits":{"cpu_cores":1,"gpu_devices":0,"memory_mib":128,"time_limit_seconds":60,"maximum_charge_duration_seconds":60},"max_active_jobs":100,"allowance":{"cpu_core_seconds":180,"gpu_device_seconds":0},"admission_expires_at":(timezone.now()+timedelta(days=1)).isoformat()}
+policy={"schema_version":"1.0","project_id":str(project.id),"revision":1,"mode":"budgeted","allowed_connection_ids":[str(connection.id)],"allowed_environment_revision_sha256":["e"*64],"allowed_gpu_types":[],"per_job_limits":{"cpu_cores":1,"gpu_devices":0,"memory_mib":128,"time_limit_seconds":60},"max_active_jobs":100,"allowance":{"cpu_core_seconds":180,"gpu_device_seconds":0},"admission_expires_at":(timezone.now()+timedelta(days=1)).isoformat()}
 grant=Grant.objects.create(project=project,policy=policy)
-job=Job.objects.create(project=project,credential=credential,request={"connection_id":str(connection.id),"environment":{"id":str(environment.id),"revision_sha256":"e"*64},"resources":{"cpus":1,"gpus":0,"memory_mib":128}},manifest={"connection_revision_sha256":"c"*64,"maximum_allocation":{"cpu_cores":1,"gpu_devices":0,"time_limit_seconds":60,"maximum_charge_duration_seconds":60},"reservation":{"cpu_core_seconds":60,"gpu_device_seconds":0}},manifest_sha256="f"*64)
+job=Job.objects.create(project=project,credential=credential,request={"connection_id":str(connection.id),"environment":{"id":str(environment.id),"revision_sha256":"e"*64},"resources":{"cpus":1,"gpus":0,"memory_mib":128}},manifest={"connection_revision_sha256":"c"*64,"maximum_allocation":{"cpu_cores":1,"gpu_devices":0,"time_limit_seconds":60},"reservation":{"cpu_core_seconds":60,"gpu_device_seconds":0}},manifest_sha256="f"*64)
 barrier=Barrier(6)
 def reserve(index):
     close_old_connections()
@@ -556,10 +557,10 @@ assert grant.reserved_cpu==180 and Attempt.objects.count()==3
 assert LedgerEntry.objects.filter(action="reserve").count()==3
 print(json.dumps({"authorized":3,"reserved_cpu":grant.reserved_cpu}))
 '''
-    environment = dict(os.environ, DJANGO_SETTINGS_MODULE="compute_broker.control.settings",
+    environment = dict(os.environ, DJANGO_SETTINGS_MODULE="compute_relay.control.settings",
                        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
                        BROKER_DB_ENGINE="sqlite", BROKER_DATA_DIR=str(tmp_path / "service"), BROKER_DB_PATH=str(tmp_path / "race.sqlite3"),
-                       BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"), BROKER_PROFILE="development")
+                       BROKER_ARTIFACT_ROOT=str(tmp_path / "objects"), BROKER_PROFILE="local")
     result = subprocess.run([sys.executable, "-c", script], env=environment,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr

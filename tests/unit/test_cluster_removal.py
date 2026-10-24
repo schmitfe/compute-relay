@@ -9,9 +9,9 @@ from django.test import Client
 from django.urls import include, path
 from django.utils import timezone
 
-from compute_broker.control import cluster_removal
-from compute_broker.control.auth import token_hash
-from compute_broker.control.models import (Artifact, Attempt, AuditEvent, ClusterRegistration,
+from compute_relay.control import cluster_removal
+from compute_relay.control.auth import token_hash
+from compute_relay.control.models import (Artifact, Attempt, AuditEvent, ClusterRegistration,
     Connection, ConnectorEnrollment, ExecutionRequest, Job, User, WorkerIdentity)
 from test_management import management, prepared
 
@@ -19,7 +19,7 @@ from test_management import management, prepared
 urlpatterns = [
     path("clusters/setup/<uuid:registration_id>/remove/", cluster_removal.registration),
     path("clusters/<uuid:connection_id>/remove/", cluster_removal.connection),
-    path("", include("compute_broker.control.urls")),
+    path("", include("compute_relay.control.urls")),
 ]
 
 
@@ -114,7 +114,7 @@ def test_bound_removal_archives_both_and_revokes_exclusive_personal_worker(manag
     assert AuditEvent.objects.filter(action="cluster.removed").count() == 1
 
 
-def test_legacy_service_worker_is_never_revoked_by_configuration_removal(management):
+def test_shared_fixture_worker_is_never_revoked_by_one_configuration_removal(management):
     context = management;linked = context.connections[0]
     context.connections[1].archived = True;context.connections[1].save()
     context.foreign.archived = True;context.foreign.save()
@@ -207,7 +207,7 @@ def test_only_owner_human_can_confirm_with_csrf(management):
 
 def test_get_and_post_require_current_owner_authority(management, monkeypatch):
     context = management;linked = context.connections[0];client = human(context.owner)
-    monkeypatch.setattr(cluster_removal, "cached_user_active", lambda user: False)
+    monkeypatch.setattr(cluster_removal, "current_user_active", lambda user: False)
     assert client.get(f"/clusters/{linked.id}/remove/").status_code == 403
     assert client.post(f"/clusters/{linked.id}/remove/", fences(connection=linked)).status_code == 403
     linked.refresh_from_db();assert not linked.archived
@@ -215,7 +215,7 @@ def test_get_and_post_require_current_owner_authority(management, monkeypatch):
 
 def test_owner_authority_is_rechecked_inside_removal_transaction(management, monkeypatch):
     context = management;linked = context.connections[0];checks = iter([True, False])
-    monkeypatch.setattr(cluster_removal, "cached_user_active", lambda user: next(checks))
+    monkeypatch.setattr(cluster_removal, "current_user_active", lambda user: next(checks))
     response = human(context.owner).post(f"/clusters/{linked.id}/remove/", fences(connection=linked))
     assert response.status_code == 403
     linked.refresh_from_db();assert not linked.archived

@@ -8,17 +8,16 @@ from datetime import timedelta
 from html.parser import HTMLParser
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django import forms
 from django.test import Client
 from django.utils import timezone
 
-from compute_broker.control import services
-from compute_broker.control.auth import token_hash
-from compute_broker.control.forms import EnvironmentForm, ProjectForm
-from compute_broker.control.models import Connection, Environment, Grant, Project, User, WorkerIdentity
+from compute_relay.control import services
+from compute_relay.control.auth import token_hash
+from compute_relay.control.forms import EnvironmentForm, ProjectForm
+from compute_relay.control.models import Connection, Environment, Grant, Project, User, WorkerIdentity
 
 
 @pytest.fixture
@@ -57,7 +56,6 @@ def catalog(db, monkeypatch):
     first_env = environment("Atlas Python recipe", first)
     second_env = environment("Borealis Python recipe", second)
     foreign_env = environment("Private outsider Python recipe", foreign, user=outsider)
-    legacy = environment("Unbound legacy Python recipe", None)
     project = Project.objects.create(owner=owner, name="Catalog scoped project")
     project.connections.add(first)
     project.environments.add(first_env)
@@ -65,12 +63,12 @@ def catalog(db, monkeypatch):
               "allowed_connection_ids": [str(first.id)], "allowed_environment_revision_sha256": [first_env.revision_sha256],
               "allowed_gpu_types": [], "max_active_jobs": 2, "max_total_jobs": 1000,
               "per_job_limits": {"cpu_cores": 4, "gpu_devices": 0, "memory_mib": 8192,
-                                 "time_limit_seconds": 300, "maximum_charge_duration_seconds": 360},
+                                 "time_limit_seconds": 300},
               "allowance": {"cpu_core_seconds": 7200, "gpu_device_seconds": 0},
               "admission_expires_at": (timezone.now() + timedelta(days=3)).isoformat()}
     Grant.objects.create(project=project, policy=policy)
     return SimpleNamespace(owner=owner, outsider=outsider, worker=worker, first=first, second=second, foreign=foreign,
-                           first_env=first_env, second_env=second_env, foreign_env=foreign_env, legacy=legacy,
+                           first_env=first_env, second_env=second_env, foreign_env=foreign_env,
                            project=project, observed=observed)
 
 
@@ -122,10 +120,6 @@ def test_cluster_catalog_link_preselects_one_exact_module_without_loading_it(cat
     assert Environment.objects.filter(connection=context.first).count() == 1
 
 
-@pytest.mark.parametrize("path", ["/environments/", "/environments/new/"])
-def test_unscoped_legacy_pages_redirect_to_cluster_tree(catalog, path):
-    page = human(catalog.owner).get(path, {"kind": "modules"})
-    assert page.status_code == 302 and page.url == "/clusters/"
 
 
 def test_selecting_a_second_owned_cluster_creates_its_own_catalog_recipe(catalog):
@@ -232,7 +226,7 @@ def test_page_get_preserves_saved_snapshot_and_does_not_enqueue_or_execute_disco
         "discovery_state", "discovery_generation", "discovery_lease_id", "discovery_lease_expires_at", "discovery_snapshot")}
     owner = human(context.owner)
     with patch("subprocess.run", side_effect=AssertionError("page refresh must not start SSH")), \
-         patch("compute_broker.control.cluster_services.lease_discovery", side_effect=AssertionError("GET must not acquire a discovery lease")):
+         patch("compute_relay.control.cluster_services.lease_discovery", side_effect=AssertionError("GET must not acquire a discovery lease")):
         for path in (f"/clusters/{context.first.id}/", f"/clusters/{context.first.id}/environments/new/?kind=modules"):
             assert owner.get(path).status_code == 200
     context.first.refresh_from_db()
@@ -261,7 +255,7 @@ def test_canonical_environment_list_shows_only_its_cluster_recipes(catalog):
     page = human(context.owner).get(f"/clusters/{context.first.id}/environments/")
     assert page.status_code == 200
     assert context.first_env.name.encode() in page.content
-    for recipe in (context.second_env, context.foreign_env, context.legacy):
+    for recipe in (context.second_env, context.foreign_env):
         assert recipe.name.encode() not in page.content
     other = human(context.owner).get(f"/clusters/{context.foreign.id}/environments/")
     assert other.status_code == 404
@@ -320,27 +314,13 @@ def test_canonical_creation_rejects_conflicting_or_ambiguous_post_cluster(catalo
     assert Environment.objects.count() == count
 
 
-@pytest.mark.parametrize("suffix", ["", "new/"])
-def test_legacy_contextual_get_redirects_owned_cluster_into_canonical_tree(catalog, suffix):
-    context = catalog
-    response = human(context.owner).get("/environments/" + suffix, {
-        "connection": str(context.first.id), "kind": "modules", "module": "CUDA/12.4",
-        "interpreter": "python3", "prefix": "/opt/venvs/one", "token": "SYNTHETIC_DROP_SENTINEL", "next": "https://outside.invalid"})
-    assert response.status_code == 302
-    location = urlsplit(response.url)
-    assert not location.scheme and not location.netloc
-    assert location.path == f"/clusters/{context.first.id}/environments/" + suffix
-    expected = {"kind": ["modules"], "module": ["CUDA/12.4"], "interpreter": ["python3"], "prefix": ["/opt/venvs/one"]} if suffix else {}
-    assert parse_qs(location.query) == expected
-    assert "SYNTHETIC_DROP_SENTINEL" not in response.url
 
 
-@pytest.mark.parametrize("path_kind", ["canonical_list", "canonical_create", "legacy_list", "legacy_create"])
+@pytest.mark.parametrize("path_kind", ["canonical_list", "canonical_create"])
 def test_foreign_cluster_environment_routes_return_404(catalog, path_kind):
     context = catalog
     paths = {"canonical_list": f"/clusters/{context.foreign.id}/environments/",
-             "canonical_create": f"/clusters/{context.foreign.id}/environments/new/",
-             "legacy_list": "/environments/", "legacy_create": "/environments/new/"}
+             "canonical_create": f"/clusters/{context.foreign.id}/environments/new/"}
     owner = human(context.owner)
     response = owner.get(paths[path_kind], {"connection": str(context.foreign.id)})
     assert response.status_code == 404
@@ -349,13 +329,6 @@ def test_foreign_cluster_environment_routes_return_404(catalog, path_kind):
         assert post(owner, paths[path_kind], module_data(context, connection=str(context.foreign.id))).status_code == 404
 
 
-def test_legacy_post_cannot_create_or_forward_a_recipe(catalog):
-    context = catalog
-    count = Environment.objects.count()
-    response = post(human(context.owner), "/environments/new/", module_data(context))
-    assert response.status_code == 405
-    assert "Location" not in response
-    assert Environment.objects.count() == count
 
 
 def test_versioned_system_initializer_from_selected_cluster_snapshot_can_be_saved(catalog):
@@ -387,7 +360,7 @@ def test_invalid_or_foreign_snapshot_initializer_cannot_expand_selected_clusters
     assert Environment.objects.count() == count
 
 
-def test_new_project_form_excludes_foreign_and_unbound_environment_recipes(catalog):
+def test_new_project_form_excludes_foreign_environment_recipes(catalog):
     context = catalog
     form = ProjectForm(user=context.owner)
     selectable = set(form.fields["environments"].queryset.values_list("id", flat=True))
@@ -404,8 +377,8 @@ def test_existing_project_get_offers_only_environments_for_its_selected_clusters
     assert selectable == {context.first_env.id}
 
 
-@pytest.mark.parametrize("choice", ["second_env", "foreign_env", "legacy"])
-def test_project_post_rejects_environment_from_unselected_foreign_or_unbound_cluster(catalog, choice):
+@pytest.mark.parametrize("choice", ["second_env", "foreign_env"])
+def test_project_post_rejects_environment_from_unselected_or_foreign_cluster(catalog, choice):
     context = catalog
     recipe = getattr(context, choice)
     before = Grant.objects.get(project=context.project).policy

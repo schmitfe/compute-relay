@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from compute_broker.remote import connector_setup as setup
+from compute_relay.remote import connector_setup as setup
 
 
 @pytest.fixture(autouse=True)

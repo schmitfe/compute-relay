@@ -1,0 +1,5 @@
+{% extends "broker/base.html" %}{% block content %}
+<h1>Open your compute workspace</h1><p>Project API keys are for agent requests.</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if password_free %}<p>Open this workspace using the local address shown by the application.</p>{% else %}<form method="post">{% csrf_token %}<label>Username <input name="username" autocomplete="username" maxlength="150" required></label><label>Password <input name="password" type="password" autocomplete="current-password" maxlength="4096" required></label><button>Sign in</button></form>{% endif %}
+{% endblock %}

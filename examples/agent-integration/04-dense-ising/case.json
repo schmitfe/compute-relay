@@ -13,7 +13,7 @@
     "output_bytes_per_job": 524288,
     "upload_bytes_per_job_max": 262144,
     "log_bytes_per_job_max": 65536,
-    "maximum_charge_duration_seconds_source": "prepared manifest; verify current grant before every admission"
+    "requested_walltime_source": "requested scheduler walltime; verify current grant before every admission"
   },
   "required_core_tools": [
     "get_broker_capabilities",

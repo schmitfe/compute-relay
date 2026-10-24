@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import pytest
 from django.utils import timezone
 
-from compute_broker.control.auth import token_hash
-from compute_broker.control.models import Connection, Project, ProjectCredential, User, WorkerIdentity
+from compute_relay.control.auth import token_hash
+from compute_relay.control.models import Connection, Project, ProjectCredential, User, WorkerIdentity
 
 
 @pytest.fixture

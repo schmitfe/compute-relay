@@ -14,7 +14,7 @@ material or acceptance artifacts containing private host details.
 ## Development checks
 
 Use Python 3.12 or 3.13 in a virtual environment, then install the locked test
-dependencies with `python -m pip install -c requirements.lock '.[test,mcp]'`.
+dependencies with `python -m pip install -c requirements.lock '.[test]'`.
 Run `python -m pytest -q`, `python tools/check_contracts.py`, and
 `python tools/local_smoke.py --management`. The ordinary suite uses temporary
 databases and tiny synthetic workloads. It does not contact a real cluster.
@@ -29,7 +29,7 @@ explicit operator workflow with a separately reviewed grant and job package.
 ## Module boundaries
 
 New optional capabilities belong in a separate app under
-`src/compute_broker/extensions/`, with its own models, migrations, validators,
+`src/compute_relay/extensions/`, with its own models, migrations, validators,
 worker adapter, API, portal, tests and scope metadata. Defaults remain disabled.
 Follow [the lifecycle contract](docs/extensions.md) and
 [the boundary checklist](docs/module-boundaries.md). Make core changes only for
