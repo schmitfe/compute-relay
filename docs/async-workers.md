@@ -25,6 +25,9 @@ protocol and original immutable package instead. Remote management additionally
 requires the original journal manifest digest, embedded manifest, exact native
 identity and derived attempt directory. Discovery has its own deterministic
 stdlib bundle and cannot change the execution identity with a catalog-only edit.
+Components declare their own imports; the fixed linker checks provider exports
+and dependency cycles before assembling a deterministic program. Both worker
+adapters select implementations through the same trusted backend registry.
 
 The launcher passes its selected bundled module names through connector startup.
 The worker advertises only those modules and imports implementations only from

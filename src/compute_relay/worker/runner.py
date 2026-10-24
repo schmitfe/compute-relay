@@ -31,13 +31,8 @@ class Worker:
 
     @staticmethod
     def _backend(connection):
-        from compute_relay.backends import FakeBackend, SlurmBackend
-        kind = connection.get("backend", "slurm")
-        if kind == "fake":
-            return FakeBackend(connection)
-        if kind == "slurm":
-            return SlurmBackend(connection)
-        raise ValueError("unsupported configured backend")
+        from compute_relay.backends import create_backend
+        return create_backend(connection)
 
     def poll_once(self) -> bool:
         self.replay_pending_reports()

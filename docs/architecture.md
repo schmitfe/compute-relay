@@ -42,6 +42,42 @@ tables directly. The official MCP stdio process has a project credential; it
 receives no SSH key or MFA response. No Redis, Celery, directory service or
 separate database is required.
 
+## Backend registration and remote components
+
+Workers select their implementation through `backends/registry.py`. Its explicit
+registrations pair an identifier with synchronous and optional asynchronous
+factories. The registry rejects duplicate definitions and keeps the factory map
+read-only. Configuration selects a registered identifier; it cannot supply an
+import path, discover installed entry points or register code through an API.
+The current entries are the synchronous simulation and Slurm implementations,
+with a native asynchronous implementation for Slurm.
+
+This centralizes construction without making backend registration an execution
+permission. A future scheduler also needs reviewed configuration validation,
+preparation, immutable identity and reconciliation rules, accounting, discovery,
+and tests. Slurm-specific checks and simulation-specific behavior remain in
+their implementations. Import-time self-registration would add ordering and
+startup side effects without removing these requirements, so registration stays
+explicit in one bootstrap table.
+
+Remote helper components are normal Python modules with their own standard-
+library and relative imports. Shared constants live in `remote/prelude.py`;
+bounded software probes live in `remote/probes.py`, avoiding a cycle between
+catalog and environment discovery. `remote/bundles.py` reads only its fixed
+installed component allowlist, checks imported providers/exports, rejects cycles,
+and links components in deterministic dependency order. It removes only the
+declared first-party import statements from the transmitted program; standard-
+library imports remain explicit. The generated dispatcher is passed to the
+entrypoint as an argument.
+
+The remote program still requires only the standard library and runs under the
+isolated interpreter. It never imports the broker package, project files or a
+module selected by a request on the cluster. Component declarations can be
+reordered without changing bundle bytes. Discovery keeps its separate bundle.
+Changing execution-helper source requires a new prepared revision for subsequent
+submission; compatible management of existing attempts retains its original
+identity checks.
+
 ## Authority
 
 The owner controls all local projects. A project's agent keys have explicit

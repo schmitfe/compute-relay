@@ -34,10 +34,8 @@ class AsyncWorker(Worker):
 
     @staticmethod
     def _backend(connection):
-        from compute_relay.backends.async_slurm import AsyncSlurmBackend
-        if connection.get("backend", "slurm") != "slurm":
-            raise ValueError("Async worker supports the Slurm backend only")
-        return AsyncSlurmBackend(connection)
+        from compute_relay.backends import create_backend
+        return create_backend(connection, asynchronous=True)
 
     async def poll_once(self):
         return await self.scheduler.run(self.owner_id, self._poll_once)
