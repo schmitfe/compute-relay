@@ -11,7 +11,7 @@ from uuid import UUID
 
 MAX_LOG_BYTES = 16384
 _SAFE_INT = 2**53 - 1
-_STATES = {"authorized", "queued", "running", "submission_uncertain", "cancel_requested", "succeeded", "failed", "cancelled", "expired", "unknown"}
+_STATES = {"authorized", "queued", "running", "submission_uncertain", "cancel_requested", "cancel_pending", "succeeded", "failed", "cancelled", "expired", "unknown"}
 _NATIVE_STATES = {"PENDING", "CONFIGURING", "REQUEUED", "REQUEUE_HOLD", "RESV_DEL_HOLD", "RUNNING", "COMPLETING",
     "SUSPENDED", "STAGE_OUT", "STOPPED", "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY",
     "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "REVOKED", "PREEMPTED", "UNKNOWN"}
@@ -43,6 +43,12 @@ _MESSAGES = {
     "cancel_pending": ("warning", "Cancellation is awaiting confirmation",
         "A cancellation has been requested, but a confirmed terminal scheduler result is not recorded yet.",
         "Keep the connector available for reconciliation. Do not treat this request as a refund or proof that the allocation has stopped."),
+    "cancel_unconfirmed": ("warning", "Cancellation could not be confirmed",
+        "The scheduler or transport did not confirm the stop request. The broker retains cancellation intent and keeps the compute reservation.",
+        "Keep the connector available for bounded cancellation retries and monitoring. This status does not mean that the allocation has stopped."),
+    "cancel_identity_mismatch": ("warning", "Cancellation paused because job identity did not match",
+        "The broker refused to cancel an allocation whose live scheduler identity did not match the recorded attempt. Cancellation intent and accounting remain recorded.",
+        "Check this attempt with the cluster operator before requesting cancellation again. Monitoring continues; no other job is selected as a substitute."),
     "module_initializer_missing": ("error", "Module initialization file is missing",
         "The job's environment setup reports that its configured module initialization file could not be found. This is not evidence that the Python script ran.",
         "Create a corrected recipe using the cluster-provided module command, then prepare a new job for review. The saved failed package stays unchanged."),
@@ -103,12 +109,17 @@ def _log(value):
 
 
 def _category(attempt, state, native_state, error, stderr):
+    if state not in {"succeeded", "failed", "cancelled", "expired"}:
+        if error == "CANCEL_IDENTITY_MISMATCH":
+            return "cancel_identity_mismatch"
+        if error == "CANCEL_UNCONFIRMED":
+            return "cancel_unconfirmed"
     if state == "submission_uncertain":
         return "submission_uncertain"
     if (state == "failed" and getattr(attempt, "accounting_state", None) == "released"
             and getattr(attempt, "dispatch_started", None) is True and getattr(attempt, "native_identity", None) in (None, {})):
         return "rejected"
-    if state == "cancel_requested":
+    if state in {"cancel_requested", "cancel_pending"}:
         return "cancel_pending"
     if native_state == "OUT_OF_MEMORY":
         return "out_of_memory"

@@ -13,7 +13,7 @@ from compute_relay.transports import OpenSSHTransport, TransportError
 from .discovery import parse_discovery
 from .preparation import (
     BackendError, canonical_json_bytes, connection_revision_sha256, helper_source,
-    relative_path, sha256, verify_package,
+    relative_path, sha256, verify_package, management_protocol_supported, JOB_PROTOCOL,
 )
 
 
@@ -136,10 +136,16 @@ class SlurmBackend:
                          ("remote_root", "slurm_paths", "scheduler_environment") if key in self.connection}
         if operation == "discover" and "environment_discovery" in self.connection:
             remote_config["environment_discovery"] = self.connection["environment_discovery"]
-        return {"operation": operation, "config": remote_config, **arguments}
+        return {"operation": operation, "protocol": JOB_PROTOCOL, "config": remote_config, **arguments}
 
     def _call(self, operation: str, **arguments) -> dict:
-        return self.transport.call_helper(helper_source(), self._request(operation, **arguments))
+        return self.transport.call_helper(helper_source(operation), self._request(operation, **arguments))
+
+    def _management(self, manifest: dict) -> dict:
+        self._verify_binding(manifest)
+        if not management_protocol_supported(manifest):
+            raise BackendError("Unsupported prepared job management protocol")
+        return {"manifest_sha256": sha256(canonical_json_bytes(manifest))}
 
     def _verify_binding(self, manifest: dict) -> None:
         if manifest["connection_revision_sha256"] != connection_revision_sha256(self.connection):
@@ -168,27 +174,29 @@ class SlurmBackend:
         UUID(attempt_id)
         self._verify_binding(manifest)
         try:
-            return self._submission_result(self._call("reconcile", attempt_id=attempt_id, manifest=manifest))
+            return self._submission_result(self._call("reconcile", attempt_id=attempt_id, manifest=manifest, **self._management(manifest)))
         except TransportError:
             return {"outcome": "submission_uncertain", "detail": "Reconciliation unavailable"}
 
-    def observe(self, native_identity: dict) -> dict:
+    def observe(self, native_identity: dict, *, manifest: dict) -> dict:
         try:
-            response = self._call("observe", native_identity=native_identity)
+            response = self._call("observe", native_identity=native_identity, **self._management(manifest))
             return parse_observation(native_identity, response["queue"], response["accounting"], response.get("expected_gpus", 0))
         except (TransportError, KeyError):
             return {"state": "unknown", "native_state": "UNKNOWN", "terminal": False, "accounting": {"final": False}}
 
-    def cancel(self, native_identity: dict) -> dict:
+    def cancel(self, native_identity: dict, *, manifest: dict) -> dict:
         try:
-            return self._call("cancel", native_identity=native_identity)
+            result = self._call("cancel", native_identity=native_identity, **self._management(manifest))
+            outcome = result.get("outcome") if isinstance(result, dict) else None
+            return {"outcome": outcome if outcome in {"cancel_requested", "already_terminal", "identity_mismatch", "unknown"} else "unknown"}
         except TransportError:
             return {"outcome": "unknown"}
 
-    def collect(self, native_identity: dict, outputs: Sequence[str] = ()) -> dict:
+    def collect(self, native_identity: dict, outputs: Sequence[str] = (), *, manifest: dict) -> dict:
         for path in outputs:
             relative_path(path)
-        response = self._call("collect", native_identity=native_identity, outputs=list(outputs))
+        response = self._call("collect", native_identity=native_identity, outputs=list(outputs), **self._management(manifest))
         artifacts = {path: base64.b64decode(data, validate=True) for path, data in response.pop("artifacts_base64", {}).items()}
         return {**response, "artifacts": artifacts}
 

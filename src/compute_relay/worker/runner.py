@@ -12,6 +12,9 @@ from uuid import UUID
 from .client import ControlError, JsonClient, environment_token, strict_json
 from .journal import Journal
 from .enrollment import EnrollmentError, profile_metadata, resolve_connection
+from .lease import renewing
+from compute_relay.domain.lifecycle import (CancellationStatus, PreparedWork, cancellation_result, cancellation_status,
+    native_for, replay_result, report_record, submission_plan, submission_record, terminal_observation)
 
 
 class Worker:
@@ -37,6 +40,7 @@ class Worker:
         raise ValueError("unsupported configured backend")
 
     def poll_once(self) -> bool:
+        self.replay_pending_reports()
         now = time.monotonic()
         if self._profiles_published_at is None or now - self._profiles_published_at >= 60:
             self.publish_profiles()
@@ -82,8 +86,6 @@ class Worker:
             self.connections[connection_id] = configuration
 
     def execute(self, lease):
-        from compute_relay.backends import connection_revision_sha256, verify_package
-
         if lease.get("operation") == "discover":
             self.discover(lease)
             return
@@ -91,83 +93,94 @@ class Worker:
             from compute_relay.extensions import execute_extension_work
             execute_extension_work(self, lease)
             return
-        attempt_id = str(UUID(lease["attempt_id"]))
-        operation = lease["operation"]
-        if operation not in {"submit", "reconcile", "observe", "cancel"}:
-            raise ValueError("unsupported worker operation")
+        work = PreparedWork.decode(lease)
+        operation, attempt_id = work.operation, work.attempt_id
         public = lease.get("configuration", {})
-        if public.get("credential_profile"):
-            connection, _, _ = resolve_connection(public, self.credential_profiles)
-        else:
-            connection = self.connections[lease["connection_id"]]
-        package = lease["prepared"]
-        manifest, digest = package["manifest"], package["manifest_sha256"]
-        if manifest["request"]["connection_id"] != lease["connection_id"]:
-            raise ValueError("package connection mismatch")
-        files = {}
-        total = 0
-        for path, encoded in package["files"].items():
-            if len(encoded) > 140 * 1024 * 1024:
-                raise ValueError("file exceeds worker limit")
-            content = base64.b64decode(encoded, validate=True)
-            total += len(content)
-            if total > 256 * 1024 * 1024 or len(files) >= 110:
-                raise ValueError("package exceeds worker limit")
-            files[path] = content
-        verify_package(manifest, digest, files)
-        configured_revision = connection_revision_sha256(connection)
-        if configured_revision != manifest["connection_revision_sha256"]:
-            raise ValueError("configured connection revision changed")
-        backend = self.backend_factory(connection)
+        connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[work.connection_id]
+        manifest, digest, files = work.manifest, work.manifest_sha256, work.files
         with self.journal.locked(attempt_id):
             previous = self.journal.read(attempt_id)
-            if previous and previous["manifest_sha256"] != digest:
-                raise ValueError("attempt package changed after intent")
-            if operation in {"submit", "reconcile"}:
-                result = self._submission(lease, backend, manifest, files, previous)
-            elif operation == "cancel":
-                native = lease.get("native_identity") or (previous or {}).get("native_identity")
-                if not native:
-                    result = {"outcome": "submission_uncertain"}
-                else:
-                    backend.cancel(native)
-                    result = {"outcome": "cancel_requested", "native_identity": native}
-            else:
-                native = lease.get("native_identity") or (previous or {}).get("native_identity")
-                if not native:
-                    result = {"outcome": "submission_uncertain"}
-                else:
-                    observation = backend.observe(native)
-                    result = {"outcome": "observed", "native_identity": native,
-                              "observation": observation}
-                    if observation.get("terminal"):
+            work.verify(connection, previous, self.extensions)
+            native = native_for(lease, previous)
+            saved = self.journal.read_report(attempt_id)
+            result = replay_result(saved, lease, digest, native)
+            if result is not None and saved["phase"] == "ready":
+                self.deliver_report(attempt_id, report_record(lease, digest, result))
+                return
+            backend = self.backend_factory(connection)
+            with renewing(self.client, lease) as check_lease:
+                if operation in {"submit", "reconcile"}:
+                    result = self._submission(lease, backend, manifest, files, previous)
+                elif not native:
+                    raise ValueError("Management operation has no native identity")
+                elif result is None:
+                    if operation == "cancel":
                         try:
-                            from compute_relay.extensions import worker_after_observation
-                            extension_data = worker_after_observation(self.extensions, backend, native, manifest,
-                                lease.get("extension_context", {}))
-                            if extension_data:
-                                result["extension_data"] = extension_data
+                            cancelled = backend.cancel(native, manifest=manifest)
                         except Exception:
-                            result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
-                        try:
-                            result.update(self._collect(backend, native, manifest))
-                        except Exception:
-                            # Output retention is independent of trustworthy native
-                            # accounting. Never strand a completed allocation's
-                            # reservation because a result is unsafe or unavailable.
-                            result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED")
-            report = {"lease_id": lease["id"], "generation": lease["generation"], **result}
-            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", report)
+                            cancelled = {"outcome": "unknown"}
+                        observation = None
+                        if cancellation_status(cancelled) in {CancellationStatus.UNKNOWN, CancellationStatus.ALREADY_TERMINAL}:
+                            check_lease()
+                            try:
+                                observation = backend.observe(native, manifest=manifest)
+                            except Exception:
+                                pass
+                        result = cancellation_result(cancelled, native, observation)
+                    else:
+                        result = {"outcome": "observed", "native_identity": native,
+                            "observation": backend.observe(native, manifest=manifest)}
+                if result.get("outcome") == "observed" and terminal_observation(result.get("observation")):
+                    self.journal.write_report(attempt_id, report_record(lease, digest, result, phase="observed"))
+                    check_lease()
+                    try:
+                        from compute_relay.extensions import worker_after_observation
+                        extension_data = worker_after_observation(self.extensions, backend, native, manifest,
+                            lease.get("extension_context", {}))
+                        if extension_data:
+                            result["extension_data"] = extension_data
+                    except Exception:
+                        result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
+                    check_lease()
+                    try:
+                        result.update(self._collect(backend, native, manifest))
+                    except Exception:
+                        result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED")
+                record = report_record(lease, digest, result)
+                self.journal.write_report(attempt_id, record)
+            self.deliver_report(attempt_id, record)
+
+    def deliver_report(self, attempt_id, record):
+        self.journal.write_report(attempt_id, record)
+        try:
+            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
+        except ControlError as error:
+            if error.status != 409:
+                raise
+            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/renew",
+                {key: record["report"][key] for key in ("lease_id", "generation")})
+            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
+        self.journal.clear_report(attempt_id, record)
+
+    def replay_pending_reports(self):
+        for attempt_id, _ in self.journal.pending_reports():
+            with self.journal.locked(attempt_id):
+                record = self.journal.read_report(attempt_id)
+                if not record or record.get("phase") != "ready":
+                    continue
+                try:
+                    self.deliver_report(attempt_id, record)
+                except ControlError as error:
+                    if error.status != 409:
+                        raise
 
     def _submission(self, lease, backend, manifest, files, previous):
         attempt_id = str(UUID(lease["attempt_id"]))
         digest = lease["prepared"]["manifest_sha256"]
-        if previous:
-            if previous.get("outcome") in {"submitted", "rejected"}:
-                return previous["result"]
-            # A persisted intent means submission may have happened. Never retry it.
-            result = backend.reconcile(attempt_id, manifest)
-        elif lease["operation"] == "reconcile":
+        action, replayed = submission_plan(lease["operation"], previous)
+        if action == "replay":
+            return replayed
+        if action == "reconcile":
             result = backend.reconcile(attempt_id, manifest)
         else:
             confirmed = self.client.request(
@@ -184,21 +197,14 @@ class Worker:
             except Exception:
                 # Neither exception text nor an assumption of non-submission is safe.
                 result = {"outcome": "submission_uncertain"}
-        if result.get("outcome") not in {"submitted", "submission_uncertain", "rejected"}:
-            result = {"outcome": "submission_uncertain"}
-        # A remote error message is not safe service metadata.
-        result = {key: value for key, value in result.items()
-                  if key in {"outcome", "native_identity"}}
-        record = {"manifest_sha256": digest, "outcome": result["outcome"], "result": result}
-        if result.get("native_identity"):
-            record["native_identity"] = result["native_identity"]
+        record = submission_record(digest, result)
         self.journal.write(attempt_id, record)
-        return result
+        return record["result"]
 
     @staticmethod
     def _collect(backend, native, manifest):
         permitted = manifest["request"].get("outputs", [])
-        collected = backend.collect(native, outputs=permitted)
+        collected = backend.collect(native, outputs=permitted, manifest=manifest)
         return Worker._serialized_collection(collected, manifest)
 
     @staticmethod

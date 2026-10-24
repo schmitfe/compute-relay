@@ -1,0 +1,19 @@
+services:
+  upgrade-smoke:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: worker
+    entrypoint: [python, /opt/helper_upgrade_smoke.py, --fixture-only]
+    volumes:
+      - worker-config:/run/demo:ro
+      - fixture-ssh:/run/fixture-ssh:ro
+      - ../tools/helper_upgrade_smoke.py:/opt/helper_upgrade_smoke.py:ro
+    depends_on:
+      control: {condition: service_healthy}
+      slurm: {condition: service_healthy}
+    networks: [fixture]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=32m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

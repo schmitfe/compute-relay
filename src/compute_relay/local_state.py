@@ -28,13 +28,14 @@ def default_directory():
 
 
 class LocalState:
-    def __init__(self, directory):
+    def __init__(self, directory, *, create=True):
         self.directory = _path(directory)
         self.descriptor = None
+        self.create = create
 
     def __enter__(self):
         try:
-            self.descriptor = _directory(self.directory, create=True)
+            self.descriptor = _directory(self.directory, create=self.create)
         except (OSError, ConnectorProfileError) as error:
             raise LocalStateError("Choose a private state directory owned by you (0700), without symbolic links.") from error
         return self

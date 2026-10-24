@@ -108,7 +108,7 @@ def test_async_submission_transport_failure_is_uncertain_without_retry_and_cance
         backend = AsyncSlurmBackend(connection, transport=failure)
         assert (await backend.submit(str(uuid4()), manifest, files))["outcome"] == "submission_uncertain"
         assert failure.calls == 1
-        assert (await backend.observe({"job_id": "42"}))["accounting"] == {"final": False}
+        assert (await backend.observe({"job_id": "42"}, manifest=manifest))["accounting"] == {"final": False}
 
         class Cancelled:
             async def call_helper(self, source, request):
@@ -131,8 +131,8 @@ def test_async_collect_validates_paths_and_decodes_only_structured_artifacts(pac
 
         backend = AsyncSlurmBackend(package[0], transport=Transport())
         with pytest.raises(ValueError):
-            await backend.collect({"job_id": "42"}, outputs=["../private"])
+            await backend.collect({"job_id": "42"}, outputs=["../private"], manifest=package[1])
         assert calls == []
-        result = await backend.collect({"job_id": "42"}, outputs=["results/metrics.json"])
+        result = await backend.collect({"job_id": "42"}, outputs=["results/metrics.json"], manifest=package[1])
         assert result["artifacts"] == {"results/metrics.json": b"{}"} and calls[0]["operation"] == "collect"
     asyncio.run(scenario())

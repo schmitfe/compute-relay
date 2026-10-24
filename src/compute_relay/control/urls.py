@@ -57,6 +57,7 @@ urlpatterns = [
     path("api/v1/attempts/<uuid:attempt_id>/cancel", views.cancel), path("api/v1/attempts/<uuid:attempt_id>/logs", views.logs),
     path("api/v1/attempts/<uuid:attempt_id>/artifacts", views.artifacts), path("api/v1/artifacts/<uuid:artifact_id>/content", views.artifact_content),
     path("internal/v1/lease", views.lease), path("internal/v1/attempts/<uuid:attempt_id>/dispatch", views.dispatch),
+    path("internal/v1/attempts/<uuid:attempt_id>/renew", views.renew_lease),
     path("internal/v1/worker/profiles", views.worker_profiles),
     path("internal/v1/connections/<uuid:connection_id>/report", views.discovery_report),
     path("internal/v1/attempts/<uuid:attempt_id>/report", views.report),

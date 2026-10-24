@@ -11,7 +11,7 @@ import rfc8785
 from compute_relay.backends import (
     BackendError, FakeBackend, SlurmBackend, canonical_json_bytes, prepare, verify_package,
 )
-from compute_relay.backends.preparation import sha256
+from compute_relay.backends.preparation import sha256, JOB_PROTOCOL
 from compute_relay.backends.slurm import parse_observation
 from compute_relay.backends.discovery import parse_discovery
 from compute_relay.backends.environments import EnvironmentProfileError, render_environment, validate_environment_config
@@ -128,19 +128,19 @@ def test_fake_persists_identity_without_executing_uploaded_source(sample, tmp_pa
     assert not marker.exists()
     restarted = FakeBackend(sample[2])
     assert restarted.reconcile(ATTEMPT, prepared["manifest"])["native_identity"] == result["native_identity"]
-    assert restarted.observe(result["native_identity"])["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
-    collected = restarted.collect(result["native_identity"], ["results/metrics.json"])
+    assert restarted.observe(result["native_identity"], manifest=prepared["manifest"])["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+    collected = restarted.collect(result["native_identity"], ["results/metrics.json"], manifest=prepared["manifest"])
     assert json.loads(collected["artifacts"]["results/metrics.json"])["executed_uploaded_code"] is False
     with pytest.raises(BackendError):
-        restarted.collect(result["native_identity"], ["not-declared"])
+        restarted.collect(result["native_identity"], ["not-declared"], manifest=prepared["manifest"])
 
 
 def test_fake_cancellation_is_durable(sample):
     prepared, files = package(sample)
     backend = FakeBackend(sample[2])
     identity = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
-    assert backend.cancel(identity)["outcome"] == "cancel_requested"
-    assert FakeBackend(sample[2]).observe(identity)["state"] == "cancelled"
+    assert backend.cancel(identity, manifest=prepared["manifest"])["outcome"] == "cancel_requested"
+    assert FakeBackend(sample[2]).observe(identity, manifest=prepared["manifest"])["state"] == "cancelled"
 
 
 def test_native_transport_timeout_does_not_resubmit(sample):
@@ -190,7 +190,7 @@ def test_requeues_duplicate_records_and_old_job_ids_do_not_settle():
 @pytest.fixture
 def remote_request(sample, tmp_path):
     prepared, files = package(sample)
-    return {"operation": "submit", "config": {"remote_root": str(tmp_path / "remote")}, "attempt_id": ATTEMPT,
+    return {"operation": "submit", "protocol": JOB_PROTOCOL, "manifest_sha256": prepared["manifest_sha256"], "config": {"remote_root": str(tmp_path / "remote")}, "attempt_id": ATTEMPT,
             "manifest": prepared["manifest"], "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}
 
 
@@ -231,7 +231,7 @@ def test_remote_acceptance_response_loss_retains_intent_and_recovers_marker(remo
     result = helper.execute(remote_request["config"], remote_request)
     assert result["outcome"] == "submission_uncertain"
     assert helper.execute(remote_request["config"], remote_request)["outcome"] == "submission_uncertain"
-    reconcile = {"operation": "reconcile", "attempt_id": ATTEMPT, "manifest": remote_request["manifest"]}
+    reconcile = {**remote_request, "operation": "reconcile"}
     assert helper.execute(remote_request["config"], reconcile)["native_identity"]["job_id"] == "42"
     assert calls == ["sbatch", "squeue"]
 
@@ -249,7 +249,7 @@ def test_nonzero_sbatch_rpc_result_never_refunds_or_retries(remote_request, monk
     result = helper.execute(remote_request["config"], remote_request)
     assert result["outcome"] == "submission_uncertain"
     assert helper.execute(remote_request["config"], remote_request)["outcome"] == "submission_uncertain"
-    reconcile = {"operation": "reconcile", "attempt_id": ATTEMPT, "manifest": remote_request["manifest"]}
+    reconcile = {**remote_request, "operation": "reconcile"}
     assert helper.execute(remote_request["config"], reconcile)["outcome"] == "submission_uncertain"
     assert calls == ["sbatch", "squeue", "sacct"]
 
@@ -270,7 +270,7 @@ def test_completed_job_lost_reply_can_recover_from_accounting_marker(remote_requ
 
     monkeypatch.setattr(helper, "scheduler", scheduler)
     assert helper.execute(remote_request["config"], remote_request)["outcome"] == "submission_uncertain"
-    reconcile = {"operation": "reconcile", "attempt_id": ATTEMPT, "manifest": remote_request["manifest"]}
+    reconcile = {**remote_request, "operation": "reconcile"}
     assert helper.execute(remote_request["config"], reconcile)["native_identity"]["job_id"] == "42"
 
 
@@ -283,7 +283,7 @@ def test_remote_output_retrieval_refuses_symlink_escape(remote_request, monkeypa
     outside.write_text("must not be returned")
     (directory / "results" / "metrics.json").symlink_to(outside)
     with pytest.raises(OSError):
-        helper.execute(remote_request["config"], {"operation": "collect", "native_identity": result["native_identity"],
+        helper.execute(remote_request["config"], {**remote_request, "operation": "collect", "native_identity": result["native_identity"],
                                                    "outputs": ["results/metrics.json"]})
 
 
@@ -393,8 +393,8 @@ def test_cancel_never_invokes_scancel_for_a_reused_or_mismatched_job(remote_requ
 
     monkeypatch.setattr(helper, "scheduler", scheduler)
     receipt = helper.execute(remote_request["config"], remote_request)
-    result = helper.execute(remote_request["config"], {"operation": "cancel", "native_identity": receipt["native_identity"]})
-    assert result["outcome"] == "unknown"
+    result = helper.execute(remote_request["config"], {**remote_request, "operation": "cancel", "native_identity": receipt["native_identity"]})
+    assert result["outcome"] == "identity_mismatch"
     assert calls == ["sbatch", "squeue"]
 
 
@@ -417,7 +417,7 @@ def test_cancel_validates_identity_before_requesting_cancellation(remote_request
 
     monkeypatch.setattr(helper, "scheduler", scheduler)
     receipt = helper.execute(remote_request["config"], remote_request)
-    result = helper.execute(remote_request["config"], {"operation": "cancel", "native_identity": receipt["native_identity"]})
+    result = helper.execute(remote_request["config"], {**remote_request, "operation": "cancel", "native_identity": receipt["native_identity"]})
     assert result["outcome"] == "cancel_requested"
     assert [command for command, _ in calls] == ["sbatch", "squeue", "scancel"]
 
@@ -440,7 +440,7 @@ def test_simulated_zero_second_job_still_spends_allowance(sample):
     prepared, files = package(sample)
     backend = FakeBackend(sample[2])
     native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
-    assert backend.observe(native)["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+    assert backend.observe(native, manifest=prepared["manifest"])["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
 
 
 def test_modules_use_loaded_interpreter_and_bind_the_exact_wrapper(sample):

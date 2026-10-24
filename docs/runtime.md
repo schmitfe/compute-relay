@@ -74,6 +74,61 @@ charge duration or scheduler/cleanup interval is added.
 This is broker accounting, not a physical nanosecond ceiling or a restriction on
 all activity under the remote account.
 
+Cancellation has an explicit result. Only an acknowledged native cancellation
+or an identity-verified terminal observation resolves its pending intent. A
+timeout, malformed result or empty queue response retains the intent and
+reservation, with bounded retries and observation. A live identity mismatch
+surfaces `CANCEL_IDENTITY_MISMATCH`; repeated cancellation is withheld until an
+explicit new request, while observation can still establish completion. Even an
+acknowledged cancellation waits for definitive accounting before settlement.
+
+Eligible work is filtered before the controller's bounded candidate batch.
+Cancellation, uncertain-submission reconciliation and existing-job observation
+precede new submissions. Paused projects, disabled connections and unsupported
+extensions therefore cannot fill the first batch with undispatched work and
+hide later management of running jobs.
+
+## Local storage and metadata bounds
+
+Object storage and durable metadata have separate admission accounting. Current
+object defaults are 64 MiB per project, 256 MiB per installation and 1000 objects
+per project, including pending capacity in quota checks. Ordinary byte uploads
+are bounded to 512 KiB each; terminal output reports have a separate 10 MiB total
+artifact limit. Eight pending upload reservations per project are allowed.
+
+Logical metadata charges default to 32 MiB per project and 256 MiB across the
+installation. Job request/manifests, idempotency responses and extension
+definition/run documents consume these charges even when their source blobs
+deduplicate. Additional record limits apply:
+
+| Metadata family | Per project | Per installation |
+| --- | ---: | ---: |
+| Charged job records | 1000 | 10,000 |
+| Idempotency identities, including compacted ones | 10,000 | 100,000 |
+| Combined extension definitions/runs | 1000 | 10,000 |
+| Archived job identities | 10,000 | 100,000 |
+| Rolling audit events | 2000 | 20,000 |
+
+Audit details are bounded and oversized details are replaced with a digest.
+The controller retains at most 16 report receipts per attempt; pruned older
+generations fail the ordinary stale-lease fence. Attempts, accounting entries
+and execution identities remain durable. Metadata exhaustion rejects new
+metadata admissions with `METADATA_QUOTA`; it does not block valid worker
+accounting reports. See [maintenance](deployment.md#inspect-and-compact-local-metadata).
+
+These are logical JSON/record charges and bounded retention rules, not a byte
+ceiling on SQLite, its indexes/WAL, journals, backups or filesystem allocation.
+Keep physical free space and inodes available. Advisory remote storage targets
+also cannot prevent unrelated users or jobs from filling a shared filesystem.
+
+Content hashes identify bytes, not permission to reuse them. A job input is
+sealed to an independently uploaded object or an exact artifact the current
+credential can read, including access to its producer connection. Reading a
+package, preparing/revising/executing it, and reusing workflow/environment
+definitions recheck that source authority. Deduplication never creates an upload
+grant for generated or reported output bytes; an explicit byte upload does.
+See [security](security.md#input-provenance-and-object-publication).
+
 ## Cluster and software support
 
 The native backend supports Slurm over SSH, independent accounts and keys per
@@ -81,6 +136,15 @@ cluster, and human MFA at SSH login. A one-shot bounded Python helper invokes
 fixed scheduler operations; it exposes no arbitrary shell RPC. The worker
 reuses its authenticated SSH master and does not fall back to a new unattended
 login when that master disappears.
+
+The fixed remote source is assembled from reviewed standard-library components
+into separate execution/management and discovery bundles. New prepared jobs bind
+`helper_protocol=slurm-jobs/v1` and the exact execution-bundle SHA-256. Management
+uses current compatible code plus the original package digest and exact remote
+journal/native identity. It never runs helper source obtained from an old
+manifest. New submissions still reject a changed execution hash. Use the offline
+[upgrade check](deployment.md#check-an-upgrade-before-starting-it) before starting
+an updated installation with outstanding work.
 
 Discovery separates configured capabilities, authorization and observed idle
 resources. Software/module catalogs are login-node observations, with provenance

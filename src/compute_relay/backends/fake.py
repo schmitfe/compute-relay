@@ -10,7 +10,8 @@ import tempfile
 from typing import Mapping, Sequence
 from uuid import UUID
 
-from .preparation import BackendError, canonical_json_bytes, connection_revision_sha256, sha256, verify_package
+from .preparation import (BackendError, canonical_json_bytes, connection_revision_sha256,
+                          management_protocol_supported, sha256, verify_package)
 
 
 class FakeBackend:
@@ -60,6 +61,7 @@ class FakeBackend:
             return {"outcome": "submitted", "native_identity": identity, "simulation": True}
 
     def reconcile(self, attempt_id: str, manifest: dict) -> dict:
+        self._verify_management(manifest)
         record = self._load(attempt_id)
         if not record:
             return {"outcome": "submission_uncertain", "simulation": True}
@@ -67,14 +69,23 @@ class FakeBackend:
             raise BackendError("Fake reconciliation package differs")
         return {"outcome": "submitted", "native_identity": record["native_identity"], "simulation": True}
 
-    def _owned(self, identity: dict) -> dict:
+    def _verify_management(self, manifest: dict) -> str:
+        if (not management_protocol_supported(manifest)
+                or manifest["connection_revision_sha256"] != connection_revision_sha256(self.connection)):
+            raise BackendError("Unsupported simulated management package or connection")
+        return sha256(canonical_json_bytes(manifest))
+
+    def _owned(self, identity: dict, manifest: dict) -> dict:
+        expected = self._verify_management(manifest)
         record = self._load(identity["attempt_id"])
-        if not record or record["native_identity"] != identity:
+        if (not record or record["native_identity"] != identity
+                or record["manifest_sha256"] != expected
+                or sha256(canonical_json_bytes(record["manifest"])) != expected):
             raise BackendError("Unknown simulated native identity")
         return record
 
-    def observe(self, native_identity: dict) -> dict:
-        record = self._owned(native_identity)
+    def observe(self, native_identity: dict, *, manifest: dict) -> dict:
+        record = self._owned(native_identity, manifest)
         state = "cancelled" if record["cancelled"] else self.connection.get("fake_outcome", "completed")
         if state not in ("completed", "failed", "cancelled"):
             state = "running"
@@ -89,14 +100,14 @@ class FakeBackend:
                 "accounting": {"final": terminal, "cpu_core_seconds": resource["cpu_cores"] * seconds,
                                "gpu_device_seconds": resource["gpu_devices"] * seconds}}
 
-    def cancel(self, native_identity: dict) -> dict:
-        record = self._owned(native_identity)
+    def cancel(self, native_identity: dict, *, manifest: dict) -> dict:
+        record = self._owned(native_identity, manifest)
         record["cancelled"] = True
         self._save(native_identity["attempt_id"], record)
         return {"outcome": "cancel_requested", "simulation": True}
 
-    def collect(self, native_identity: dict, outputs: Sequence[str] = ()) -> dict:
-        record = self._owned(native_identity)
+    def collect(self, native_identity: dict, outputs: Sequence[str] = (), *, manifest: dict) -> dict:
+        record = self._owned(native_identity, manifest)
         if set(outputs) - set(record["manifest"]["request"]["outputs"]):
             raise BackendError("Undeclared simulated output")
         metrics = canonical_json_bytes({"simulation": True, "attempt_id": native_identity["attempt_id"], "executed_uploaded_code": False})

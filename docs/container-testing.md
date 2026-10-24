@@ -2,7 +2,10 @@
 
 The container stacks exercise the application on a workstation without contacting an institutional cluster. `deploy/compose.fake.yml` runs the broker and worker with the fake backend; `deploy/compose.test.yml` adds a real, disposable CPU Slurm cluster over SSH. These are development/acceptance fixtures, not a production deployment or proof of host-level credential isolation.
 
-The Compose documents use JSON syntax, which is valid YAML, so their basic structure can also be checked with Python's standard library. Docker Compose must still validate and execute them on a host with a working container engine. No container engine is installed by these scripts or tests.
+The base Compose fixtures use JSON syntax, which is valid YAML; additional test
+overlays use YAML. Docker Compose must validate and execute the combined
+configuration on a host with a working container engine. No container engine is
+installed by these scripts or tests.
 
 ## Layout and identity boundaries
 
@@ -10,7 +13,7 @@ The Compose documents use JSON syntax, which is valid YAML, so their basic struc
 | --- | --- | --- |
 | Control | `deploy/Dockerfile`, `control` target, UID/GID 10001 | Own SQLite/artifact volume; owner/project demo metadata; worker enrollment metadata. No SSH-key volume. |
 | Worker | Same Dockerfile, `worker` target, UID/GID 10001 | Read-only worker config/token; separate durable journal; fixture-only SSH identity. No control database or human credential mount. |
-| Smoke client | Same Dockerfile, `smoke` target, UID/GID 10001 | Read-only synthetic demo metadata; invokes project/key/cluster portal forms, job APIs, and human review endpoints. No SSH identity or database mount. |
+| Smoke client | Same Dockerfile, `smoke` target, UID/GID 10001 | Read-only synthetic demo metadata; invokes job APIs and human review endpoints. No SSH identity or database mount. |
 | Slurm fixture | `deploy/slurm/Dockerfile`, root for scheduler/SSH initialization | MariaDB, Munge, SlurmDBD, controller, compute daemon, and SSH server in one disposable container. Separate `brokerjob` remote UID runs batch jobs. |
 
 The stack publishes only `127.0.0.1:8765` for the control UI/API by default. Set `BROKER_TEST_PORT` to select another loopback port; internal API ports stay unchanged. SSH, database, Munge, and scheduler ports are internal. The internal Compose network has no default outbound Internet path; builds can download declared Python/Debian dependencies. No service mounts a host Docker socket, a home directory, an existing SSH agent, or institutional keys.
@@ -55,7 +58,7 @@ docker compose -f deploy/compose.test.yml up -d --wait slurm control worker
 docker compose -f deploy/compose.test.yml --profile test run --rm smoke
 ```
 
-The fixture cluster is `broker-test`, host `slurm-fixture`, partition `debug`, account `broker`, remote user `brokerjob`, and work root `/home/brokerjob/jobs`. It advertises two CPU cores, 1,024 MiB memory, no GPUs, and a maximum ten-minute partition limit. `JobRequeue=0`, `OverTimeLimit=0`, and `KillWait=5` make its test policy explicit. Bootstrap should use only small whole-minute jobs; do not treat its illustrative cleanup allowance as evidence of a finite bound at another site.
+The fixture cluster is `broker-test`, host `slurm-fixture`, partition `debug`, account `broker`, remote user `brokerjob`, and work root `/home/brokerjob/jobs`. It advertises two CPU cores, 1,024 MiB memory, no GPUs, and a maximum ten-minute partition limit. `JobRequeue=0`, `OverTimeLimit=0`, and `KillWait=5` make its test configuration explicit. Bootstrap uses small whole-minute jobs. Broker reservations use reviewed effective allocation times requested walltime; these fixture settings are not evidence about another site's scheduling behavior.
 
 Use the fixture's actual scheduler/accounting tools for diagnostics:
 
@@ -76,6 +79,45 @@ docker compose -f deploy/compose.test.yml down --volumes
 
 `--volumes` deliberately deletes synthetic job history, tokens, keys, and worker journals. Do not reuse these test project names/volumes for real work. Scheduler/MariaDB state is disposable inside its container; restarting/recreating the fixture with outstanding jobs is a fault test requiring broker reconciliation, not a persistent production cluster. Recreate the entire test stack for a clean run.
 
+## Native helper-upgrade acceptance
+
+The upgrade overlay exercises a separate native adapter/journal boundary using
+the generated fixture key and pinned host key. It accepts only the dedicated
+fixture target and does not use an institutional account. Use a distinct
+disposable project name and the same loopback-port override throughout:
+
+```sh
+docker compose -p compute-relay-upgrade-test \
+  -f deploy/compose.test.yml -f deploy/compose.upgrade-test.yml \
+  build slurm control upgrade-smoke
+docker compose -p compute-relay-upgrade-test \
+  -f deploy/compose.test.yml -f deploy/compose.upgrade-test.yml \
+  up -d --wait slurm control
+docker compose -p compute-relay-upgrade-test \
+  -f deploy/compose.test.yml -f deploy/compose.upgrade-test.yml \
+  run --rm --no-deps upgrade-smoke
+docker compose -p compute-relay-upgrade-test \
+  -f deploy/compose.test.yml -f deploy/compose.upgrade-test.yml \
+  down --volumes
+```
+
+`tools/helper_upgrade_smoke.py` prepares and submits two bounded stdlib jobs with
+a reviewed comment-only difference in the installed execution bundle, then
+uses the current bundle to reconcile, cancel, observe and collect. One accepted
+submission reply is deliberately lost. The check requires final native
+accounting, stable recovered identity, refusal to submit an old package under
+the new execution hash, and exactly two submission calls. It never retrieves or
+executes helper source from a saved manifest or journal. Each job requests one
+CPU and one minute; the tool cancels the jobs and attempts cancellation again
+during cleanup.
+
+This tool calls the native adapter directly. It does not claim HTTP approval,
+project-budget admission or broker-ledger settlement; the ordinary and personal
+connector smoke flows provide that separate evidence. The overlay's presence
+and passing unit tests do not establish that a native Docker run passed against
+the final integrated source. Keep the actual run result with its commit or CI
+record before making that claim.
+
 ## Current acceptance scope
 
 This is an optional developer fixture. The normal package uses SQLite and runs
@@ -89,3 +131,8 @@ are preserved on `codex/archive-multi-user-server` at `520effc`. Their old count
 are not evidence that the new single-user package passed current acceptance.
 Run the default SQLite suite and `tools/package_smoke.py` for the local package,
 and run this fixture explicitly when native Slurm acceptance is required.
+
+The SQLite tests additionally cover input provenance, upload-crash recovery,
+logical metadata limits/maintenance, management priority, lease renewal and
+durable report replay. These controlled faults complement the native fixture;
+they do not require filling a real disk or interrupting a real cluster.

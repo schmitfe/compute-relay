@@ -144,6 +144,19 @@ def test_output_failure_is_secondary_when_native_allocation_failed():
     assert any("separate from the allocation result" in message for message in detail["notices"])
 
 
+@pytest.mark.parametrize("error,category,phrase", [
+    ("CANCEL_UNCONFIRMED", "cancel_unconfirmed", "retains cancellation intent"),
+    ("CANCEL_IDENTITY_MISMATCH", "cancel_identity_mismatch", "refused to cancel"),
+])
+def test_unconfirmed_cancellation_has_fixed_actionable_diagnostics(error, category, phrase):
+    value = changed(state="cancel_pending", accounting_state="reserved", error_code=error,
+        observation={"detail": "PRIVATE-SSH-DIAGNOSTIC"})
+    detail = build_attempt_diagnostics(value)
+    assert detail["category"] == category and phrase in detail["message"]
+    assert detail["accounting_state"] == "reserved"
+    assert "PRIVATE-" not in rendered(value)
+
+
 def test_transport_failure_uses_public_code_not_raw_observation_or_exception():
     value = changed(state="queued", error_code="AUTHENTICATION_UNAVAILABLE", observation={"detail": "PRIVATE-SSH-ERROR", "exception": "PRIVATE-EXCEPTION"})
     detail = build_attempt_diagnostics(value)

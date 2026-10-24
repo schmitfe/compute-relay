@@ -12,7 +12,7 @@ from .views import body, boundary, scope
 
 @boundary("POST")
 def lookup(request, project_id):
-    _, project = scope(request, "objects:write", project_id=project_id)
+    credential, project = scope(request, "objects:write", project_id=project_id)
     document = body(request, maximum=32 * 1024)
     entries = document.get("objects")
     if set(document) != {"objects"} or not isinstance(entries, list) or not 1 <= len(entries) <= 100:
@@ -33,6 +33,13 @@ def lookup(request, project_id):
     for digest, size in descriptors:
         blob = blobs.get(digest)
         if blob and blob.size_bytes == size:
+            from .input_sources import resolve_input_blob
+            try:
+                resolve_input_blob(credential, {"sha256": digest, "size_bytes": size})
+            except BrokerError as exc:
+                if exc.code in {"INPUT_DENIED", "OBJECT_MISSING"}:
+                    continue
+                raise
             try:
                 read_blob(blob)
             except OSError:

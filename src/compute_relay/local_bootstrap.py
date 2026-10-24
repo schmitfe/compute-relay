@@ -57,6 +57,11 @@ def main():
             owner.save()
         elif owner.has_usable_password() != (settings.BROKER_LOCAL_AUTH_MODE == "password"):
             raise SystemExit("Portal access configuration is incomplete. Repeat the explicit password setup option.")
+    # A stopped uploader can leave a durable reservation or published bytes.
+    # Recover only after validating the saved owner. The filesystem fence keeps
+    # live writers safe, and unavailable objects remain reserved for inspection.
+    from compute_relay.control.storage import reconcile_uploads
+    reconcile_uploads(limit=32)
     connection.close()
     database = Path(settings.DATABASES["default"]["NAME"])
     database.chmod(0o600)

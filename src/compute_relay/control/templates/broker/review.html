@@ -1,5 +1,6 @@
 {% extends "broker/base.html" %}{% block content %}
 <div id="live-job-summary" data-live-fragment>{% include "broker/live_job_summary.html" %}</div>
+{% if job.state == "archived" %}<p class="notice">This job's unsubmitted package metadata was archived. Its identity and digest remain recorded. Create a fresh job to run new work.</p>{% endif %}
 <p class="helptext" data-live-page data-live-url="/ui/live/review/{{ job.id }}/"><span data-live-status role="status">Execution state and new review requests update automatically. Unsent comments are kept.</span></p>
 <p class="notice">This preview requires a separate protected service account or server before using real secrets with an agent that controls your desktop. A human session on an agent-controlled desktop does not prove human presence.</p>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}

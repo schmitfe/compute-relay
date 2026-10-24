@@ -129,7 +129,8 @@ def objects(request, project_id):
     if document["path"].startswith("_broker/"):
         raise BrokerError("PATH_RESERVED", "This path is reserved for generated files.")
     data = base64.b64decode(document["content_base64"], validate=True)
-    blob = store_blob(project, data)
+    from .storage import store_uploaded_blob
+    blob = store_uploaded_blob(project, data)
     return {"path": document["path"], "sha256": blob.sha256, "size_bytes": blob.size_bytes,
             "executable": document.get("executable", False)}, 201
 
@@ -138,24 +139,36 @@ def objects(request, project_id):
 def jobs(request):
     credential, _ = scope(request, "jobs:write")
     document = body(request)
-    return idem(request, credential, "jobs:create", document, lambda: services.create_job(credential, document))
+    result = idem(request, credential, "jobs:create", document, lambda: services.create_job(credential, document))
+    from .input_sources import authorize_job_inputs
+    if result[1] < 400:
+        authorize_job_inputs(Job.objects.get(id=result[0]["id"]), credential)
+    return result
 
 
 @boundary("GET")
 def job_detail(request, job_id):
-    _, job = scope(request, "jobs:read", job_id=job_id)
+    credential, job = scope(request, "jobs:read", job_id=job_id)
+    from .input_sources import authorize_job_inputs
+    authorize_job_inputs(job, credential)
     return services.serialize_job(job)
 
 
 @boundary("GET")
 def package(request, job_id):
-    _, job = scope(request, "jobs:read", job_id=job_id)
+    credential, job = scope(request, "jobs:read", job_id=job_id)
+    if job.state == "archived":
+        raise BrokerError("JOB_ARCHIVED", "The executable package was archived. Create a fresh job.", 410)
+    from .input_sources import authorize_job_inputs
+    authorize_job_inputs(job, credential)
     return services.serialize_job(job, package=True)
 
 
 @boundary("POST")
 def prepare(request, job_id):
     credential, job = scope(request, "jobs:write", job_id=job_id)
+    from .input_sources import authorize_job_inputs
+    authorize_job_inputs(job, credential)
     document = body(request)
     if document:
         raise BrokerError("INVALID_REQUEST", "Preparation accepts an empty object.")
@@ -167,6 +180,8 @@ def prepare(request, job_id):
     if existing:
         if existing.request_sha256 != services.digest(document):
             raise BrokerError("IDEMPOTENCY_CONFLICT", "The key was used with different content.", 409)
+        if existing.compacted:
+            raise BrokerError("IDEMPOTENCY_RETIRED", "This request was already processed; its response was retired.", 409)
         return existing.response, existing.status
     # File reservations must commit outside the idempotency transaction, so a
     # crash cannot roll back their accounting while leaving published bytes.
@@ -179,7 +194,11 @@ def prepare(request, job_id):
 def revisions(request, job_id):
     credential, job = scope(request, "jobs:write", job_id=job_id)
     document = body(request)
-    return idem(request, credential, f"{job_id}:revise", document, lambda: services.create_job(credential, document, previous=job))
+    from .input_sources import authorize_job_inputs
+    result = idem(request, credential, f"{job_id}:revise", document, lambda: services.create_job(credential, document, previous=job))
+    if result[1] < 400:
+        authorize_job_inputs(Job.objects.get(id=result[0]["id"]), credential)
+    return result
 
 
 @boundary("POST")
@@ -259,6 +278,9 @@ def artifact_content(request, artifact_id):
 def lease(request):
     worker = worker_identity(request)
     body(request)
+    management = services.lease_work(worker, management_only=True)
+    if management.get("lease") is not None:
+        return management
     try:
         from compute_relay.extensions import before_lease
         before_lease(worker)
@@ -301,6 +323,11 @@ def discovery_report(request, connection_id):
 @boundary("POST")
 def dispatch(request, attempt_id):
     return services.dispatch(worker_identity(request), attempt_id, body(request))
+
+
+@boundary("POST")
+def renew_lease(request, attempt_id):
+    return services.renew_lease(worker_identity(request), attempt_id, body(request))
 
 
 @boundary("POST")

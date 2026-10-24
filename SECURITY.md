@@ -1,9 +1,27 @@
 # Security reporting and support
 
-This repository contains a development alpha with control, worker, Slurm/SSH, and MCP code plus synthetic tests. There is no supported protected broker release. The documented host-level isolation properties remain installation requirements rather than verified guarantees; see [runtime limitations](docs/runtime.md).
+Compute Relay is a development alpha for a single person running a local portal,
+SQLite ledger and personal SSH connectors. It includes project-scoped agent
+keys, reviewed execution, constrained Slurm operations and compute/storage
+admission controls. It does not isolate credentials from another process with
+the same local account's access. No hosted multi-user or protected service
+deployment is supported by the current package. See the
+[security boundaries](docs/security.md) and [runtime limits](docs/runtime.md).
 
-Before making the repository public, maintainers must enable a private vulnerability-reporting channel, verify who receives reports, and publish supported release versions and response responsibilities. Until that channel is configured, contact the repository owner through an existing trusted private channel. Do not invent or use an unverified contact address, post credentials, or disclose sensitive institutional details in a public issue.
+Use the repository's private vulnerability-reporting feature if the maintainer
+has enabled it. Otherwise contact the repository owner through an existing
+trusted private channel. Do not post credentials or disclose sensitive
+institutional details in a public issue. Maintainers should
+publish a verified reporting channel, supported versions and response
+responsibilities before claiming release support.
 
-Reports should identify the affected version/commit, deployment profile and violated boundary, with a minimal synthetic reproduction. Do not probe real clusters, access another user's data, launch jobs, or extract live secrets without the operator's explicit authorization.
+Reports should identify the affected version/commit, installation settings and
+violated boundary, with a minimal synthetic reproduction. Do not probe real
+clusters, access another person's data, launch jobs or extract live secrets
+without the operator's explicit authorization.
 
-The intended supported threat model and its limits are documented in [docs/security.md](docs/security.md). Root/host-administrator compromise, an agent controlling its own Docker daemon, same-user secret files, and hostile jobs sharing a remote cluster UID are not equivalent to the protected service profile.
+The [2026-10-24 fix notes](docs/review-fixes-2026-10-24.md) document the integrated
+authorization, recovery and maintainability changes and their validation scope.
+They are not a claim of a complete external security audit. Host-administrator
+or Docker-daemon access, same-account credential access, and hostile jobs sharing
+a remote cluster UID remain outside the isolation the local package provides.

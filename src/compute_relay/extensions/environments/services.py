@@ -101,7 +101,10 @@ def serialize(build, *, cache_hit=False):
                         "measured_at": build.receipt.get("receipt", {}).get("measured_at")}}
 
 
+@transaction.atomic
 def create_build(credential, document):
+    from compute_relay.control.input_sources import resolve_input_blob, seal_definition_inputs, definition_inputs
+    from compute_relay.control.metadata import json_size, reserve_metadata
     project = credential.project
     credential = _credential(credential, project)
     policy = _policy(project)
@@ -113,29 +116,38 @@ def create_build(credential, document):
         raise BrokerError("ENVIRONMENT_BASE_DENIED", "Bootstrap environment is outside build policy.", 403)
     connection = project.connections.get(id=normalized["connection_id"], enabled=True)
     normalized["connection_revision_sha256"] = connection.revision_sha256
-    for row in normalized["requirements"]:
-        if not Blob.objects.filter(project=project, sha256=row["sha256"], size_bytes=row["size_bytes"]).exists():
-            raise BrokerError("OBJECT_MISSING", "Upload every pinned wheel before creating a build.", 404)
+    sources = {row["filename"]: resolve_input_blob(credential, row) for row in normalized["requirements"]}
     digest = core.digest(normalized)
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
-        spec, _ = EnvironmentSpec.objects.get_or_create(project=project, sha256=digest,
+        spec, created = EnvironmentSpec.objects.get_or_create(project=project, sha256=digest,
             defaults={"connection": connection, "base_environment": base, "document": normalized})
+        if created:
+            reserve_metadata(project, "environment_spec", spec.id, json_size(normalized) + 1024 + 512 * len(sources))
+            seal_definition_inputs(project, "environment_spec", spec.id, sources)
+        else:
+            definition_inputs(credential, "environment_spec", spec.id,
+                [dict(row, path=row["filename"]) for row in normalized["requirements"]])
         cached = spec.builds.filter(state="ready", policy=policy, policy_revision=policy.revision,
                                    policy_sha256=core.digest(policy.configuration), environment__isnull=False).first()
         if cached and project.environments.filter(id=cached.environment_id, connection=connection).exists():
             return serialize(cached, cache_hit=True), 200
         build = EnvironmentBuild.objects.create(spec=spec, policy=policy, policy_revision=policy.revision,
             policy_sha256=core.digest(policy.configuration), credential=credential)
+        reserve_metadata(project, "environment_build", build.id, 4096)
         core.audit(project, credential.id, "environment.build.created", build.id, {"spec_sha256": digest})
     return serialize(build), 201
 
 
 def prepare_build(build, credential):
+    from compute_relay.control.input_sources import authorize_job_inputs, definition_inputs
     credential = _credential(credential, build.spec.project)
     require_connection(credential, build.spec.connection_id)
     policy = _current_build_policy(build)
+    wheel_sources = definition_inputs(credential, "environment_spec", build.spec_id,
+        [dict(row, path=row["filename"]) for row in build.spec.document["requirements"]])
     if build.job_id:
+        authorize_job_inputs(build.job, credential)
         core.prepare_job(build.job)
         EnvironmentBuild.objects.filter(id=build.id, state="draft").update(state="prepared")
         build.refresh_from_db()
@@ -143,9 +155,10 @@ def prepare_build(build, credential):
     document = build.spec.document
     generated = render_build_files(document, build_id=build.id, spec_sha256=build.spec.sha256, policy=policy.configuration)
     # Upload reservations must commit outside the job/idempotency transaction.
-    descriptors = []
+    descriptors, trusted_files = [], {}
     for path, content in generated.items():
         blob = store_blob(build.spec.project, content)
+        trusted_files[path] = blob
         descriptors.append({"path": path, "sha256": blob.sha256, "size_bytes": blob.size_bytes, "executable": False})
     descriptors += [{"path": "_environment/wheels/" + row["filename"], "sha256": row["sha256"],
                      "size_bytes": row["size_bytes"], "executable": False} for row in document["requirements"]]
@@ -159,7 +172,8 @@ def prepare_build(build, credential):
         current = EnvironmentBuild.objects.select_for_update().get(id=build.id)
         _current_build_policy(current)
         if not current.job_id:
-            result, _ = core.create_job(credential, request)
+            result, _ = core.create_job(credential, request, trusted_files=trusted_files,
+                input_sources={"_environment/wheels/" + name: source for name, source in wheel_sources.items()})
             job = Job.objects.get(id=result["id"])
             job.extension_name = "environments"
             job.save(update_fields=["extension_name"])

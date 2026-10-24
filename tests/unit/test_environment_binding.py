@@ -16,7 +16,7 @@ from compute_relay.control.models import (
     ApprovalDecision, Attempt, Connection, Environment, ExecutionRequest, Grant,
     Job, Project, ProjectCredential, User, WorkerIdentity,
 )
-from compute_relay.control.storage import store_blob
+from compute_relay.control.storage import store_uploaded_blob
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def catalog(db, settings, tmp_path):
               "max_active_jobs": 10, "allowance": {"cpu_core_seconds": 10000, "gpu_device_seconds": 0},
               "admission_expires_at": (timezone.now() + timedelta(days=1)).isoformat()}
     grant = Grant.objects.create(project=project, policy=policy)
-    blob = store_blob(project, b"print('this upload is never executed by the test')\n")
+    blob = store_uploaded_blob(project, b"print('this upload is never executed by the test')\n")
     request = {"schema_version": "1.0", "project_id": str(project.id), "connection_id": str(targets[0].id),
                "name": "bound-recipe", "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
                "environment": {"id": str(environments[0].id), "revision_sha256": revision},

@@ -57,6 +57,7 @@ def _key_payload(data):
 
 
 def _one_time_record(project, actor, operation, nonce, payload, credential_id):
+    from .metadata import idempotency_charge_id, json_size, reserve_metadata
     try:
         key = str(UUID(str(nonce)))
     except (ValueError, TypeError):
@@ -64,8 +65,10 @@ def _one_time_record(project, actor, operation, nonce, payload, credential_id):
     operation = f"manage:{operation}:{actor.id}"
     if IdempotencyRecord.objects.filter(project=project, operation=operation, key=key).exists():
         raise BrokerError("SECRET_ALREADY_SHOWN", "This creation request was already processed. Keys cannot be retrieved; rotate the key if its value was lost.", 409)
+    response = {"credential_id": str(credential_id)}
+    reserve_metadata(project, "idempotency", idempotency_charge_id(operation, key), 512 + json_size(response))
     IdempotencyRecord.objects.create(project=project, operation=operation, key=key, request_sha256=services.digest(payload),
-                                      response={"credential_id": str(credential_id)}, status=201)
+                                      response=response, status=201)
 
 
 def issue_key(project, user, data):

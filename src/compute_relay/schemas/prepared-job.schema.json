@@ -11,6 +11,7 @@
     "backend": {"const": "slurm"},
     "adapter_version": {"const": "slurm-ssh/v1"},
     "helper_sha256": {"$ref": "common.schema.json#/$defs/digest"},
+    "helper_protocol": {"const": "slurm-jobs/v1"},
     "profile_revision": {"type": "integer", "minimum": 1},
     "connection_revision_sha256": {"$ref": "common.schema.json#/$defs/digest"},
     "request": {"$ref": "job-request.schema.json"},

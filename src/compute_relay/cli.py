@@ -141,6 +141,19 @@ def main(argv=None):
     start = sub.add_parser("start", help="Start the local portal, SQLite state and saved cluster connectors")
     register_options(start)
     start.set_defaults(run=run_local)
+    from .upgrade_check import run as check_upgrade
+    check = sub.add_parser("check-upgrade", help="Check a stopped installation's outstanding job protocols without migrating")
+    check.add_argument("--data-directory", default=argparse.SUPPRESS, help="Existing private installation state directory")
+    check.set_defaults(run=check_upgrade)
+    from .local_maintenance import run as maintain_state
+    maintenance = sub.add_parser("maintain-state", help="Inspect or compact bounded local metadata while the application is stopped")
+    maintenance.add_argument("--data-directory", default=argparse.SUPPRESS, help="Existing private installation state directory")
+    maintenance.add_argument("--archive-drafts", action="store_true", help="Select old, unreferenced jobs with no execution request")
+    maintenance.add_argument("--compact-idempotency", action="store_true", help="Retire old response bodies, keeping non-replayable request identities")
+    maintenance.add_argument("--older-than-days", type=int, default=30)
+    maintenance.add_argument("--limit", type=int, default=100, help="Maximum records per maintenance category (1 through 1000)")
+    maintenance.add_argument("--apply", action="store_true", help="Apply the selected compaction and recover expired uploads; otherwise inspect only")
+    maintenance.set_defaults(run=maintain_state)
     from compute_relay.mcp.setup import register_parser
     from compute_relay.connector_profiles import register_commands
     register_parser(sub)

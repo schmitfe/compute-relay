@@ -364,7 +364,7 @@ def test_missing_pinned_wheel_fails_before_preparation_or_execution(context):
     document = copy.deepcopy(context.document)
     document["requirements"] = [{"name": "example", "version": "1.0", "filename": "example-1.0-py3-none-any.whl",
         "sha256": "a" * 64, "size_bytes": 128}]
-    with pytest.raises(BrokerError, match="Upload every pinned wheel"):
+    with pytest.raises(BrokerError, match="Upload and verify"):
         context.services.create_build(context.key, document)
     assert not Job.objects.exists() and not Attempt.objects.exists()
 

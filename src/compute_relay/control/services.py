@@ -8,10 +8,11 @@ from datetime import datetime, timedelta
 
 import rfc8785
 from django.db import transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Case, Count, IntegerField, Q, Sum, Value, When
 from django.utils import timezone
 
 from compute_relay.domain.validation import relative_path, validate
+from compute_relay.domain.lifecycle import terminal_observation, validate_report_outcome
 from .auth import human_permission, require_connection, connection_allowed, require_credential_actor
 from .errors import BrokerError
 from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Connection,
@@ -22,6 +23,11 @@ from .storage import read_blob, store_blob
 
 TERMINAL = {"succeeded", "failed", "cancelled", "expired"}
 DEFAULT_MAX_TOTAL_JOBS = 1000
+LEASE_SECONDS = 120
+# Observe + metadata finalization + collection may each use the protected
+# 600-second helper maximum. HTTP/journal overhead fits in the remaining margin.
+MAX_LEASE_LIFETIME_SECONDS = 40 * 60
+MAX_REPORT_RECEIPTS_PER_ATTEMPT = 16
 
 
 def digest(value):
@@ -29,10 +35,12 @@ def digest(value):
 
 
 def audit(project, actor, action, obj, details=None):
-    AuditEvent.objects.create(project=project, actor=str(actor), action=action, object_id=str(obj), details=details or {})
+    from .metadata import append_audit
+    append_audit(project, actor, action, obj, details or {})
 
 
 def idempotent(project, operation, key, payload, action):
+    from .metadata import idempotency_charge_id, json_size, reserve_metadata
     if not isinstance(key, str) or not 1 <= len(key) <= 128:
         raise BrokerError("IDEMPOTENCY_REQUIRED", "Supply an Idempotency-Key of at most 128 characters.")
     request_digest = digest(payload)
@@ -42,8 +50,13 @@ def idempotent(project, operation, key, payload, action):
         if existing:
             if existing.request_sha256 != request_digest:
                 raise BrokerError("IDEMPOTENCY_CONFLICT", "The key was used with a different request.", 409)
+            if existing.compacted:
+                return {"error": {"code": "IDEMPOTENCY_RETIRED", "message": "This request was already processed; its response was retired."}}, 409
             return existing.response, existing.status
+        charge_id = idempotency_charge_id(operation, key)
+        reserve_metadata(project, "idempotency", charge_id, 512)
         response, status = action()
+        reserve_metadata(project, "idempotency", charge_id, 512 + json_size(response))
         IdempotencyRecord.objects.create(project=project, operation=operation, key=key, request_sha256=request_digest, response=response, status=status)
         return response, status
 
@@ -86,9 +99,20 @@ def bound_environment(project, request):
     return environment
 
 
-def create_job(credential, document, previous=None):
+@transaction.atomic
+def create_job(credential, document, previous=None, *, input_sources=None, trusted_files=None):
+    from .input_sources import authorize_source, current_credential, resolve_input_blob
+    from .metadata import json_size, reserve_metadata
+    credential = current_credential(credential)
     validate("job-request.schema.json", document)
     project = credential.project
+    Project.objects.select_for_update().get(id=project.id)
+    if previous is not None:
+        previous = Job.objects.filter(id=previous.id, project=project).first()
+        if previous is None:
+            raise BrokerError("NOT_FOUND", "Previous job not found.", 404)
+        if previous.state == "archived":
+            raise BrokerError("JOB_ARCHIVED", "Create a fresh job from explicit inputs.", 409)
     if document["project_id"] != str(project.id):
         raise BrokerError("NOT_FOUND", "Project not found.", 404)
     require_connection(credential, document["connection_id"])
@@ -98,18 +122,34 @@ def create_job(credential, document, previous=None):
         raise BrokerError("REFERENCE_DENIED", "Connection or environment is not available to this project.", 403)
     descriptors = []
     for item in document["files"]:
-        blob = Blob.objects.filter(project=project, sha256=item["sha256"], size_bytes=item["size_bytes"]).first()
-        if blob is None:
-            raise BrokerError("OBJECT_MISSING", "Upload and verify every referenced file first.", 404)
-        descriptors.append((item, blob))
-    job = Job.objects.create(project=project, credential=credential, request=document, previous=previous)
-    JobFile.objects.bulk_create([JobFile(job=job, path=item["path"], blob=blob, executable=item["executable"]) for item, blob in descriptors])
+        artifact = None
+        if trusted_files is not None and item["path"] in trusted_files:
+            blob, source_kind = trusted_files[item["path"]], "generated"
+        elif input_sources is not None and item["path"] in input_sources:
+            blob, artifact = input_sources[item["path"]]
+            authorize_source(credential, blob, artifact)
+            source_kind = "artifact" if artifact is not None else "upload"
+        else:
+            blob, artifact = resolve_input_blob(credential, item)
+            source_kind = "artifact" if artifact is not None else "upload"
+        if blob.project_id != project.id or blob.sha256 != item["sha256"] or blob.size_bytes != item["size_bytes"]:
+            raise BrokerError("INPUT_SOURCE_CHANGED", "The sealed input source changed.", 409)
+        descriptors.append((item, blob, source_kind, artifact))
+    identifier = uuid.uuid4()
+    # Reserve the duplicate manifest/request plus bounded generated descriptors
+    # and row overhead before writing a draft. Duplicate blobs do not evade this.
+    reserve_metadata(project, "job", identifier, 2 * json_size(document) + 32768 + 512 * len(descriptors))
+    job = Job.objects.create(id=identifier, project=project, credential=credential, request=document, previous=previous)
+    JobFile.objects.bulk_create([JobFile(job=job, path=item["path"], blob=blob, executable=item["executable"],
+        source_kind=kind, source_artifact=artifact) for item, blob, kind, artifact in descriptors])
     audit(project, credential.id, "job.created", job.id)
     return {"id": str(job.id), "state": job.state}, 201
 
 
 def prepare_job(job):
     from compute_relay.backends import prepare, verify_package
+    if job.state == "archived":
+        raise BrokerError("JOB_ARCHIVED", "This job was archived.", 409)
     if job.manifest:
         return serialize_job(job), 200
     connection = job.project.connections.get(id=job.request["connection_id"], enabled=True, setup_complete=True)
@@ -136,7 +176,7 @@ def prepare_job(job):
         if not current.manifest:
             descriptors = {f["path"]: f for f in result["manifest"]["files"]}
             for path, blob in generated.items():
-                JobFile.objects.create(job=current, path=path, blob=blob, executable=descriptors[path]["executable"])
+                JobFile.objects.create(job=current, path=path, blob=blob, executable=descriptors[path]["executable"], source_kind="generated")
             files = {entry.path: read_blob(entry.blob) for entry in current.files.select_related("blob")}
             verify_package(result["manifest"], result["manifest_sha256"], files)
             validate("prepared-job.schema.json", result["manifest"])
@@ -203,10 +243,18 @@ def _release_pending_reservation(execution, grant, reason):
         evidence={"reason": reason})
 
 
+def _require_executable_job(job):
+    if job.state == "archived":
+        raise BrokerError("JOB_ARCHIVED", "Archived jobs cannot execute. Create a new job.", 409)
+
+
 def authorize(execution_request, *, decision=None):
     """Caller transaction serializes project/grant and consumes a decision once."""
     job = execution_request.job
+    _require_executable_job(job)
     project = Project.objects.select_for_update().get(id=job.project_id)
+    job.refresh_from_db()
+    _require_executable_job(job)
     grant = Grant.objects.select_for_update().get(project=project)
     policy = grant.policy
     validate("project-policy.schema.json", policy)
@@ -222,6 +270,8 @@ def authorize(execution_request, *, decision=None):
     if credential:
         require_credential_actor(credential)
         require_connection(credential, job.request["connection_id"])
+        from .input_sources import authorize_job_inputs
+        authorize_job_inputs(job, credential)
         if credential.execution_mode == "approval_required" and decision is None:
             raise BrokerError("APPROVAL_REQUIRED", "This API key requires human confirmation for each execution.", 409)
     bound_environment(project, job.request)
@@ -276,13 +326,18 @@ def authorize(execution_request, *, decision=None):
 
 @transaction.atomic
 def request_execution(job, credential):
+    _require_executable_job(job)
     project = Project.objects.select_for_update().get(id=job.project_id)
+    job.refresh_from_db()
+    _require_executable_job(job)
     job.project = project
     credential.refresh_from_db()
     if credential.revoked or credential.expires_at <= timezone.now():
         raise BrokerError("AUTH_REQUIRED", "The requesting credential is no longer valid.", 403)
     require_credential_actor(credential)
     require_connection(credential, job.request["connection_id"])
+    from .input_sources import authorize_job_inputs
+    authorize_job_inputs(job, credential)
     bound_environment(job.project, job.request)
     from compute_relay.extensions import job_hook
     job_hook(job, "validate_execution_request", job, credential)
@@ -378,6 +433,18 @@ def serialize_attempt(attempt):
 
 def serialize_job(job, *, package=False):
     from .resource_api import resource_validation
+    if job.state == "archived":
+        # A retained identity has no executable request. Do not reconstruct
+        # resource or approval decisions from its deliberately compact metadata.
+        return {"id": str(job.id), "name": job.name, "project_id": str(job.project_id),
+            "project_name": job.project.name,
+            "owner": {"id": str(job.project.owner_id), "username": job.project.owner.username},
+            "submitted_using": {"id": str(job.credential_id), "name": job.credential.name} if job.credential_id else None,
+            "state": "archived", "package_state": "archived", "archived": True, "request": job.request,
+            "manifest_sha256": job.manifest_sha256, "manifest": None, "files": [],
+            "execution_requests": [], "attempts": [], "approval": None,
+            "resource_validation": {"valid": None, "violations": [], "effective_limits": None,
+                "project_envelope_human_override_allowed": False}}
     executions = []
     approval = execution_approval(job, job.credential)
     for execution in job.execution_requests.select_related("credential").order_by("created_at"):
@@ -401,19 +468,29 @@ def serialize_job(job, *, package=False):
     return result
 
 
-def lease_work(worker):
+def lease_work(worker, *, management_only=False):
     now = timezone.now()
+    from compute_relay.extensions import control_names
+    enabled_extensions = set(control_names()) & set(worker.supported_extensions)
+    management = Q(dispatch_started=True) | Q(native_identity__isnull=False)
+    submission = (Q(job__project__paused=False, connection__enabled=True, connection__archived=False)
+        & (Q(job__extension_name="") | Q(job__extension_name__in=enabled_extensions)))
     with transaction.atomic():
-        candidates = Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection").filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"]).filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now)).order_by("created_at")
+        candidates = (Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection")
+            .filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"])
+            .filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now))
+            .filter(management if management_only else management | submission)
+            .annotate(management_priority=Case(When(management, then=Value(0)),
+                    default=Value(1), output_field=IntegerField()), lifecycle_priority=Case(
+                When(cancel_requested=True, native_identity__isnull=False, then=Value(0)),
+                When(dispatch_started=True, native_identity__isnull=True, then=Value(1)),
+                When(native_identity__isnull=False, then=Value(2)), default=Value(3), output_field=IntegerField()))
+            # Due age wins within management. A slow repeated cancellation
+            # cannot overtake an older observation forever; cancellation still
+            # wins a tie, and management stays ahead of new submissions.
+            .order_by("management_priority", "next_poll_at", "lifecycle_priority", "created_at", "id"))
         for attempt in candidates[:30]:
-            from compute_relay.extensions import control_names
-            if not attempt.dispatch_started and attempt.job.extension_name and (
-                    attempt.job.extension_name not in control_names()
-                    or attempt.job.extension_name not in worker.supported_extensions):
-                continue
-            if not attempt.dispatch_started and (attempt.job.project.paused or not attempt.connection.enabled):
-                continue
-            if attempt.cancel_requested and attempt.native_identity:
+            if attempt.cancel_requested and attempt.native_identity and attempt.error_code != "CANCEL_IDENTITY_MISMATCH":
                 operation = "cancel"
             elif attempt.dispatch_started and not attempt.native_identity:
                 operation = "reconcile"
@@ -423,9 +500,10 @@ def lease_work(worker):
                 operation = "submit"
             attempt.generation += 1
             attempt.lease_id = uuid.uuid4()
-            attempt.lease_expires_at = now + timedelta(seconds=60)
+            attempt.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+            attempt.lease_deadline_at = now + timedelta(seconds=MAX_LEASE_LIFETIME_SECONDS)
             attempt.operation = operation
-            attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "operation"])
+            attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation"])
             files = {item.path: base64.b64encode(read_blob(item.blob)).decode("ascii") for item in attempt.job.files.select_related("blob")}
             lease = {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation, "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration, "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
             if attempt.job.extension_name in control_names():
@@ -439,7 +517,7 @@ def lease_work(worker):
     return {"lease": None}
 
 
-def checked_lease(worker, attempt_id, data):
+def checked_lease(worker, attempt_id, data, *, allow_expired=False):
     if not WorkerIdentity.objects.select_for_update().filter(id=worker.id, revoked=False).exists():
         raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
     # Project administration uses Project -> Credential. Hold the same authority
@@ -457,9 +535,24 @@ def checked_lease(worker, attempt_id, data):
     attempt = Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection", "execution_request__credential").filter(id=attempt_id, connection__worker=worker).first()
     if attempt is None:
         raise BrokerError("NOT_FOUND", "Attempt not found.", 404)
-    if str(attempt.lease_id) != data.get("lease_id") or attempt.generation != data.get("generation") or not attempt.lease_expires_at or attempt.lease_expires_at <= timezone.now():
+    if (str(attempt.lease_id) != data.get("lease_id") or type(data.get("generation")) is not int
+            or attempt.generation != data["generation"] or not attempt.lease_expires_at
+            or (not allow_expired and attempt.lease_expires_at <= timezone.now())):
         raise BrokerError("STALE_LEASE", "Lease is stale or expired.", 409)
     return attempt
+
+
+def renew_lease(worker, attempt_id, data):
+    """Renew only the exact current generation, within its fixed operation cap."""
+    with transaction.atomic():
+        attempt = checked_lease(worker, attempt_id, data, allow_expired=True)
+        now = timezone.now()
+        if not attempt.lease_deadline_at or attempt.lease_deadline_at <= now:
+            raise BrokerError("STALE_LEASE", "The operation's maximum lease lifetime has ended.", 409)
+        attempt.lease_expires_at = min(now + timedelta(seconds=LEASE_SECONDS), attempt.lease_deadline_at)
+        attempt.save(update_fields=["lease_expires_at"])
+        return {"renewed": True, "lease_expires_at": attempt.lease_expires_at.isoformat(),
+            "lease_deadline_at": attempt.lease_deadline_at.isoformat()}
 
 
 def dispatch(worker, attempt_id, data):
@@ -478,6 +571,8 @@ def dispatch(worker, attempt_id, data):
             raise BrokerError("HPC_IDENTITY_REQUIRED", "Execution needs a verified requesting user.", 403)
         if credential:
             require_credential_actor(credential)
+            from .input_sources import authorize_job_inputs
+            authorize_job_inputs(attempt.job, credential)
         if attempt.job.project.paused or not attempt.connection.enabled or (credential and (credential.revoked or credential.expires_at <= timezone.now())):
             raise BrokerError("DISPATCH_REVOKED", "Dispatch authority is no longer active.", 403)
         if credential and ("jobs:execute" not in credential.scopes or not connection_allowed(credential, attempt.connection_id)):
@@ -562,7 +657,7 @@ def report(worker, attempt_id, data):
         try:
             artifacts[path] = store_blob(project, content, maximum=10 * 1024 * 1024)
         except BrokerError as exc:
-            if exc.code not in {"STORAGE_QUOTA", "STORAGE_UNAVAILABLE", "OBJECT_INTEGRITY", "UPLOAD_LIMIT"}:
+            if exc.code not in {"STORAGE_QUOTA", "STORAGE_UNAVAILABLE", "OBJECT_INTEGRITY", "UPLOAD_LIMIT", "UPLOAD_BUSY"}:
                 raise
             storage_failed = True
         except OSError:
@@ -570,19 +665,19 @@ def report(worker, attempt_id, data):
     with transaction.atomic():
         attempt = checked_lease(worker, attempt_id, data)
         outcome = data.get("outcome")
-        if outcome not in {"submitted", "submission_uncertain", "rejected", "observed", "cancel_requested"}:
-            raise BrokerError("INVALID_REPORT", "Unknown worker result.")
-        valid_outcomes = {"submit": {"submitted", "submission_uncertain", "rejected"},
-                          "reconcile": {"submitted", "submission_uncertain", "rejected"},
-                          "observe": {"observed"}, "cancel": {"cancel_requested"}}
-        if outcome not in valid_outcomes.get(attempt.operation, set()):
-            raise BrokerError("INVALID_REPORT", "Result does not match the leased operation.", 409)
+        try:
+            validate_report_outcome(attempt.operation, outcome)
+        except ValueError:
+            raise BrokerError("INVALID_REPORT", "Result does not match the leased operation.", 409) from None
         if outcome == "rejected" and (attempt.native_identity or data.get("native_identity") or not attempt.dispatch_started):
             raise BrokerError("INVALID_REPORT", "A known scheduler job cannot release funds as nonaccepted.", 409)
         if data.get("native_identity"):
             if attempt.native_identity and attempt.native_identity != data["native_identity"]:
                 raise BrokerError("NATIVE_IDENTITY_CHANGED", "Attempt already has a different native identity.", 409)
             attempt.native_identity = data["native_identity"]
+        if attempt.operation == "cancel" and data.get("native_identity") != attempt.native_identity:
+            raise BrokerError("NATIVE_IDENTITY_CHANGED", "Cancellation must name the exact leased native identity.", 409)
+        previous_cancel_error = attempt.error_code
         if outcome == "submitted":
             if not attempt.dispatch_started or not attempt.native_identity:
                 raise BrokerError("INVALID_REPORT", "Submission has no matching intent/native receipt.", 409)
@@ -595,6 +690,14 @@ def report(worker, attempt_id, data):
         elif outcome == "cancel_requested":
             attempt.cancel_requested = False
             attempt.state = "cancel_requested"
+            if attempt.error_code in {"CANCEL_UNCONFIRMED", "CANCEL_IDENTITY_MISMATCH"}:
+                attempt.error_code = ""
+        elif outcome in {"cancel_unknown", "cancel_identity_mismatch"}:
+            attempt.cancel_requested = True
+            attempt.state = "cancel_pending"
+            attempt.error_code = "CANCEL_IDENTITY_MISMATCH" if outcome == "cancel_identity_mismatch" else "CANCEL_UNCONFIRMED"
+            if isinstance(data.get("observation"), dict):
+                attempt.observation = data["observation"]
         else:
             observation = data.get("observation", {})
             attempt.observation = observation
@@ -602,6 +705,10 @@ def report(worker, attempt_id, data):
             if state:
                 attempt.state = state
             accounting = observation.get("accounting", {})
+            if terminal_observation(observation):
+                attempt.cancel_requested = False
+                if attempt.error_code in {"CANCEL_UNCONFIRMED", "CANCEL_IDENTITY_MISMATCH"}:
+                    attempt.error_code = ""
             if state in TERMINAL and observation.get("terminal") is True and accounting.get("final") is True:
                 _settle(attempt, accounting["cpu_core_seconds"], accounting["gpu_device_seconds"], observation)
             elif state in TERMINAL:
@@ -616,16 +723,27 @@ def report(worker, attempt_id, data):
             existing, created = Artifact.objects.get_or_create(attempt=attempt, path=path, defaults={"blob": blob})
             if not created and existing.blob_id != blob.id:
                 raise BrokerError("ARTIFACT_CHANGED", "Final artifact bytes changed.", 409)
-        if attempt.error_code != "OBSERVED_OVERAGE":
+        if attempt.error_code != "OBSERVED_OVERAGE" and outcome not in {"cancel_unknown", "cancel_identity_mismatch"}:
             attempt.error_code = data.get("error_code", attempt.error_code)[:80]
         if storage_failed and attempt.error_code != "OBSERVED_OVERAGE":
             attempt.error_code = "OUTPUT_STORAGE_UNAVAILABLE"
         attempt.lease_expires_at = None
         delay = 10 if attempt.state == "submission_uncertain" or attempt.accounting_state == "settlement_pending" else 2
+        if outcome == "cancel_unknown":
+            delay = 30 if previous_cancel_error == "CANCEL_UNCONFIRMED" else 5
+        elif outcome == "cancel_identity_mismatch":
+            delay = 60
         attempt.next_poll_at = timezone.now() + timedelta(seconds=delay)
         attempt.save()
         response = {"accepted": True, "attempt": serialize_attempt(attempt)}
         WorkerReport.objects.create(lease_id=data["lease_id"], attempt=attempt, generation=attempt.generation, payload_sha256=payload_hash, response=response, extension_data=extension_data)
+        # Polling an indefinitely unknown scheduler job must not grow durable
+        # metadata forever. The latest receipt includes the current generation;
+        # a final settled/released generation cannot receive another lease.
+        # Removed generations fail checked_lease instead of executing again.
+        retained = list(WorkerReport.objects.filter(attempt=attempt).order_by("-generation", "lease_id")
+            .values_list("lease_id", flat=True)[:MAX_REPORT_RECEIPTS_PER_ATTEMPT])
+        WorkerReport.objects.filter(attempt=attempt).exclude(lease_id__in=retained).delete()
         if attempt.job.extension_name:
             def notify_extension():
                 try:
@@ -654,6 +772,8 @@ def cancel_attempt(attempt):
                 attempt.generation += 1
             else:
                 attempt.cancel_requested = True
+                if attempt.error_code in {"CANCEL_UNCONFIRMED", "CANCEL_IDENTITY_MISMATCH"}:
+                    attempt.error_code = ""
             attempt.next_poll_at = timezone.now()
             attempt.save()
         return serialize_attempt(attempt), 202

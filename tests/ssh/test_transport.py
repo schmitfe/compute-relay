@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from compute_relay.backends import prepare
-from compute_relay.backends.preparation import helper_source, sha256
+from compute_relay.backends.preparation import helper_source, sha256, JOB_PROTOCOL
 from compute_relay.transports import OpenSSHTransport, TransportError
 
 
@@ -56,7 +56,7 @@ def test_one_shot_helper_has_a_durable_cross_process_submission_journal(tmp_path
     prepared = prepare(request, {**request["environment"], "interpreter": "/usr/bin/python3"}, connection,
                        "44444444-4444-4444-8444-444444444444")
     files = {"main.py": content, **{path: source.encode() for path, source in prepared["generated_files"].items()}}
-    operation = {"operation": "submit", "config": {"remote_root": str(tmp_path / "jobs"), "slurm_paths": {"sbatch": str(sbatch)}},
+    operation = {"operation": "submit", "protocol": JOB_PROTOCOL, "config": {"remote_root": str(tmp_path / "jobs"), "slurm_paths": {"sbatch": str(sbatch)}},
                  "attempt_id": "55555555-5555-4555-8555-555555555555", "manifest": prepared["manifest"],
                  "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}
 

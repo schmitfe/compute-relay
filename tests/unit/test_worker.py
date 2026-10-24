@@ -46,11 +46,11 @@ class BackendSpy:
         self.reconciled += 1
         return {"outcome": "submission_uncertain"}
 
-    def observe(self, native):
+    def observe(self, native, *, manifest):
         return {"state": "completed", "terminal": True,
                 "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}}
 
-    def collect(self, native, outputs):
+    def collect(self, native, outputs, *, manifest):
         return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}
 
 
@@ -128,7 +128,7 @@ class WorkerTests(unittest.TestCase):
     def test_terminal_report_includes_bounded_outputs_and_accounting(self):
         self.worker.execute(self.lease)
         self.lease["operation"] = "observe"
-        self.lease["native_identity"] = {"job_id": "17"}
+        self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
         self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "observed")
@@ -137,7 +137,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_unauthorized_artifact_is_not_reported(self):
         self.lease["operation"] = "observe"
-        self.lease["native_identity"] = {"job_id": "17"}
+        self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
         self.backend.collect = lambda *args, **kwargs: {"artifacts": {"secrets": b"no"}}
         self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
@@ -148,7 +148,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_unavailable_outputs_do_not_suppress_final_accounting(self):
         self.lease["operation"] = "observe"
-        self.lease["native_identity"] = {"job_id": "17"}
+        self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
 
         def failed_collection(*args, **kwargs):
             raise OSError("sensitive path or remote diagnostic")

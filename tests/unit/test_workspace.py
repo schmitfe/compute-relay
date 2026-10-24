@@ -18,7 +18,7 @@ import pytest
 
 from compute_relay.control.auth import token_hash
 from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Job, Project
-from compute_relay.control.storage import store_blob
+from compute_relay.control.storage import store_blob, store_uploaded_blob
 from compute_relay import workspace as workspace_module
 from compute_relay.workspace import WorkspaceClient, MAX_SOURCE_BYTES, main
 from test_control import broker, budgeted, execution, prepared_job  # noqa: F401
@@ -387,9 +387,9 @@ def test_real_http_cli_stages_prepares_idempotently_and_fetches_without_executin
 
 def test_content_lookup_checks_scope_project_size_and_stored_integrity(broker):
     c = broker
-    blob = store_blob(c.project, b"ours")
+    blob = store_uploaded_blob(c.project, b"ours")
     foreign = Project.objects.create(owner=c.outsider, name="foreign")
-    other = store_blob(foreign, b"other")
+    other = store_uploaded_blob(foreign, b"other")
     client = Client(HTTP_AUTHORIZATION="Bearer " + c.token)
     path = f"/api/v1/projects/{c.project.id}/objects/lookup"
     entries = [{"sha256": item.sha256, "size_bytes": item.size_bytes} for item in [blob, other]]

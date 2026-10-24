@@ -25,7 +25,7 @@ from compute_relay.control.models import (
     ExecutionRequest, Grant, Job, LedgerEntry, Project, ProjectCredential,
     StoragePool, UploadReservation, User, WorkerIdentity,
 )
-from compute_relay.control.storage import read_blob, store_blob
+from compute_relay.control.storage import read_blob, store_blob, store_uploaded_blob
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ def broker(db, settings, tmp_path):
 
 def prepared_job(broker, *, cpus=1, outputs=None):
     source = b"raise RuntimeError('uploaded source must not execute in the broker')\n"
-    blob = store_blob(broker.project, source)
+    blob = store_uploaded_blob(broker.project, source)
     request = {"schema_version": "1.0", "project_id": str(broker.project.id),
                "connection_id": str(broker.connection.id), "name": "synthetic",
                "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
@@ -457,7 +457,12 @@ def test_global_quota_applies_across_projects(broker, settings):
 
 
 def test_failed_disk_write_releases_persistent_upload_reservation(broker):
-    with patch("compute_relay.control.storage.tempfile.mkstemp", side_effect=OSError("synthetic disk failure")):
+    original = os.open
+    def fail_temporary(path, *args, **kwargs):
+        if Path(path).name.startswith("upload-"):
+            raise OSError("synthetic disk failure")
+        return original(path, *args, **kwargs)
+    with patch("compute_relay.control.storage.os.open", side_effect=fail_temporary):
         with pytest.raises(OSError):
             store_blob(broker.project, b"source")
     broker.project.refresh_from_db()

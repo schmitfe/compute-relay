@@ -49,14 +49,14 @@ class Backend:
         self.reconciled += 1
         return {"outcome": "submission_uncertain"}
 
-    async def observe(self, native):
+    async def observe(self, native, *, manifest):
         return {"state": "completed", "terminal": True, "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}}
 
-    async def cancel(self, native):
+    async def cancel(self, native, *, manifest):
         self.cancelled += 1
         return {"outcome": "cancel_requested"}
 
-    async def collect(self, native, outputs):
+    async def collect(self, native, outputs, *, manifest):
         if self.output_failure:
             raise OSError("private remote diagnostic")
         return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}

@@ -24,7 +24,7 @@ from compute_relay.control.models import (
     Artifact, Attempt, Connection, Environment, ExecutionRequest, Grant,
     Job, Project, ProjectCredential, User, WorkerIdentity,
 )
-from compute_relay.control.storage import store_blob
+from compute_relay.control.storage import store_blob, store_uploaded_blob
 
 
 SCOPES = ["objects:write", "jobs:read", "jobs:write", "jobs:execute", "jobs:cancel", "artifacts:read"]
@@ -133,7 +133,7 @@ def agent_get(token, path):
 
 def prepared(context, connection=None, outputs=None, *, name="management-test"):
     source = b"raise RuntimeError('management tests must never execute uploaded source')\n"
-    blob = store_blob(context.project, source)
+    blob = store_uploaded_blob(context.project, source)
     connection = connection or context.connections[0]
     environment = context.secondary_environment if connection.id == context.connections[1].id else context.environment
     document = {"schema_version": "1.0", "project_id": str(context.project.id), "connection_id": str(connection.id),

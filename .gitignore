@@ -24,4 +24,6 @@ secrets/
 data/
 artifacts/
 acceptance-private/
+# Local review evidence may contain private details; publish only fix notes.
+/review/
 .DS_Store

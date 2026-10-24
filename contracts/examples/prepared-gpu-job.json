@@ -3,6 +3,7 @@
   "job_revision_id": "44444444-4444-4444-8444-444444444444",
   "backend": "slurm",
   "adapter_version": "slurm-ssh/v1",
+  "helper_protocol": "slurm-jobs/v1",
   "helper_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "profile_revision": 1,
   "request": {

@@ -108,6 +108,91 @@ need separate backup. Restore into a stopped installation and reconnect before
 admitting new jobs. A stale backup can omit jobs submitted after it was taken;
 reconcile those jobs rather than starting two competing copies of the ledger.
 
+## Check an upgrade before starting it
+
+Install the candidate package into a separate virtual environment, keep the
+previous package/wheel available, and stop the launcher and any separately
+started connectors. Back up the stopped state before the updated launcher can
+apply migrations. Record which package version or commit belongs to that backup.
+
+Run the candidate's offline check against the existing state directory:
+
+```sh
+compute-relay check-upgrade --data-directory /path/to/private/broker-data
+```
+
+This command takes the installation lock and opens SQLite read-only. It does
+not migrate the database, authenticate SSH, submit jobs or execute stored helper
+source. Its JSON summary counts outstanding attempts, unsupported management
+protocols, prepared jobs requiring a new revision, inputs without verified
+provenance, and old upload reservations needing inspection. Unsupported
+outstanding protocols cause a nonzero exit; diagnostic samples are bounded.
+The check examines stored protocol declarations, not current cluster health or
+the integrity of remote files.
+
+The current management bundle supports `slurm-jobs/v1` and the original
+unversioned `slurm-ssh/v1` manifest format. It verifies the original manifest
+digest and journal/native identity while using current reviewed management code.
+It never executes an archived helper supplied by a manifest or journal.
+Discovery has a separate bundle, so catalog-only changes do not change the
+execution-helper hash. A changed execution bundle still blocks a new submission
+of an old prepared package: create and review a new job revision. Existing
+submission intent must reconcile its original attempt instead of submitting a
+replacement.
+
+If the check finds an unsupported outstanding protocol, use the previous
+compatible version to drain or explicitly cancel and settle that work, then
+stop, back up and check again. Keep admission paused while doing this; pausing
+new work leaves dispatched job management eligible. A passing protocol check
+does not remove ordinary authority, budget or input-provenance checks.
+
+Earlier stored files may have no evidence of an independent upload. Such inputs
+remain unverified for new use: explicitly upload the bytes and create a new
+revision, or select an artifact the current key may read. Do not manufacture
+upload grants from hashes. Old reserved uploads without a digest/expiry require
+inspection; the automatic recovery path deliberately leaves them unchanged.
+
+For rollback, stop the candidate and restore a matching code **and** complete
+database/object-store backup together. Do not run an older binary against a
+migrated database or restore only the database while keeping a different object
+store. A backup predating cluster submissions cannot establish that those jobs
+never ran; reconcile them before reopening admission. See the
+[review-fix notes](review-fixes-2026-10-24.md) for compatibility and test coverage.
+
+## Inspect and compact local metadata
+
+With the launcher and connectors stopped, preview a bounded maintenance batch:
+
+```sh
+compute-relay maintain-state --data-directory /path/to/private/broker-data \
+  --archive-drafts --compact-idempotency --older-than-days 30 --limit 100
+```
+
+Add `--apply` to apply those selections. The default is inspection only; `--limit`
+accepts 1 through 1000 records per category, and the default cutoff is 30 days.
+The command uses the installation lock and does not migrate a pending schema.
+Complete the checked upgrade first if it reports that migrations are needed.
+
+Draft archival selects only old core draft/prepared jobs that never had an
+execution request, are not owned by an extension, and are not live revision
+parents. It keeps a count-capped identity and original manifest digest, removes
+the executable metadata/file references, and makes the job non-executable. It
+does not delete execution history, shared object bytes or remote cluster files.
+Idempotency compaction removes old response bodies while retaining the request
+identity and hash; replay returns `IDEMPOTENCY_RETIRED`, never another execution.
+Retained identity counts are not reset by compaction.
+
+An applied batch also recovers eligible expired upload reservations. Fifteen
+minutes of age alone is insufficient: recovery must acquire the same project
+writer lock, so it skips a live or paused writer. It verifies any already
+published object before finalizing bytes, or aborts an unpublished reservation.
+Corrupt objects remain charged for inspection. The reported metadata bytes are
+logical admission charges, not SQLite/WAL file size or guaranteed disk space
+reclaimed; this command does not run `VACUUM` or object garbage collection.
+Busy or failed rows receive a 30-second recovery backoff so later eligible
+uploads can progress. Draft selection excludes protected revision parents
+before applying the batch limit.
+
 This same-account package does not protect files or authenticated SSH sockets
 from another process with the same account's access. See [security](security.md)
 for the actual boundary and [runtime](runtime.md) for execution limitations.

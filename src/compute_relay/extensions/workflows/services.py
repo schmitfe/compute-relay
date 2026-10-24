@@ -11,6 +11,9 @@ from compute_relay.control import services as core
 from compute_relay.control.auth import require_connection
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Artifact, Attempt, Blob, Job, Project
+from compute_relay.control.input_sources import (authorize_input_artifact, definition_inputs,
+    resolve_input_blob, seal_definition_inputs)
+from compute_relay.control.metadata import json_size, reserve_metadata
 from .models import WorkflowNodeRun, WorkflowRevision, WorkflowRun
 from .validation import validate_workflow
 
@@ -32,28 +35,35 @@ def authorize_nodes(credential, document):
         require_connection(credential, request["connection_id"])
         core.bound_environment(credential.project, request)
         for file in request["files"]:
-            if not Blob.objects.filter(project=credential.project, sha256=file["sha256"], size_bytes=file["size_bytes"]).exists():
-                raise BrokerError("OBJECT_MISSING", "Upload every node's code/input files first.", 404)
+            resolve_input_blob(credential, file)
     if any(node.get("inputs") for node in by_key.values()) and "artifacts:read" not in credential.scopes:
         raise BrokerError("SCOPE_DENIED", "Artifact-dependent workflows require artifacts:read.", 403)
     return by_key, dependencies, ordered
 
 
+@transaction.atomic
 def create_revision(credential, document):
     check_credential(credential)
     authorize_nodes(credential, document)
     revision = WorkflowRevision.objects.create(project=credential.project, name=document["name"],
         document=deepcopy(document), sha256=core.digest(document))
+    reserve_metadata(credential.project, "workflow_revision", revision.id, json_size(document) + 2048 +
+                     512 * sum(len(node["request"]["files"]) for node in document["nodes"]))
+    seal_definition_inputs(credential.project, "workflow_revision", revision.id,
+        {node["key"] + "/" + file["path"]: resolve_input_blob(credential, file)
+         for node in document["nodes"] for file in node["request"]["files"]})
     revision.connections.set({node["request"]["connection_id"] for node in document["nodes"]})
     core.audit(credential.project, credential.id, "workflow.prepared", revision.id, {"sha256": revision.sha256})
     return {"id": str(revision.id), "sha256": revision.sha256, "state": "prepared", "node_count": len(document["nodes"])}, 201
 
 
+@transaction.atomic
 def start_run(credential, revision):
     check_credential(credential, execute=True)
     check_revision(revision, credential)
     authorize_nodes(credential, revision.document)
     run = WorkflowRun.objects.create(revision=revision, credential=credential)
+    reserve_metadata(credential.project, "workflow_run", run.id, 2048 + 2048 * len(revision.document["nodes"]))
     WorkflowNodeRun.objects.bulk_create([WorkflowNodeRun(run=run, key=node["key"]) for node in revision.document["nodes"]])
     core.audit(credential.project, credential.id, "workflow.started", run.id)
     return serialize_run(run), 201
@@ -62,6 +72,9 @@ def start_run(credential, revision):
 def check_revision(revision, credential):
     if revision.project_id != credential.project_id or core.digest(revision.document) != revision.sha256:
         raise BrokerError("REVISION_CHANGED", "The sealed workflow revision changed.", 409)
+    definition_inputs(credential, "workflow_revision", revision.id,
+        [dict(file, path=node["key"] + "/" + file["path"])
+         for node in revision.document["nodes"] for file in node["request"]["files"]])
 
 
 def _attempt(node):
@@ -119,6 +132,7 @@ def _resolve(run, node, specification, dependencies, records, credential):
             node.state, node.error_code = "blocked_artifact", "UPSTREAM_OUTPUT_MISSING"
             node.save(update_fields=["state", "error_code"])
             return None
+        authorize_input_artifact(credential, artifact)
         request["files"].append({"path": edge["path"], "sha256": artifact.blob.sha256,
             "size_bytes": artifact.blob.size_bytes, "executable": False})
         resolved.append({"artifact_id": str(artifact.id), "sha256": artifact.blob.sha256,
@@ -149,13 +163,20 @@ def advance(run, credential=None, *, maximum=2):
         if resolved is None:
             continue
         request, inputs = resolved
+        sources = definition_inputs(credential, "workflow_revision", run.revision_id,
+            [dict(file, path=key + "/" + file["path"]) for file in specifications[key]["request"]["files"]])
+        sources = {path[len(key) + 1:]: source for path, source in sources.items()}
+        for edge in inputs:
+            artifact = Artifact.objects.select_related("blob", "attempt__job").get(id=edge["artifact_id"])
+            authorize_input_artifact(credential, artifact)
+            sources[edge["path"]] = (artifact.blob, artifact)
         with transaction.atomic():
             Project.objects.select_for_update().get(id=credential.project_id)
             current = WorkflowNodeRun.objects.select_for_update().get(id=node.id)
             if current.execution_request_id or (current.claim_expires_at and current.claim_expires_at > timezone.now()):
                 continue
             if not current.job_id:
-                created, _ = core.create_job(credential, request)
+                created, _ = core.create_job(credential, request, input_sources=sources)
                 job = Job.objects.get(id=created["id"])
                 job.extension_name = "workflows"
                 job.save(update_fields=["extension_name"])

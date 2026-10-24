@@ -11,12 +11,15 @@ import hashlib
 import json
 import re
 import shlex
-from importlib.resources import files as package_files
 from typing import Mapping
 from uuid import UUID
 
 from .environments import EnvironmentProfileError, render_environment
 from compute_relay.domain.allocation import allocated_cpus
+from compute_relay.remote.bundles import bundle_source
+from compute_relay.remote.protocol import (
+    JOB_PROTOCOL, JOB_OPERATIONS, MANAGEMENT_OPERATIONS, management_protocol_supported,
+)
 
 
 class BackendError(ValueError):
@@ -94,8 +97,17 @@ def connection_revision_sha256(connection: dict) -> str:
     return sha256(canonical_json_bytes(connection))
 
 
-def helper_source() -> str:
-    return package_files("compute_relay.remote").joinpath("helper.py").read_text(encoding="utf-8")
+def helper_source(operation: str = "submit") -> str:
+    if operation == "discover":
+        return bundle_source("discovery")
+    if operation in JOB_OPERATIONS:
+        return bundle_source("jobs")
+    raise BackendError("Unsupported fixed helper operation")
+
+
+def submission_helper_is_current(manifest: dict) -> bool:
+    return (management_protocol_supported(manifest)
+            and manifest.get("helper_sha256") == sha256(helper_source().encode()))
 
 
 def _name(value: object) -> str:
@@ -220,7 +232,8 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
                   "exec " + shlex.join([*execution_prefix, "./" + script, *arguments]), ""]
         generated = {"_broker/batch.sh": "\n".join(lines), "_broker/environment.sh": wrapper}
         manifest = {"schema_version": "1.0", "job_revision_id": job_revision_id, "backend": "slurm",
-                    "adapter_version": "slurm-ssh/v1", "helper_sha256": sha256(helper_source().encode()),
+                    "adapter_version": "slurm-ssh/v1", "helper_protocol": JOB_PROTOCOL,
+                    "helper_sha256": sha256(helper_source().encode()),
                     "profile_revision": positive_int(connection.get("profile_revision", 1), "profile revision"),
                     "connection_revision_sha256": connection_revision_sha256(connection), "request": request,
                     "files": sorted([*entries, *(_file_entry(path, text.encode(), path.endswith("batch.sh")) for path, text in generated.items())], key=lambda e: e["path"]),
@@ -232,10 +245,12 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         raise BackendError("Malformed preparation request or profile") from exc
 
 
-def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, bytes]) -> None:
+def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, bytes], *, operation: str = "submit") -> None:
     if sha256(canonical_json_bytes(manifest)) != valid_digest(manifest_sha256):
         raise BackendError("Prepared manifest digest mismatch")
-    if manifest.get("helper_sha256") != sha256(helper_source().encode()):
+    if operation not in JOB_OPERATIONS or not management_protocol_supported(manifest):
+        raise BackendError("Unsupported prepared job management protocol or operation")
+    if operation == "submit" and not submission_helper_is_current(manifest):
         raise BackendError("Prepared helper revision is not installed")
     entries = manifest.get("files", [])
     paths: set[str] = set()

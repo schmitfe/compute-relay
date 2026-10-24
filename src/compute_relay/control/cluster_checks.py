@@ -221,7 +221,7 @@ def prepare_check(user, connection_id, data):
             raise BrokerError("REVISION_CHANGED", "Cluster configuration changed. Reload the test preview.", 409)
         resource_plan(current)
         require_credential_actor(credential)
-        return services.create_job(credential, document)
+        return services.create_job(credential, document, trusted_files={"cluster-check.py": blob})
     created, _ = services.idempotent(project, "cluster-check:create", str(data["submission_id"]), payload,
         create)
     job = Job.objects.get(id=created["id"])

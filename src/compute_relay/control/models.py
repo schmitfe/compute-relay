@@ -186,6 +186,8 @@ class UploadReservation(models.Model):
     size_bytes = models.PositiveIntegerField()
     state = models.CharField(max_length=12, default="reserved")
     created_at = models.DateTimeField(default=timezone.now)
+    sha256 = models.CharField(max_length=64, blank=True)
+    expires_at = models.DateTimeField(null=True)
 
 
 class Blob(models.Model):
@@ -197,6 +199,39 @@ class Blob(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["project", "sha256"], name="project_blob_digest")]
+
+
+class UploadGrant(models.Model):
+    """Authority established by an explicit byte upload, independently of artifacts."""
+    blob = models.OneToOneField(Blob, on_delete=models.PROTECT, related_name="upload_grant")
+    created_at = models.DateTimeField(default=timezone.now)
+
+
+class InputSource(models.Model):
+    """Sealed input authority for extension definitions, independent of their digest."""
+    project = models.ForeignKey(Project, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=32)
+    object_id = models.UUIDField()
+    path = models.CharField(max_length=384)
+    blob = models.ForeignKey(Blob, on_delete=models.PROTECT)
+    artifact = models.ForeignKey("Artifact", null=True, on_delete=models.PROTECT)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["kind", "object_id", "path"], name="definition_input_source")]
+
+
+class MetadataPool(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+
+
+class MetadataUsage(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=32)
+    object_id = models.CharField(max_length=180)
+    size_bytes = models.PositiveIntegerField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["project", "kind", "object_id"], name="metadata_object_once")]
 
 
 class JobQuerySet(models.QuerySet):
@@ -248,6 +283,8 @@ class JobFile(models.Model):
     path = models.CharField(max_length=240)
     blob = models.ForeignKey(Blob, on_delete=models.PROTECT)
     executable = models.BooleanField(default=False)
+    source_kind = models.CharField(max_length=16, default="unverified")
+    source_artifact = models.ForeignKey("Artifact", null=True, on_delete=models.PROTECT)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["job", "path"], name="job_file_path")]
@@ -301,6 +338,7 @@ class Attempt(models.Model):
     generation = models.PositiveIntegerField(default=0)
     lease_id = models.UUIDField(null=True)
     lease_expires_at = models.DateTimeField(null=True)
+    lease_deadline_at = models.DateTimeField(null=True)
     dispatch_started = models.BooleanField(default=False)
     cancel_requested = models.BooleanField(default=False)
     next_poll_at = models.DateTimeField(default=timezone.now)
@@ -346,6 +384,8 @@ class IdempotencyRecord(models.Model):
     request_sha256 = models.CharField(max_length=64)
     response = models.JSONField()
     status = models.PositiveIntegerField(default=200)
+    created_at = models.DateTimeField(default=timezone.now)
+    compacted = models.BooleanField(default=False)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["project", "operation", "key"], name="idempotent_operation")]
