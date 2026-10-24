@@ -4,6 +4,7 @@ import ast
 import asyncio
 import copy
 import hashlib
+import importlib
 import json
 from pathlib import Path
 import subprocess
@@ -27,8 +28,8 @@ def digest(value):
 
 def test_fixed_bundles_are_deterministic_stdlib_programs_with_complete_sources():
     expected = {
-        "jobs": {"filesystem.py", "scheduler.py", "protocol.py", "jobs.py", "collection.py", "job_dispatch.py", "entrypoint.py"},
-        "discovery": {"filesystem.py", "scheduler.py", "discovery_config.py", "module_catalog.py", "software.py", "discovery.py", "entrypoint.py"},
+        "jobs": {"prelude.py", "filesystem.py", "scheduler.py", "protocol.py", "jobs.py", "collection.py", "job_dispatch.py", "entrypoint.py"},
+        "discovery": {"prelude.py", "filesystem.py", "scheduler.py", "discovery_config.py", "probes.py", "module_catalog.py", "software.py", "discovery.py", "entrypoint.py"},
     }
     for kind, names in expected.items():
         source = bundles.bundle_source(kind)
@@ -48,6 +49,57 @@ def test_fixed_bundles_are_deterministic_stdlib_programs_with_complete_sources()
         bundles.bundle_source("../archived")
     with pytest.raises(BackendError):
         helper_source("shell")
+
+
+def test_components_import_independently():
+    for name in sorted(bundles._ALLOWED_COMPONENTS):
+        importlib.import_module("compute_relay.remote." + name[:-3])
+
+
+def test_a_borrowed_standard_library_import_fails_during_assembly(monkeypatch):
+    original = bundles._component
+    monkeypatch.setattr(bundles, "_component", lambda name: (
+        original(name).replace("import re\n", "") if name == "scheduler.py" else original(name)))
+    with pytest.raises(ValueError, match="Unbound component dependency in scheduler.py"):
+        bundles.bundle_source("jobs")
+
+
+@pytest.mark.parametrize("kind", ["jobs", "discovery"])
+def test_component_declaration_order_does_not_change_bundles(kind, monkeypatch):
+    expected = bundles.bundle_source(kind)
+    original = bundles.component_names
+    monkeypatch.setattr(bundles, "component_names", lambda selected: tuple(reversed(original(selected))))
+    assert bundles.bundle_source(kind) == expected
+
+
+@pytest.mark.parametrize("kind,missing", [("jobs", "filesystem.py"), ("discovery", "probes.py")])
+def test_missing_components_fail_during_assembly(kind, missing, monkeypatch):
+    original = bundles.component_names
+    monkeypatch.setattr(bundles, "component_names", lambda selected: tuple(
+        name for name in original(selected) if name != missing))
+    with pytest.raises(ValueError, match="Missing component dependency"):
+        bundles.bundle_source(kind)
+
+
+@pytest.mark.parametrize("declaration", [
+    "from .jobs import nonexistent", "from .unknown import submit",
+    "from .jobs import *", "from .jobs import submit as renamed",
+    "def hidden_import():\n    from .jobs import submit",
+])
+def test_unresolved_or_unsupported_component_imports_fail_closed(declaration, monkeypatch):
+    original = bundles._component
+    monkeypatch.setattr(bundles, "_component", lambda name: (
+        original(name) + "\n" + declaration + "\n" if name == "entrypoint.py" else original(name)))
+    with pytest.raises(ValueError, match="component (?:dependency|import)"):
+        bundles.bundle_source("jobs")
+
+
+def test_component_cycles_fail_during_assembly(monkeypatch):
+    original = bundles._component
+    monkeypatch.setattr(bundles, "_component", lambda name: (
+        original(name) + "\nfrom .jobs import submit\n" if name == "scheduler.py" else original(name)))
+    with pytest.raises(ValueError, match="contain a cycle"):
+        bundles.bundle_source("jobs")
 
 
 def test_discovery_only_change_does_not_change_execution_identity(monkeypatch):

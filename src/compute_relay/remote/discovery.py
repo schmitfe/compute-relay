@@ -4,7 +4,11 @@ This component is assembled with explicit dependencies by bundles.py. It is not
 a remotely selected module or an import of submitted/project code.
 """
 
+import os
 import pwd
+
+from .scheduler import scheduler
+from .software import software_discovery
 
 def discover(config, request):
     def query(command, args):

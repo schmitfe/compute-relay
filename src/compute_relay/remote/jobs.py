@@ -7,7 +7,18 @@ a remotely selected module or an import of submitted/project code.
 import base64
 import datetime
 import fcntl
+import os
 import pwd
+import re
+import uuid
+
+from .filesystem import (
+    canonical, components, digest, load_json, open_directory, open_regular,
+    read_file, uuid_value, write_json,
+)
+from .prelude import MAX_FILE_TOTAL
+from .protocol import require_journal_binding, require_management_protocol
+from .scheduler import scheduler
 
 def stage(attempt_dir, manifest, encoded_files):
     entries = manifest["files"]

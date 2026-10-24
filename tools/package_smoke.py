@@ -142,14 +142,17 @@ def main():
         python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         run([python, "-m", "pip", "install", "--constraint", ROOT / "requirements.lock", wheel], cwd=root, env=clean_env)
         run([python, "-m", "pip", "check"], cwd=root, env=clean_env)
-        run([python, "-c", "from compute_relay.remote.bundles import bundle_source,component_names\n"
+        run([python, "-c", "from importlib import import_module\n"
+             "from compute_relay.remote.bundles import bundle_source,component_names\n"
              "from compute_relay.backends.preparation import helper_source\n"
              "assert helper_source() == bundle_source('jobs')\n"
              "assert set(component_names('jobs')).isdisjoint({'software.py','module_catalog.py','discovery.py'})\n"
              "for kind in ('jobs','discovery'):\n"
              "    source = bundle_source(kind)\n"
              "    assert source == bundle_source(kind)\n"
-             "    compile(source, kind, 'exec')\n"] , cwd=root, env=clean_env)
+             "    compile(source, kind, 'exec')\n"
+             "    for component in component_names(kind):\n"
+             "        import_module('compute_relay.remote.' + component[:-3])\n"] , cwd=root, env=clean_env)
         run([python, "-c", "import django,httpx,mcp,waitress,jsonschema,rfc8785; from importlib.metadata import distribution; package=distribution('compute-relay'); assert not any('extra ==' in requirement for requirement in package.requires or [] if requirement.startswith(('httpx','mcp','waitress'))); assert {entry.name for entry in package.entry_points if entry.group == 'console_scripts'} == {'compute-relay'}"] , cwd=root, env=clean_env)
         executable = python.parent / ("compute-relay.exe" if os.name == "nt" else "compute-relay")
         run([executable, "--help"], cwd=root, env=clean_env)

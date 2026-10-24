@@ -4,7 +4,21 @@ This component is assembled with explicit dependencies by bundles.py. It is not
 a remotely selected module or an import of submitted/project code.
 """
 
+import os
+import pwd
+import re
+import stat
+import subprocess
 import time
+
+from .discovery_config import (
+    MODULE_INITIALIZERS, MODULE_PATH_CONFIGURATION_FILES,
+    MODULE_PROFILE_DIRECTORIES, SYSTEM_MODULE_PATHS, available_modules,
+    discovery_path, trusted_system_path,
+)
+from .filesystem import components
+from .prelude import DIRECTORY, NOFOLLOW
+from .probes import software_command
 
 def trusted_module_tree(path, budget):
     """Bounded metadata audit before module availability can evaluate rc files."""

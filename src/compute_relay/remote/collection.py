@@ -5,6 +5,9 @@ a remotely selected module or an import of submitted/project code.
 """
 
 import base64
+import os
+
+from .filesystem import open_directory, read_file
 
 def collect(config, request, identity, record):
     outputs = request.get("outputs", [])

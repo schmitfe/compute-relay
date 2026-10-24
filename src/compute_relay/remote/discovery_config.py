@@ -4,7 +4,10 @@ This component is assembled with explicit dependencies by bundles.py. It is not
 a remotely selected module or an import of submitted/project code.
 """
 
+import os
 import pwd
+import re
+import stat
 
 MODULE_INITIALIZERS = (
     "/etc/profile.d/modules.sh", "/etc/profile.d/lmod.sh", "/etc/profile.d/z00_lmod.sh",

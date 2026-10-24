@@ -4,7 +4,10 @@ This component is assembled with explicit dependencies by bundles.py. It is not
 a remotely selected module or an import of submitted/project code.
 """
 
+import re
 import subprocess
+
+from .prelude import NAME
 
 def scheduler(config, command, args, *, cwd=None, timeout=30):
     path = config.get("slurm_paths", {}).get(command, "/usr/bin/" + command)

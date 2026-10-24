@@ -4,6 +4,15 @@ This component is assembled with explicit dependencies by bundles.py. It is not
 a remotely selected module or an import of submitted/project code.
 """
 
+import os
+import pwd
+import re
+
+from .collection import collect
+from .jobs import own_record, reconcile, submission_time_matches, submit
+from .protocol import JOB_OPERATIONS, JOB_PROTOCOL
+from .scheduler import scheduler
+
 def execute_jobs(config, request):
     op = request.get("operation")
     if request.get("protocol") != JOB_PROTOCOL or op not in JOB_OPERATIONS:

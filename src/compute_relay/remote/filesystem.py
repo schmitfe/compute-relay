@@ -7,16 +7,11 @@ a remotely selected module or an import of submitted/project code.
 import hashlib
 import json
 import os
-import re
 import stat
 import uuid
 
+from .prelude import DIRECTORY, NOFOLLOW
 
-MAX_REQUEST = 150 * 1024 * 1024
-MAX_FILE_TOTAL = 104857600
-NOFOLLOW = os.O_NOFOLLOW
-DIRECTORY = os.O_DIRECTORY
-NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
