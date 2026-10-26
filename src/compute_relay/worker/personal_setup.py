@@ -68,6 +68,15 @@ class PersonalWorker(AsyncWorker):
         self._setup_authorized = True
         self._pending_recovery_notified = None
 
+    async def setup_before_poll(self):
+        return await self.setup_once()
+
+    @property
+    def configuration_pending(self):
+        # Stop fetching new job work while existing operations drain, so a
+        # configuration change can obtain exclusivity even under sustained load.
+        return bool(self._pending_task and self._pending_task["kind"] == "configure")
+
     async def _execute(self, lease):
         operation = lease.get("operation")
         messages = {
@@ -107,7 +116,7 @@ class PersonalWorker(AsyncWorker):
         document = {"connection_id": self.state["connection_id"]}
         if hello:
             document.update(hello=True, needs_discovery=not self.state.get("defaults_initialized", False),
-                features=["personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1"])
+                features=["personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1", "personal_parallel_v1"])
         if self.state.get("pending_configuration_task"):
             document["pending_task_id"] = self.state["pending_configuration_task"]
         try:
@@ -183,6 +192,9 @@ class PersonalWorker(AsyncWorker):
                 response = await self.setup_request()
                 task = response.get("task") if response else None
         if task is None:
+            return False
+        if task["kind"] == "configure" and self._in_progress:
+            self._pending_task = task
             return False
         descriptions = {"browse": "Listing folders for the portal's directory browser.",
             "mkdir": "Creating the folder requested in the portal.",

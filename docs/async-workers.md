@@ -54,19 +54,50 @@ release supports Slurm; alternate schedulers remain planned.
 
 ## Bounds and durable recovery
 
-Owner lanes and finite concurrency/pending limits bound work inside the worker.
+Each personal connector runs up to four independent job operations concurrently
+over its existing authenticated OpenSSH master. This uses multiplexed command
+sessions, not additional interactive logins. Set
+`COMPUTE_RELAY_MAX_REMOTE_OPERATIONS` before startup to an integer from 1 through
+8 if the site's SSH session limits or measured throughput require a different
+bound. The normal local launcher also limits all its connectors together to
+16 operations. Separate launcher processes have separate process bounds.
+
+The number of remote commands is independent of the number of admitted Slurm
+jobs: a project can allow up to 1,000 active jobs without opening 1,000 SSH
+sessions. Existing project settings are preserved. Slurm and account limits
+still determine which submitted jobs actually run. Short jobs may still cost
+more to stage and schedule than to execute locally; this release uses individual
+submissions and observations rather than batched scheduler queries.
+
+Finite concurrency/pending limits bound work inside the worker.
 These process-level controls do not replace database reservations, active/lifetime
 caps, generation-fenced leases or journal locks. SQLite remains the admission
 and accounting authority across simultaneous HTTP clients and connectors.
 
 The controller filters ineligible undispatched work before its bounded candidate
-slice. It prioritizes pending cancellation, uncertain-submission reconciliation
-and existing-job observation ahead of new submissions. Within management work,
-the oldest due time wins; cancellation and reconciliation break equal-time ties.
-Repeated slow cancellation failures therefore cannot monopolize the worker.
-A paused project or
+slice. The oldest due time wins across both authorized submissions and existing
+job management; cancellation and uncertain-submission reconciliation break
+equal-time ties. A new observation cannot jump ahead of an older submission,
+and new submissions cannot jump ahead of an overdue observation. Repeated slow
+cancellation failures back off instead of monopolizing the worker. Queue length
+and operation duration still determine the actual wait; there is no fixed
+wall-clock latency guarantee. A paused project or
 disabled/unsupported submission cannot occupy that slice indefinitely and hide
 a running attempt, including another project's work on the same worker.
+
+The first check after submission becomes due after two seconds. Subsequent
+queued/running observations back off to reduce scheduler traffic: their ceiling
+is five seconds for small populations, increasing to at most 60 seconds as the
+worker's unsettled attempt count grows. Cancellation, reconciliation and pending
+settlement retain separate retry rules. Dispatch does not sleep after each
+successful command; an idle lane waits two seconds before polling again.
+
+Lease fetching and local profile changes are serialized. In-progress attempt
+IDs are excluded from new polls, and each attempt retains its own durable
+journal lock. Discovery and extension maintenance wait for exclusive access;
+requested configuration changes stop new leases until existing operations drain.
+Folder browsing and environment inspection can share the bounded pool with job
+operations because they do not change the selected connection or baseline.
 
 The worker persists submission intent before contacting Slurm. A lost reply or
 cancelled SSH operation reconciles that same attempt; it never retries `sbatch`
@@ -129,7 +160,9 @@ HTTP verifies its configured origin, rejects redirects/environment proxies and
 compressed bodies, and enforces streamed byte and total time limits. Mutating
 requests are not automatically replayed after timeout.
 
-Ctrl-C closes managed connector sessions and the local portal. Slurm allocations
+Ctrl-C cancels and drains all owned operation lanes before closing their SSH
+master and the local portal. A fatal authentication failure also drains every
+lane before closing the session. Slurm allocations
 already accepted continue remotely. Restarting the same installation reconnects
 and resumes durable observation/reconciliation rather than creating replacement
 attempts. Individual session lifetime remains finite and another login may be
@@ -142,6 +175,12 @@ and synthetic credentials. They cover bounds, cancellation, journal recovery,
 cross-version helper management, current module capabilities, slow collection,
 renewal failure, superseded generations, lost final reports and preservation of
 core settlement. Shared lifecycle cases run against both worker variants.
+Scaling regressions cover two continuously running jobs plus eight pending
+submissions, 200 admitted attempts with due observations, a 200-job worker queue
+bounded to four concurrent operations, duplicate attempt execution and parallel
+shutdown. The personal connector Slurm fixture additionally checks that eight
+distinct scheduler IDs are assigned before the first jobs finish, even though
+its two-CPU scheduler cannot run all eight jobs at once.
 A clean installed-wheel check starts the actual loopback portal
 and verifies shutdown/restart without connecting SSH. Optional disposable Slurm
 acceptance provides separate native scheduler evidence; neither establishes

@@ -190,7 +190,7 @@ def tasks(request):
         defaults_deferred = False
         if document.get("hello") is True:
             features = document.get("features", ["personal_setup_v1"])
-            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1"} for item in features):
+            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1", "personal_parallel_v1"} for item in features):
                 raise BrokerError("INVALID_FEATURES", "Unsupported connector setup capabilities.")
             worker.connector_features = list(dict.fromkeys(features))
             worker.save(update_fields=["connector_features"])

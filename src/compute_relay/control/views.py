@@ -5,6 +5,7 @@ import binascii
 import functools
 import json
 import logging
+from uuid import UUID
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
@@ -277,15 +278,26 @@ def artifact_content(request, artifact_id):
 @boundary("POST")
 def lease(request):
     worker = worker_identity(request)
-    body(request)
-    management = services.lease_work(worker, management_only=True)
-    if management.get("lease") is not None:
-        return management
+    document = body(request, maximum=4096)
+    if not isinstance(document, dict) or set(document) - {"core_only", "in_progress"} or type(document.get("core_only", False)) is not bool:
+        raise BrokerError("INVALID_REQUEST", "Invalid worker polling options.")
+    excluded = document.get("in_progress", [])
+    if not isinstance(excluded, list) or len(excluded) > 8:
+        raise BrokerError("INVALID_REQUEST", "Too many in-progress operations.")
+    try:
+        excluded = [str(UUID(value)) for value in excluded]
+    except (ValueError, TypeError, AttributeError):
+        raise BrokerError("INVALID_REQUEST", "Invalid in-progress attempt.") from None
+    core = services.lease_work(worker, exclude_attempt_ids=excluded)
+    if core.get("lease") and core["lease"]["operation"] in {"cancel", "reconcile"}:
+        return core
     try:
         from compute_relay.extensions import before_lease
         before_lease(worker)
     except Exception:
         logger.warning("Extension dispatch deferred; core work remains available")
+    if core.get("lease") is not None or document.get("core_only", False):
+        return core
     from .cluster_services import lease_discovery
     discovery = lease_discovery(worker)
     if discovery:
@@ -297,7 +309,7 @@ def lease(request):
             return extension_work
     except Exception:
         logger.warning("Extension maintenance deferred; core work remains available")
-    return services.lease_work(worker)
+    return services.lease_work(worker, exclude_attempt_ids=excluded)
 
 
 @boundary("GET")

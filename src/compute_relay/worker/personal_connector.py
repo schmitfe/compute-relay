@@ -14,6 +14,11 @@ from uuid import UUID
 from .client import ControlError, JsonClient, strict_json
 from .connector_status import ConnectorStatus, display_label
 from .enrollment import profile_metadata
+from .concurrency import poll_parallel, remote_parallelism
+
+
+class _ConnectorStopped(Exception):
+    pass
 
 
 class ConnectorStartupError(ValueError):
@@ -131,14 +136,14 @@ def pair(setup, state, session, *, client_factory=JsonClient):
     return {**state, "worker_id": result["worker_id"], "worker_token": result["worker_token"], "connection_id": result["connection_id"]}
 
 
-async def serve(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None):
+async def serve(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None, scheduler=None):
     try:
-        await _serve_session(state, session, state_directory, once=once, deadline=deadline, status=status, extensions=extensions)
+        await _serve_session(state, session, state_directory, once=once, deadline=deadline, status=status, extensions=extensions, scheduler=scheduler)
     finally:
         await session.close_async()
 
 
-async def _serve_session(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None):
+async def _serve_session(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None, scheduler=None):
     from .async_client import AsyncJsonClient
     from .personal_setup import PersonalWorker
     from .journal import Journal
@@ -146,8 +151,10 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
     alias, profile = runtime_profile(state, session)
     client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
     try:
+        parallelism = remote_parallelism()
         worker = PersonalWorker(client, {}, Journal(state_directory / "journal"), credential_profiles={alias: profile},
-            extensions=extensions, owner_id=state["owner_id"], state=state, session=session, state_directory=state_directory, status=status)
+            extensions=extensions, owner_id=state["owner_id"], state=state, session=session, state_directory=state_directory, status=status,
+            scheduler=scheduler, parallelism=parallelism)
         remaining = max(0, deadline - time.monotonic()) if deadline is not None else state["session_seconds"]
         async with asyncio.timeout(remaining):
             try:
@@ -158,19 +165,31 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
                     return
                 raise
             ready = False
-            while True:
-                if not await session.check_async():
-                    status.problem("SSH session ended. Restart the connector to sign in again.")
-                    return
-                if not ready:
-                    status.notice("Connected and ready; waiting for broker commands. Keep this terminal open. Use Ctrl+C to stop.")
-                    ready = True
+            last_check = 0
+            check_lock = asyncio.Lock()
+            stopped = False
+            async def poll():
+                nonlocal ready, last_check, stopped
+                async with check_lock:
+                    if stopped:
+                        raise _ConnectorStopped()
+                    if not ready or time.monotonic() - last_check >= 2:
+                        if not await session.check_async():
+                            stopped = True
+                            status.problem("SSH session ended. Restart the connector to sign in again.")
+                            raise _ConnectorStopped()
+                        last_check = time.monotonic()
+                    if not ready:
+                        status.notice("Connected and ready; waiting for broker commands. Keep this terminal open. Use Ctrl+C to stop.")
+                        ready = True
                 try:
-                    worked = await worker.setup_once() or await worker.poll_once()
+                    worked = await worker.poll_once()
                 except ControlError as error:
                     if error.status in {401, 403}:
-                        status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
-                        return
+                        if not stopped:
+                            status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
+                        stopped = True
+                        raise _ConnectorStopped() from None
                     status.interrupted("broker")
                     worked = False
                 except Exception:
@@ -178,9 +197,11 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
                     worked = False
                 else:
                     status.recovered()
-                if once:
-                    return
-                await asyncio.sleep(1 if worked else 2)
+                return worked
+            try:
+                await poll_parallel(poll, concurrency=parallelism, once=once)
+            except _ConnectorStopped:
+                return
     except TimeoutError:
         status.problem("SSH session lifetime reached. Restart the connector to sign in again.")
     finally:

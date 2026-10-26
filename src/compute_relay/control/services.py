@@ -468,7 +468,7 @@ def serialize_job(job, *, package=False):
     return result
 
 
-def lease_work(worker, *, management_only=False):
+def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
     now = timezone.now()
     from compute_relay.extensions import control_names
     enabled_extensions = set(control_names()) & set(worker.supported_extensions)
@@ -478,17 +478,17 @@ def lease_work(worker, *, management_only=False):
     with transaction.atomic():
         candidates = (Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection")
             .filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"])
+            .exclude(id__in=exclude_attempt_ids)
             .filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now))
             .filter(management if management_only else management | submission)
-            .annotate(management_priority=Case(When(management, then=Value(0)),
-                    default=Value(1), output_field=IntegerField()), lifecycle_priority=Case(
+            .annotate(lifecycle_priority=Case(
                 When(cancel_requested=True, native_identity__isnull=False, then=Value(0)),
                 When(dispatch_started=True, native_identity__isnull=True, then=Value(1)),
                 When(native_identity__isnull=False, then=Value(2)), default=Value(3), output_field=IntegerField()))
-            # Due age wins within management. A slow repeated cancellation
-            # cannot overtake an older observation forever; cancellation still
-            # wins a tie, and management stays ahead of new submissions.
-            .order_by("management_priority", "next_poll_at", "lifecycle_priority", "created_at", "id"))
+            # Age applies across submissions AND management. Polls become due
+            # again only after their receipt; they cannot repeatedly overtake
+            # an already-waiting submission. Cancellation/recovery win ties.
+            .order_by("next_poll_at", "lifecycle_priority", "created_at", "id"))
         for attempt in candidates[:30]:
             if attempt.cancel_requested and attempt.native_identity and attempt.error_code != "CANCEL_IDENTITY_MISMATCH":
                 operation = "cancel"
@@ -729,6 +729,13 @@ def report(worker, attempt_id, data):
             attempt.error_code = "OUTPUT_STORAGE_UNAVAILABLE"
         attempt.lease_expires_at = None
         delay = 10 if attempt.state == "submission_uncertain" or attempt.accounting_state == "settlement_pending" else 2
+        if outcome == "observed" and attempt.state in {"queued", "running"}:
+            # Check short jobs promptly, then reduce per-job scheduler traffic.
+            # A larger live population raises the ceiling, never the first
+            # post-submit check. Queue age still prevents dispatch starvation.
+            live = Attempt.objects.filter(connection__worker=worker).exclude(accounting_state__in=["settled", "released"]).count()
+            ceiling = min(60, max(5, live // 2))
+            delay = min(ceiling, 2 ** min(attempt.generation, 6))
         if outcome == "cancel_unknown":
             delay = 30 if previous_cancel_error == "CANCEL_UNCONFIRMED" else 5
         elif outcome == "cancel_identity_mismatch":

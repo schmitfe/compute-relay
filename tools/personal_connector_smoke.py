@@ -2,6 +2,7 @@
 """Synthetic Docker-only personal connector acceptance; no institutional keys."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -12,8 +13,9 @@ import time
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
+from uuid import UUID, uuid4
 
-from container_smoke import Client, PreformattedText, SmokeFailure, require, run as job_smoke
+from container_smoke import Client, PreformattedText, SmokeFailure, create_job, revealed_key, require, run as job_smoke
 
 
 class ConfigurationFields(HTMLParser):
@@ -107,6 +109,56 @@ def finish_configuration(human, demo, directory):
         raise SmokeFailure("Cluster configuration did not finish")
     saved = json.loads((directory / "state.json").read_bytes())
     require(saved["connection"]["remote_root"] == chosen, "Selected baseline was not persisted locally")
+
+
+def parallel_dispatch(human, demo, base):
+    """Eight native submissions before completion on a two-CPU fake institution."""
+    require(demo.get("backend") == "slurm" and demo.get("cluster_form", {}).get("host") == "slurm-fixture",
+        "Parallel dispatch acceptance requires the disposable Slurm fixture")
+    expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    human.request("POST", "/projects/new/", {"name": "Parallel dispatch fixture", "mode": "approval_required",
+        "cpu_hours": "2", "gpu_hours": "0", "max_cpus": "1", "max_gpus": "0", "memory_mib": "128",
+        "wall_minutes": "1", "max_active_jobs": "10", "max_total_jobs": "8", "expires_at": expiry,
+        "connections": [demo["connection_id"]], "environments": [demo["environment_id"]]}, form=True, binary=True)
+    path = redirected_path(human)
+    require(path.startswith("/projects/") and path != "/projects/new/", "Parallel project was not created")
+    project_id = str(UUID(path.strip("/").split("/")[-1]))
+    html = human.request("POST", f"/projects/{project_id}/keys/new/", {
+        "name": "Parallel fixture agent", "expires_at": expiry, "cluster_access": "inherit",
+        "execution_mode": "inherit", "submission_id": str(uuid4()),
+        "scopes": ["jobs:read", "jobs:write", "jobs:execute", "artifacts:read", "objects:write"]}, form=True, binary=True)
+    token, _ = revealed_key(human, html)
+    agent = Client(base, token=token)
+    selected = {**demo, "project_id": project_id}
+    source = b'import time\nfrom pathlib import Path\ntime.sleep(30)\nPath("result.json").write_text("{\\"ok\\": true}")\n'
+    proposals = [create_job(agent, selected, "slurm", source, f"parallel-fixture-{index}") for index in range(8)]
+    for job_id, digest, execution_id in proposals:
+        human.request("POST", f"/api/v1/jobs/{job_id}/decisions", {"execution_request_id": execution_id,
+            "manifest_sha256": digest, "approved": True, "comment": "Disposable parallel dispatch acceptance."})
+    deadline = time.monotonic() + 25
+    terminal = {"succeeded", "completed", "failed", "cancelled", "timeout", "quarantined"}
+    native_ids = set()
+    while time.monotonic() < deadline:
+        attempts = [agent.request("GET", f"/api/v1/jobs/{job_id}")["attempts"][-1] for job_id, _, _ in proposals]
+        require(all(item["state"] not in terminal for item in attempts), "An earlier job finished before the queue dispatched")
+        native_ids = {str(item["native_identity"]["job_id"]) for item in attempts if item.get("native_identity")}
+        if len(native_ids) == 8:
+            break
+        time.sleep(0.25)
+    else:
+        raise SmokeFailure(f"Only {len(native_ids)} of eight jobs received distinct scheduler IDs before the dispatch deadline")
+    deadline = time.monotonic() + 150
+    while time.monotonic() < deadline:
+        attempts = [agent.request("GET", f"/api/v1/jobs/{job_id}")["attempts"][-1] for job_id, _, _ in proposals]
+        require(all(item["state"] not in terminal - {"succeeded", "completed"} for item in attempts), "A parallel fixture job failed")
+        if all(item["state"] in {"succeeded", "completed"} and item["accounting_state"] == "settled" for item in attempts):
+            break
+        time.sleep(0.5)
+    else:
+        raise SmokeFailure("Parallel fixture jobs did not complete with settled accounting")
+    budget = agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
+    require(budget["reserved"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}, "Parallel fixture retained reservations")
+    require(budget["spent"]["cpu_core_seconds"] > 0, "Parallel fixture did not charge actual usage")
 
 
 def cluster_check(human, demo):
@@ -222,6 +274,8 @@ def run():
                 # all travel through the newly established master socket.
                 run.stage = "reviewed_native_job"
                 job_smoke(base, args.demo_file, 90)
+                run.stage = "eight_parallel_native_submissions"
+                parallel_dispatch(human, demo, base)
                 run.stage = "portal_cluster_check"
                 cluster_check(human, demo)
             finally:
@@ -257,7 +311,8 @@ def run():
             "removed_configuration": True, "master_closed_on_revocation": True,
             "post_login_directory_browser": True, "created_selected_folder": True,
             "owner_configuration_persisted": True, "reviewed_cluster_check": True,
-            "cluster_provided_modules": True, "selected_environment_inspection": True}))
+            "cluster_provided_modules": True, "selected_environment_inspection": True,
+            "parallel_dispatch_jobs": 8, "parallel_accounting_settled": True}))
 
 
 if __name__ == "__main__":

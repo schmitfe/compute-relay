@@ -190,6 +190,8 @@ class _ServingLoop:
 
     def _run(self):
         asyncio.set_event_loop(self.loop)
+        from .worker.concurrency import PrincipalScheduler
+        self.scheduler = PrincipalScheduler(max_concurrency=16, max_pending=256, max_per_owner=16)
         try:
             self.loop.run_forever()
         finally:
@@ -201,7 +203,7 @@ class _ServingLoop:
 
         async def serve_one():
             try:
-                await serve(state, session, directory, deadline=deadline, status=status, extensions=self.extensions)
+                await serve(state, session, directory, deadline=deadline, status=status, extensions=self.extensions, scheduler=self.scheduler)
             except asyncio.CancelledError:
                 raise
             except Exception:

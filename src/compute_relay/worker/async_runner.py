@@ -15,7 +15,7 @@ from uuid import UUID
 
 from .async_client import AsyncJsonClient
 from .client import ControlError, environment_token, strict_json
-from .concurrency import PrincipalScheduler
+from .concurrency import PrincipalScheduler, poll_parallel, remote_parallelism
 from .enrollment import EnrollmentError, profile_metadata, resolve_connection
 from .journal import Journal
 from .runner import Worker
@@ -25,12 +25,15 @@ from compute_relay.domain.lifecycle import (CancellationStatus, PreparedWork, ca
 
 
 class AsyncWorker(Worker):
-    def __init__(self, *args, owner_id, scheduler=None, extensions=None, **kwargs):
+    def __init__(self, *args, owner_id, scheduler=None, extensions=None, parallelism=None, **kwargs):
         from compute_relay.extensions import async_worker_names, configured_names
         requested = configured_names(",".join(extensions)) if extensions is not None else configured_names()
         super().__init__(*args, extensions=async_worker_names(requested), **kwargs)
-        self.scheduler = scheduler or PrincipalScheduler()
+        self.parallelism = remote_parallelism(parallelism)
+        self.scheduler = scheduler or PrincipalScheduler(max_concurrency=self.parallelism, max_per_owner=self.parallelism)
         self.owner_id = self.scheduler.register(owner_id)
+        self._poll_lock = asyncio.Lock()
+        self._in_progress = set()
 
     @staticmethod
     def _backend(connection):
@@ -41,14 +44,41 @@ class AsyncWorker(Worker):
         return await self.scheduler.run(self.owner_id, self._poll_once)
 
     async def _poll_once(self):
-        await self.replay_pending_reports()
-        if self._profiles_published_at is None or time.monotonic() - self._profiles_published_at >= 60:
-            await self.publish_profiles()
-        lease = (await self.client.request("POST", "/internal/v1/lease", {})).get("lease")
-        if lease is None:
-            return False
-        await self._execute(lease)
-        return True
+        # Fetch and configuration changes serialize; independent attempt I/O
+        # runs outside this lock. No operation waits in a leased local backlog.
+        async with self._poll_lock:
+            await self.replay_pending_reports()
+            if await self.setup_before_poll():
+                return True
+            if self.configuration_pending:
+                return False
+            if self._profiles_published_at is None or time.monotonic() - self._profiles_published_at >= 60:
+                await self.publish_profiles()
+            lease = (await self.client.request("POST", "/internal/v1/lease", {
+                "core_only": bool(self._in_progress), "in_progress": sorted(self._in_progress)})).get("lease")
+            if lease is None:
+                return False
+            if lease.get("operation") in {"discover", "extension"}:
+                if self._in_progress:
+                    raise ControlError("CONFIGURATION_WHILE_BUSY")
+                await self._execute(lease)
+                return True
+            attempt_id = str(UUID(lease["attempt_id"]))
+            if attempt_id in self._in_progress:
+                raise ControlError("DUPLICATE_ACTIVE_LEASE")
+            self._in_progress.add(attempt_id)
+        try:
+            await self._execute(lease)
+            return True
+        finally:
+            self._in_progress.discard(attempt_id)
+
+    async def setup_before_poll(self):
+        return False
+
+    @property
+    def configuration_pending(self):
+        return False
 
     async def publish_profiles(self):
         profiles = []
@@ -156,6 +186,8 @@ class AsyncWorker(Worker):
 
     async def replay_pending_reports(self):
         for attempt_id, _ in self.journal.pending_reports():
+            if attempt_id in self._in_progress:
+                continue
             async with self.journal.async_locked(attempt_id):
                 record = self.journal.read_report(attempt_id)
                 if not record or record.get("phase") != "ready":
@@ -196,15 +228,13 @@ async def serve_workers(workers, *, once=False):
         raise ValueError("Configure one through 64 workers sharing one principal scheduler")
 
     async def serve(worker):
-        while True:
+        async def poll():
             try:
-                worked = await worker.poll_once()
+                return await worker.poll_once()
             except Exception:
                 logging.getLogger(__name__).error("Async worker operation failed; preserving uncertain state")
-                worked = False
-            if once:
-                return
-            await asyncio.sleep(1 if worked else 2)
+                return False
+        await poll_parallel(poll, concurrency=worker.parallelism, once=once)
 
     async with asyncio.TaskGroup() as group:
         for worker in workers:
@@ -214,12 +244,13 @@ async def serve_workers(workers, *, once=False):
 async def main(*, once=False):
     config = strict_json(Path(os.environ["BROKER_WORKER_CONFIG"]).read_bytes())
     owner_id = str(UUID(os.environ.get("BROKER_WORKER_OWNER_ID", config.get("owner_id", ""))))
-    scheduler = PrincipalScheduler(max_concurrency=config.get("max_concurrency", 4), max_pending=config.get("max_pending", 16))
+    parallelism = remote_parallelism(config.get("max_concurrency"))
+    scheduler = PrincipalScheduler(max_concurrency=parallelism, max_pending=config.get("max_pending", 16), max_per_owner=parallelism)
     client = AsyncJsonClient(os.environ.get("BROKER_CONTROL_URL", "http://127.0.0.1:8765"), environment_token("BROKER_WORKER_TOKEN"),
         allow_insecure_http=os.environ.get("BROKER_ALLOW_INSECURE_HTTP") == "1", max_response_bytes=384 * 1024 * 1024)
     try:
         worker = AsyncWorker(client, config.get("connections", {}), Journal(os.environ.get("BROKER_WORKER_JOURNAL", "/var/lib/compute-relay/worker")),
-            credential_profiles=config.get("credential_profiles", {}), extensions=config.get("extensions"), owner_id=owner_id, scheduler=scheduler)
+            credential_profiles=config.get("credential_profiles", {}), extensions=config.get("extensions"), owner_id=owner_id, scheduler=scheduler, parallelism=parallelism)
         await serve_workers([worker], once=once)
     finally:
         await client.close()

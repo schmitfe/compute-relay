@@ -261,7 +261,7 @@ def test_slow_unconfirmed_cancels_cannot_starve_overdue_observation(broker, monk
     assert selected == [str(attempts[0].id), str(attempts[1].id), str(attempts[2].id)]
 
 
-def test_management_due_age_precedes_kind_and_management_precedes_old_submission(broker):
+def test_due_age_applies_to_submission_and_management_with_cancellation_tie_preference(broker):
     budgeted(broker)
     job = prepared_job(broker)
     pending, cancelling, observing = [execution(broker, job).attempt for _ in range(3)]
@@ -272,6 +272,76 @@ def test_management_due_age_precedes_kind_and_management_precedes_old_submission
             native_identity={"job_id": str(attempt.id), "attempt_id": str(attempt.id)},
             cancel_requested=attempt == cancelling, next_poll_at=now - timedelta(seconds=1))
     # Cancellation retains preference when management work has the same due age.
+    assert services.lease_work(broker.worker)["lease"]["attempt_id"] == str(pending.id)
     assert services.lease_work(broker.worker)["lease"]["attempt_id"] == str(cancelling.id)
     assert services.lease_work(broker.worker)["lease"]["attempt_id"] == str(observing.id)
-    assert services.lease_work(broker.worker)["lease"]["attempt_id"] == str(pending.id)
+
+
+def test_two_hundred_admitted_jobs_get_native_ids_while_running_checks_stay_due(broker, monkeypatch):
+    budgeted(broker, cpu=100000)
+    broker.grant.policy["max_active_jobs"] = 250; broker.grant.save()
+    job = prepared_job(broker)
+    attempts = [execution(broker, job).attempt for _ in range(200)]
+    clock = [timezone.now()]
+    Attempt.objects.filter(id__in=[a.id for a in attempts]).update(next_poll_at=clock[0])
+    for index, attempt in enumerate(attempts[:40]):
+        Attempt.objects.filter(id=attempt.id).update(dispatch_started=True, state="running",
+            native_identity={"job_id": str(index + 1), "attempt_id": str(attempt.id)}, next_poll_at=clock[0] - timedelta(seconds=1))
+    monkeypatch.setattr(services.timezone, "now", lambda: clock[0])
+    submitted = []
+    observed = set()
+    for _ in range(240):
+        lease = services.lease_work(broker.worker)["lease"]
+        assert lease is not None
+        clock[0] += timedelta(seconds=3)
+        identity = lease["native_identity"]
+        if lease["operation"] == "submit":
+            services.dispatch(broker.worker, lease["attempt_id"], {"lease_id": lease["id"], "generation": lease["generation"],
+                "manifest_sha256": job.manifest_sha256, "connection_revision_sha256": broker.connection.revision_sha256})
+            identity = {"job_id": str(1000 + len(submitted)), "attempt_id": lease["attempt_id"]}
+            services.report(broker.worker, lease["attempt_id"], payload(lease, "submitted", identity))
+            submitted.append(lease["attempt_id"])
+        else:
+            assert lease["operation"] == "observe"
+            observed.add(lease["attempt_id"])
+            services.report(broker.worker, lease["attempt_id"], payload(lease, "observed", identity,
+                observation={"state": "running", "terminal": False}))
+        if len(submitted) == 160:
+            break
+    assert len(submitted) == len(set(submitted)) == 160
+    assert observed >= {str(attempt.id) for attempt in attempts[:40]}
+    assert Attempt.objects.filter(native_identity__isnull=False).count() == 200
+    broker.grant.refresh_from_db()
+    assert broker.grant.reserved_cpu == 200 * job.manifest["reservation"]["cpu_core_seconds"]
+
+
+def test_continuous_submissions_cannot_starve_overdue_observation_or_older_submission(broker, monkeypatch):
+    budgeted(broker, cpu=100000)
+    broker.grant.policy["max_active_jobs"] = 100; broker.grant.save()
+    job = prepared_job(broker)
+    running, waiting = [execution(broker, job).attempt for _ in range(2)]
+    clock = [timezone.now()]
+    Attempt.objects.filter(id=running.id).update(dispatch_started=True, state="running",
+        native_identity={"job_id": "17", "attempt_id": str(running.id)}, next_poll_at=clock[0] - timedelta(seconds=1))
+    monkeypatch.setattr(services.timezone, "now", lambda: clock[0])
+    submitted, observed = set(), []
+    for index in range(30):
+        if index % 2 == 0:
+            execution(broker, job)  # New arrivals compete with requeued observations.
+        lease = services.lease_work(broker.worker)["lease"]
+        assert lease is not None
+        clock[0] += timedelta(seconds=3)
+        if lease["operation"] == "submit":
+            assert lease["attempt_id"] not in submitted
+            services.dispatch(broker.worker, lease["attempt_id"], {"lease_id": lease["id"], "generation": lease["generation"],
+                "manifest_sha256": job.manifest_sha256, "connection_revision_sha256": broker.connection.revision_sha256})
+            native = {"job_id": str(100 + len(submitted)), "attempt_id": lease["attempt_id"]}
+            services.report(broker.worker, lease["attempt_id"], payload(lease, "submitted", native))
+            submitted.add(lease["attempt_id"])
+        else:
+            assert lease["operation"] == "observe"
+            observed.append(lease["attempt_id"])
+            services.report(broker.worker, lease["attempt_id"], payload(lease, "observed", lease["native_identity"],
+                observation={"state": "running", "terminal": False}))
+    assert str(waiting.id) in submitted and len(submitted) > 4
+    assert observed.count(str(running.id)) >= 2

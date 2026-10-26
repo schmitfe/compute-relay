@@ -141,7 +141,7 @@ def test_tampered_package_never_dispatches_and_poll_explicitly_clears_sync_exten
 
 def test_one_owner_serializes_while_other_owners_overlap_with_explicit_bounds():
     async def scenario():
-        scheduler = PrincipalScheduler(max_concurrency=2, max_pending=3, max_principals=2)
+        scheduler = PrincipalScheduler(max_concurrency=2, max_pending=3, max_principals=2, max_per_owner=1)
         alice, bob = scheduler.register(uuid4()), scheduler.register(uuid4())
         with pytest.raises(WorkerCapacityError, match="registry"):
             scheduler.register(uuid4())
@@ -348,3 +348,140 @@ def test_disabled_async_maintenance_is_rejected_before_import(configured, monkey
     with pytest.raises(ValueError, match="not enabled"):
         asyncio.run(configured.worker.execute({"operation": "extension", "extension": "storage"}))
     assert configured.control.calls == []
+
+
+def test_two_hundred_jobs_dispatch_with_four_bounded_same_owner_operations(configured):
+    from collections import deque
+    from copy import deepcopy
+    from compute_relay.worker.async_runner import serve_workers
+    async def scenario():
+        c = configured
+        leases = deque({**deepcopy(c.lease), "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(200))
+        expected = {lease["attempt_id"] for lease in leases}
+        done = asyncio.Event()
+        reports, dispatched, active, peak, submitted = set(), set(), 0, 0, 0
+        gate = asyncio.Event()
+        class QueueControl(Control):
+            async def request(self, method, path, body=None):
+                if path == "/internal/v1/lease":
+                    assert len(body["in_progress"]) <= 4
+                    assert body["core_only"] == bool(body["in_progress"])
+                    self.calls.append((method, path, body))
+                    await asyncio.sleep(0)
+                    return {"lease": leases.popleft() if leases else None}
+                if path.endswith("/dispatch"):
+                    attempt = path.split("/")[-2]
+                    assert attempt not in dispatched
+                    dispatched.add(attempt)
+                result = await super().request(method, path, body)
+                if path.endswith("/report"):
+                    reports.add(path.split("/")[-2])
+                    if len(reports) == 200:
+                        done.set()
+                return result
+        class ParallelBackend(Backend):
+            async def submit(self, attempt_id, manifest, files):
+                nonlocal active, peak, submitted
+                active += 1; submitted += 1
+                native = str(submitted)
+                peak = max(peak, active)
+                if active == 4:
+                    gate.set()
+                try:
+                    await gate.wait()
+                    await asyncio.sleep(0)
+                    return {"outcome": "submitted", "native_identity": {"job_id": native, "attempt_id": attempt_id}}
+                finally:
+                    active -= 1
+        c.worker.client = QueueControl()
+        backend = ParallelBackend()
+        c.worker.backend_factory = lambda _: backend
+        task = asyncio.create_task(serve_workers([c.worker]))
+        try:
+            await asyncio.wait_for(done.wait(), timeout=60)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert peak == 4 and active == 0 and not c.worker._in_progress
+        assert submitted == 200 and reports == dispatched == expected
+        assert not list(c.journal.pending_reports())
+    asyncio.run(scenario())
+
+
+def test_same_attempt_concurrency_cannot_duplicate_submission(configured):
+    async def scenario():
+        c = configured
+        await asyncio.gather(c.worker.execute(c.lease), c.worker.execute(c.lease))
+        assert c.backend.submitted == 1
+        assert sum(path.endswith("/dispatch") for _, path, _ in c.control.calls) == 1
+    asyncio.run(scenario())
+
+
+def test_parallel_shutdown_preserves_every_intent_and_resume_only_reconciles(configured):
+    from collections import deque
+    from copy import deepcopy
+    from compute_relay.worker.async_runner import serve_workers
+    async def scenario():
+        c = configured
+        proposals = [{**deepcopy(c.lease), "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(4)]
+        queue = deque(proposals)
+        ready = asyncio.Event()
+        class QueueControl(Control):
+            async def request(self, method, path, body=None):
+                if path == "/internal/v1/lease":
+                    return {"lease": queue.popleft() if queue else None}
+                return await super().request(method, path, body)
+        class BlockingBackend(Backend):
+            async def submit(self, attempt_id, manifest, files):
+                self.submitted += 1
+                if self.submitted == 4:
+                    ready.set()
+                await asyncio.Event().wait()
+        c.worker.client = QueueControl()
+        backend = BlockingBackend()
+        c.worker.backend_factory = lambda _: backend
+        serving = asyncio.create_task(serve_workers([c.worker]))
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=5)
+        finally:
+            serving.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await serving
+        assert not c.worker._in_progress
+        assert all(c.journal.read(lease["attempt_id"])["outcome"] == "intent" for lease in proposals)
+        await asyncio.gather(*(c.worker.execute(lease) for lease in proposals))
+        assert backend.submitted == backend.reconciled == 4
+        assert sum(path.endswith("/dispatch") for _, path, _ in c.worker.client.calls) == 4
+    asyncio.run(scenario())
+
+
+def test_parallel_poller_cancels_other_lanes_before_propagating_error():
+    from compute_relay.worker.concurrency import poll_parallel
+    async def scenario():
+        active = 0
+        ready = asyncio.Event()
+        async def poll():
+            nonlocal active
+            active += 1
+            number = active
+            if active == 4:
+                ready.set()
+            try:
+                await ready.wait()
+                if number == 4:
+                    raise ControlError("CONTROL_HTTP_ERROR", 403)
+                await asyncio.Event().wait()
+            finally:
+                active -= 1
+        with pytest.raises(ControlError):
+            await asyncio.wait_for(poll_parallel(poll, concurrency=4), timeout=2)
+        assert active == 0
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", [0, 9, -1, True, 1.5, "4"])
+def test_explicit_remote_concurrency_is_bounded(value):
+    from compute_relay.worker.concurrency import remote_parallelism
+    with pytest.raises(ValueError):
+        remote_parallelism(value)

@@ -272,3 +272,19 @@ def test_environment_inspection_reports_only_typed_result_without_changing_crede
     assert runtime.client.calls[-1][1]["outcome"] == "succeeded"
     assert runtime.client.calls[-1][1]["result"] == {"ok": True, "python": ["/opt/bin/python3"]}
     assert read_private(runtime.directory / "state.json") == before
+
+
+def test_configuration_waits_until_parallel_job_operations_have_drained(runtime):
+    pending = task()
+    runtime.client.queue = [pending]
+    runtime.worker._in_progress.add("synthetic-active-attempt")
+    before = read_private(runtime.directory / "state.json")
+    assert asyncio.run(runtime.worker.poll_once()) is False
+    assert runtime.worker._pending_task == pending
+    assert runtime.worker.configuration_pending
+    assert not any(path == "/internal/v1/lease" for path, _ in runtime.client.calls)
+    assert read_private(runtime.directory / "state.json") == before
+    runtime.worker._in_progress.clear()
+    assert asyncio.run(runtime.worker.setup_once()) is True
+    assert not runtime.worker.configuration_pending
+    assert read_private(runtime.directory / "state.json")["connection"]["remote_root"] == "/scratch/researcher/jobs"
