@@ -76,12 +76,21 @@ def verify_result(content, descriptor, prefix):
             "Second job did not use the published virtual environment")
 
 
-def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_major_minor="3.11"):
+def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_major_minor="3.11", module_bootstrap=False):
     demo = json.loads(demo_file.read_bytes())
     validate_demo(demo)
     human = Client(base_url)
     human.login(demo["owner_username"], demo["owner_password"])
     suffix = uuid4().hex[:12]
+    if module_bootstrap:
+        human.request("POST", f"/clusters/{demo['connection_id']}/environments/new/", {
+            "name": "Fixture module bootstrap " + suffix, "kind": "modules", "interpreter": "python3",
+            "modules": "fixture-python/1.0", "module_init": "", "module_paths": "/opt/fixture/modulefiles",
+        }, form=True, binary=True)
+        page = human.request("GET", f"/clusters/{demo['connection_id']}/test/", binary=True)
+        match = re.search(rb'<option value="([0-9a-f-]{36})">Fixture module bootstrap ' + suffix.encode() + rb'</option>', page)
+        require(match is not None, "Module Python bootstrap was not created")
+        demo["environment_id"] = match.group(1).decode()
     expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     project_fields = {"name": "Disposable environment acceptance " + suffix, "mode": "approval_required",
         "cpu_hours": "2", "gpu_hours": "0", "max_cpus": "1", "max_gpus": "0", "memory_mib": "512",
@@ -103,6 +112,9 @@ def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_maj
     inventory = agent.request("GET", "/api/v1/connections")["connections"]
     connection = next((item for item in inventory if item["id"] == demo["connection_id"]), None)
     require(connection is not None and connection.get("backend") == "slurm", "Disposable native connection is unavailable")
+    environments = agent.request("GET", "/api/v1/connections")["environments"]
+    base = next(item for item in environments if item["id"] == demo["environment_id"])
+    demo["environment_revision_sha256"] = base["revision_sha256"]
     policy = {"enabled": True, "allowed_base_environment_ids": [demo["environment_id"]], "allowed_managers": ["venv"],
         "allowed_sources": ["uploaded_wheels"], "resource_limits": {"cpus": 1, "memory_mib": 512, "time_limit_seconds": 60},
         "platform_tag": platform_tag, "python_major_minor": python_major_minor, "max_environment_bytes": 1073741824,
@@ -125,7 +137,8 @@ def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_maj
     promoted = human.request("POST", f"/api/v1/environment-builds/{build['id']}/promote", {})
     require(promoted["environment"]["permitted_for_jobs"] is True, "Explicit human promotion did not update the grant")
     prefix = ready["receipt"]["prefix"]
-    source = ("import json,sys\nfrom pathlib import Path\n"
+    module_check = "import os\nassert 'fixture-python/1.0' in os.environ.get('LOADEDMODULES','').split(':')\n" if module_bootstrap else ""
+    source = ("import json,sys\nfrom pathlib import Path\n" + module_check +
         f"assert sys.prefix == {prefix!r}\nassert sys.base_prefix != sys.prefix\n"
         "Path('result.json').write_text(json.dumps({'ok':True,'prefix':sys.prefix,'base_prefix':sys.base_prefix}))\n"
         "print('BROKER_ENVIRONMENT_REUSE_OK',flush=True)\n").encode()
@@ -151,7 +164,7 @@ def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_maj
     print(json.dumps({"ok": True, "simulated": False, "project_id": project_id, "build_id": ready["id"],
         "environment_id": promoted["environment"]["id"], "build_attempt_id": attempt_id,
         "reuse_attempt_id": second_attempt_id, "admitted_jobs": allowance["jobs"]["admitted"],
-        "spent": allowance["spent"], "reserved": allowance["reserved"], "cache_hit": True}))
+        "spent": allowance["spent"], "reserved": allowance["reserved"], "cache_hit": True, "module_bootstrap": module_bootstrap}))
 
 
 def main():
@@ -161,6 +174,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--fixture-platform", default="linux-x86_64")
     parser.add_argument("--fixture-python-major-minor", default="3.11")
+    parser.add_argument("--module-bootstrap", action="store_true", help="Build and reuse using the fixture Python module")
     parser.add_argument("--confirm-disposable-fixture", action="store_true")
     args = parser.parse_args()
     if not args.confirm_disposable_fixture:
@@ -169,7 +183,7 @@ def main():
         parser.error("timeout must be from 1 through 900 seconds")
     try:
         run(args.base_url, args.demo_file, args.timeout, platform_tag=args.fixture_platform,
-            python_major_minor=args.fixture_python_major_minor)
+            python_major_minor=args.fixture_python_major_minor, module_bootstrap=args.module_bootstrap)
     except SmokeFailure as error:
         print("Environment smoke failed: " + str(error), file=sys.stderr)
         return 1

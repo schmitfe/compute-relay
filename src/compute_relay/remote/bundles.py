@@ -25,7 +25,8 @@ DISCOVERY_COMPONENTS = (
     "discovery_config.py", "probes.py", "module_catalog.py", "software.py", "discovery.py",
 )
 ENTRYPOINT = "entrypoint.py"
-_ALLOWED_COMPONENTS = frozenset((*COMMON_COMPONENTS, *JOB_COMPONENTS, *DISCOVERY_COMPONENTS, ENTRYPOINT))
+ENVIRONMENT_COMPONENTS = ("prelude.py", "probes.py", "environment_shell.py", "environment_probe.py", ENTRYPOINT)
+_ALLOWED_COMPONENTS = frozenset((*COMMON_COMPONENTS, *JOB_COMPONENTS, *DISCOVERY_COMPONENTS, *ENVIRONMENT_COMPONENTS, ENTRYPOINT))
 
 
 def _component(name: str) -> str:
@@ -40,6 +41,8 @@ def component_names(kind: str) -> tuple[str, ...]:
         return (*COMMON_COMPONENTS, *JOB_COMPONENTS, ENTRYPOINT)
     if kind == "discovery":
         return (*COMMON_COMPONENTS, *DISCOVERY_COMPONENTS, ENTRYPOINT)
+    if kind == "environment":
+        return ENVIRONMENT_COMPONENTS
     raise ValueError("Unsupported fixed remote bundle")
 
 
@@ -117,6 +120,12 @@ def _assemble(names: tuple[str, ...], dispatch: str, protocol: str) -> str:
 
 def bundle_source(kind: str) -> str:
     names = component_names(kind)
+    if kind == "environment":
+        dispatch = ("def execute(config, request):\n"
+                    "    if request.get('operation') != 'inspect_environment':\n"
+                    "        raise ValueError('Unsupported fixed environment operation')\n"
+                    "    return inspect_environment(config, request)\n")
+        return _assemble(names, dispatch, "environment-inspection/v1")
     if kind == "jobs":
         dispatch = "def execute(config, request):\n    return execute_jobs(config, request)\n"
         return _assemble(names, dispatch, JOB_PROTOCOL)

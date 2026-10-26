@@ -65,11 +65,16 @@ def execute(request, build_id):
 @boundary("GET", "PUT", exempt=False)
 def policy_api(request, project_id):
     if request.method == "GET":
-        _, project = scope(request, "jobs:read", project_id=project_id)
+        credential, project = scope(request, "jobs:read", project_id=project_id)
         policy = EnvironmentBuildPolicy.objects.filter(project=project).first()
+        bases = project.environments.filter(id__in=policy.configuration.get("allowed_base_environment_ids", []) if policy else [])
         return {"enabled": bool(policy and policy.configuration.get("enabled")),
                 "revision": policy.revision if policy else None, "configuration": policy.configuration if policy else {},
-                "supported_managers": ["venv"], "storage_assurance": "advisory; installations run only in scheduled jobs"}
+                "supported_managers": ["venv"],
+                "bootstrap_environments": [{"id": str(base.id), "revision_sha256": base.revision_sha256,
+                    "name": base.name, "connection_id": str(base.connection_id), "configuration": base.configuration}
+                    for base in bases if connection_allowed(credential, base.connection_id)],
+                "storage_assurance": "advisory; installations run only in scheduled jobs"}
     if not request.user.is_authenticated:
         raise BrokerError("HUMAN_REQUIRED", "A human administrator session is required.", 403)
     project = Project.objects.get(id=project_id)

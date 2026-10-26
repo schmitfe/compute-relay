@@ -258,3 +258,17 @@ def test_non_verbose_job_progress_is_quiet(runtime, monkeypatch, capsys):
     monkeypatch.setattr(personal_setup.AsyncWorker, "_execute", execute)
     asyncio.run(runtime.worker._execute({"operation": "submit"}))
     assert capsys.readouterr().out == ""
+
+
+def test_environment_inspection_reports_only_typed_result_without_changing_credentials(runtime, monkeypatch):
+    selection = {"modules": ["python3/miniforge3-24.3-py3.12"]}
+    runtime.client.queue = [task("environment_probe", request={"environment": selection})]
+    before = read_private(runtime.directory / "state.json")
+    async def inspect(session, requested):
+        assert session is runtime.session and requested == selection
+        return {"ok": True, "python": ["/opt/bin/python3"]}
+    monkeypatch.setattr(personal_setup, "remote_environment", inspect)
+    asyncio.run(runtime.worker.setup_once())
+    assert runtime.client.calls[-1][1]["outcome"] == "succeeded"
+    assert runtime.client.calls[-1][1]["result"] == {"ok": True, "python": ["/opt/bin/python3"]}
+    assert read_private(runtime.directory / "state.json") == before

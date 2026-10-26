@@ -369,13 +369,13 @@ def test_missing_pinned_wheel_fails_before_preparation_or_execution(context):
     assert not Job.objects.exists() and not Attempt.objects.exists()
 
 
-@pytest.mark.parametrize("kind", ["modules", "venv", "poetry", "conda"])
+@pytest.mark.parametrize("kind", ["venv", "poetry", "conda"])
 def test_builder_rejects_bootstraps_whose_runtime_initialization_is_not_preserved(context, kind):
     context.base.configuration = {"kind": kind, "interpreter": "/trusted/bin/python3"}
     context.base.save()
-    with pytest.raises(BrokerError, match="standalone system Python"):
+    with pytest.raises(BrokerError, match="system or module-provided Python"):
         context.services.update_policy(context.project, context.owner, context.policy.configuration)
-    with pytest.raises(BrokerError, match="standalone system Python"):
+    with pytest.raises(BrokerError, match="system or module-provided Python"):
         context.services.create_build(context.key, context.document)
     assert not Job.objects.exists() and not Attempt.objects.exists()
 
@@ -454,3 +454,38 @@ def test_metadata_finalizer_never_executes_the_created_interpreter(tmp_path):
     python.unlink();os.mkfifo(python)
     refused = subprocess.run([sys.executable, "-I", "-c", REMOTE_SOURCE], input=json.dumps(request_data), capture_output=True, text=True, timeout=5)
     assert json.loads(refused.stdout)["verified"] is False
+
+
+def test_module_python_build_preserves_runtime_setup_when_publishing_and_reusing(context):
+    from compute_relay.backends.environments import render_environment
+    setup = {"modules": ["gcc/14.1.0", "python3/3.12.4"], "module_init": "", "module_paths": ["/opt/apps/modules/Software"]}
+    context.base.configuration = {"kind": "modules", "interpreter": "python3", **setup}
+    context.base.save()
+    context.services.update_policy(context.project, context.owner, context.policy.configuration)
+    build, attempt = executed(context)
+    metadata = finalization(build, attempt)
+    attempt.state, attempt.accounting_state = "succeeded", "settled"; attempt.save()
+    context.services.sync_attempt(attempt, metadata)
+    build.refresh_from_db()
+    assert build.state == "ready"
+    assert all(build.environment.configuration[key] == value for key, value in setup.items())
+    wrapper, command = render_environment(build.environment.configuration, "python3")
+    assert "module load gcc/14.1.0 python3/3.12.4" in wrapper
+    assert command == [metadata["prefix"] + "/bin/python"]
+    assert not context.services.serialize(build)["environment"]["permitted_for_jobs"]
+    context.services.promote(build, context.owner)
+    assert context.services.serialize(build)["environment"]["permitted_for_jobs"]
+
+
+def test_agent_policy_discovery_includes_approved_module_bootstrap_reference(context):
+    context.base.configuration = {"kind": "modules", "modules": ["python3/3.12.4"], "interpreter": "python3"}
+    context.base.save()
+    context.services.update_policy(context.project, context.owner, context.policy.configuration)
+    response = Client().get(f"/api/v1/projects/{context.project.id}/environment-build-policy",
+        HTTP_AUTHORIZATION="Bearer environment-agent")
+    assert response.status_code == 200
+    assert response.json()["bootstrap_environments"] == [{"id": str(context.base.id), "revision_sha256": context.base.revision_sha256,
+        "name": context.base.name, "connection_id": str(context.connection.id), "configuration": context.base.configuration}]
+    context.key.allowed_connection_ids = []; context.key.save()
+    assert Client().get(f"/api/v1/projects/{context.project.id}/environment-build-policy",
+        HTTP_AUTHORIZATION="Bearer environment-agent").json()["bootstrap_environments"] == []

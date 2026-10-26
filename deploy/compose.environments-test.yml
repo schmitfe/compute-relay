@@ -4,7 +4,7 @@
     "worker": {"environment": {"BROKER_EXTENSIONS": "environments"}},
     "smoke": {
       "entrypoint": ["python", "/opt/environment_build_smoke.py"],
-      "command": ["--base-url", "http://control:8765", "--demo-file", "/run/demo/demo.json", "--confirm-disposable-fixture"],
+      "command": ["--base-url", "http://control:8765", "--demo-file", "/run/demo/demo.json", "--confirm-disposable-fixture", "--module-bootstrap"],
       "volumes": [{"type": "bind", "source": "../tools/environment_build_smoke.py", "target": "/opt/environment_build_smoke.py", "read_only": true}]
     }
   }

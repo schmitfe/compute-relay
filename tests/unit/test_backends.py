@@ -696,7 +696,7 @@ def test_module_environment_rejects_invalid_path_lists(paths):
 
 
 def test_nonmodule_profile_cannot_silently_ignore_module_path_selection():
-    with pytest.raises(EnvironmentProfileError, match="requires a modules profile"):
+    with pytest.raises(EnvironmentProfileError, match="Choose a module or virtual environment profile"):
         validate_environment_config({"kind": "system", "interpreter": "/usr/bin/python3", "module_paths": ["/apps/modules"]})
 
 

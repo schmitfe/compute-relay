@@ -22,12 +22,12 @@ from .rendering import normalize_request, render_build_files, requirements_text,
 def _bootstrap(base):
     configuration = base.configuration
     kind = configuration.get("kind", "modules" if configuration.get("modules") else "system")
-    if kind != "system":
-        raise BrokerError("ENVIRONMENT_BASE_UNSUPPORTED", "This builder requires a standalone system Python recipe; module, Conda and virtual-environment bootstraps are not supported yet.", 403)
+    if kind not in {"system", "modules"}:
+        raise BrokerError("ENVIRONMENT_BASE_UNSUPPORTED", "This builder requires a system or module-provided Python recipe; Conda and virtual-environment bootstraps are not supported yet.", 403)
     try:
         render_environment(configuration, "python3")
     except ValueError as exc:
-        raise BrokerError("ENVIRONMENT_BASE_UNSUPPORTED", "Select an approved system Python recipe for this builder.", 403) from exc
+        raise BrokerError("ENVIRONMENT_BASE_UNSUPPORTED", "Select an approved system or module-provided Python recipe for this builder.", 403) from exc
 
 
 def _credential(credential, project, *, execute=False):
@@ -298,6 +298,13 @@ def sync_attempt(attempt, finalization=None):
                     else:
                         prefix = finalization["prefix"]
                         configuration = {"kind": "venv", "prefix": prefix, "interpreter": prefix + "/bin/python", "modules": []}
+                        # Copied venv interpreters may still depend on the base
+                        # module's shared libraries and external runtime files.
+                        base_configuration = build.spec.base_environment.configuration
+                        for key in ("modules", "module_init", "module_paths"):
+                            if key in base_configuration:
+                                configuration[key] = base_configuration[key]
+                        render_environment(configuration, "python3")
                         revision = core.digest({"configuration": configuration, "spec_sha256": build.spec.sha256,
                                                 "build_id": str(build.id), "receipt": receipt})
                         build.environment = Environment.objects.create(owner=build.spec.project.owner, connection=build.spec.connection,

@@ -22,6 +22,18 @@ async def remote_setup(session, operation, **arguments):
     return await transport.call_helper(source, {"operation": operation, **arguments})
 
 
+async def remote_environment(session, selection):
+    from compute_relay.remote.bundles import bundle_source
+    from compute_relay.remote.environment_shell import inspection_request
+    inspection_request(selection)
+    connection = session.runtime_configuration()
+    connection["command_timeout_seconds"] = 30
+    transport = AsyncOpenSSHTransport(connection)
+    transport.STDOUT_LIMIT = 128 * 1024
+    return await transport.call_helper(bundle_source("environment"), {
+        "operation": "inspect_environment", "config": {}, "environment": selection})
+
+
 async def default_work_root(session):
     from .enrollment import _root
     result = await remote_setup(session, "identity")
@@ -95,7 +107,7 @@ class PersonalWorker(AsyncWorker):
         document = {"connection_id": self.state["connection_id"]}
         if hello:
             document.update(hello=True, needs_discovery=not self.state.get("defaults_initialized", False),
-                features=["personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1"])
+                features=["personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1"])
         if self.state.get("pending_configuration_task"):
             document["pending_task_id"] = self.state["pending_configuration_task"]
         try:
@@ -174,11 +186,14 @@ class PersonalWorker(AsyncWorker):
             return False
         descriptions = {"browse": "Listing folders for the portal's directory browser.",
             "mkdir": "Creating the folder requested in the portal.",
+            "environment_probe": "Inspecting the selected modules and Python/Conda environments for the portal.",
             "configure": "Validating and applying the cluster configuration requested in the portal."}
         self.status.progress(descriptions.get(task["kind"], "Handling a cluster setup request."))
         report = {"connection_id": self.state["connection_id"], "lease_id": task["lease_id"], "generation": task["generation"]}
         try:
-            if task["kind"] == "browse":
+            if task["kind"] == "environment_probe":
+                result = await remote_environment(self.session, task["request"]["environment"])
+            elif task["kind"] == "browse":
                 result = await remote_setup(self.session, "browse", path=task["request"]["path"])
             elif task["kind"] == "mkdir":
                 if self.state.get("last_folder_task") == task["id"] and self.state.get("last_folder_receipt"):

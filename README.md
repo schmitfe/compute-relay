@@ -75,6 +75,7 @@ The former multi-user server, LDAP, and PostgreSQL implementation is retained on
 | [Runtime](docs/runtime.md) | Launcher, persistence, job lifecycle, and supported limits |
 | [Installation and recovery](docs/deployment.md) | Local configuration, first setup, backups, and restart |
 | [Portal](docs/management.md) | Cluster setup, project keys, discovery, and environment recipes |
+| [Python environments](docs/python-environments.md) | Module Python, Conda/Poetry selection, worker inspection, and agent-requested venv builds |
 | [Architecture](docs/architecture.md) | Components, immutable approval, ledger, and execution boundaries |
 | [Backends](docs/backends.md) | Slurm, SSH, remote helper, and reuse assessment |
 | [Modules](docs/extensions.md) | Storage, environment builds, and workflows |

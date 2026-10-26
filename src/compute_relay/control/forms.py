@@ -130,21 +130,28 @@ class KeyForm(forms.Form):
 class EnvironmentForm(forms.Form):
     name = forms.CharField(max_length=80, label="Environment name")
     connection = forms.ModelChoiceField(queryset=Connection.objects.none(), label="Cluster")
-    kind = forms.ChoiceField(choices=[("system", "Existing Python / Bash"), ("modules", "Environment Modules / Lmod"), ("venv", "Existing Python virtual environment"), ("conda", "Existing Conda environment"), ("poetry", "Existing Poetry virtual environment")])
-    interpreter = forms.CharField(max_length=240, initial="/usr/bin/python3", help_text="An existing executable on compute nodes. Module environments may use python3 through the loaded PATH.")
+    kind = forms.ChoiceField(choices=[("system", "Existing Python / Bash"), ("modules", "Environment Modules / Lmod"), ("venv", "Existing Python virtual environment"), ("conda", "Conda / Anaconda / Miniforge environment"), ("poetry", "Existing Poetry virtual environment")])
+    detected_interpreter = forms.ChoiceField(required=False, choices=[], label="Detected Python", help_text="Choose a saved or inspected executable, or keep the manual interpreter below.")
+    detected_environment = forms.ChoiceField(required=False, choices=[], label="Detected environment", help_text="Existing Conda or Poetry/venv prefixes on this cluster. Select one to fill its kind, prefix and interpreter.")
+    interpreter = forms.CharField(max_length=4096, initial="/usr/bin/python3", help_text="An existing executable on compute nodes. Module environments may use python3 through the loaded PATH.")
     discovered_modules = forms.MultipleChoiceField(required=False, choices=[], widget=forms.CheckboxSelectMultiple,
-        label="Modules from this cluster", help_text="Saved discovery catalog; selected entries load first. No modules run while creating a recipe.")
-    modules = forms.CharField(required=False, widget=forms.Textarea, label="Additional modules (advanced)",
+        label="Modules from this cluster", help_text="Saved discovery catalog; selected entries load first. Inspect selection explicitly loads these modules on the login node; saving a recipe does not.")
+    modules = forms.CharField(required=False, max_length=8192, widget=forms.Textarea, label="Additional modules (advanced)",
         help_text="One exact module/version per line, appended after the selected catalog entries. For a specific load order, leave catalog entries unchecked and list all modules here in order.")
     module_init = forms.ChoiceField(required=False, choices=[], label="Module initialization (advanced)",
         help_text="Leave empty to use the cluster's module command in a login batch shell. An explicit file is used only if that command is missing.")
     module_paths = forms.CharField(required=False, max_length=4096, widget=forms.Textarea,
         label="Module search paths", help_text="Optional: one approved absolute directory per line. Prefilled from cluster discovery when available.")
-    prefix = forms.CharField(required=False, max_length=240, label="Environment prefix")
-    conda_executable = forms.CharField(required=False, max_length=240, label="Conda executable", help_text="Used only inside the reviewed compute job.")
+    prefix = forms.CharField(required=False, max_length=4096, label="Environment prefix")
+    conda_executable = forms.CharField(required=False, max_length=4096, label="Conda executable", help_text="Leave empty during inspection to locate Conda through the selected modules. Used by conda run inside compute jobs.")
 
-    def __init__(self, *args, user, **kwargs):
+    def __init__(self, *args, user, inspection=False, observation=None, probe_selection=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.inspection, self.probe_selection = inspection, probe_selection
+        if inspection:
+            self.fields["name"].required = False
+            self.fields["interpreter"].required = False
+        self.observation = observation
         self.fields["connection"].queryset = owned_connections(user)
         from compute_relay.backends.environments import MODULE_INIT_PATHS, module_init_path
         self.fields["module_init"].choices = [("", "Use the cluster-provided module command")] + [(p, p) for p in MODULE_INIT_PATHS]
@@ -172,13 +179,41 @@ class EnvironmentForm(forms.Form):
                     and not any(part in {"", ".", ".."} for part in value.split("/"))))[:2000]
             self.fields["connection"].widget = forms.HiddenInput()
         self.fields["discovered_modules"].choices = [(name, name) for name in self.available_modules]
+        software = self.catalog_connection.discovery_snapshot.get("software", {}) if self.catalog_connection else {}
+        python = observation["python"] if observation else [item.get("interpreter") for item in software.get("python", []) if isinstance(item, dict)]
+        self.detected_environments = {}
+        for item in (observation["environments"] if observation else software.get("environments", [])):
+            if isinstance(item, dict) and item.get("kind") in {"conda", "venv", "poetry"} and isinstance(item.get("prefix"), str) and isinstance(item.get("interpreter"), str):
+                self.detected_environments[item["prefix"]] = item
+        self.fields["detected_interpreter"].choices = [("", "Use manual interpreter")] + [(path, path) for path in dict.fromkeys(path for path in python if isinstance(path, str))]
+        self.fields["detected_environment"].choices = [("", "Use manual environment paths")] + [(prefix, item["kind"] + ": " + prefix) for prefix, item in self.detected_environments.items()]
+        self.order_fields(["connection", "name", "kind", "discovered_modules", "modules", "module_init", "module_paths",
+                           "detected_interpreter", "detected_environment", "interpreter", "prefix", "conda_executable"])
 
     def clean(self):
         data = super().clean()
+        if not self.inspection:
+            if data.get("detected_interpreter"):
+                data["interpreter"] = data["detected_interpreter"]
+            if data.get("detected_environment"):
+                chosen = self.detected_environments[data["detected_environment"]]
+                data.update({key: chosen[key] for key in ("kind", "prefix", "interpreter")})
+                if chosen["kind"] == "conda" and self.observation:
+                    data["conda_executable"] = self.observation["conda_executable"]
+                elif chosen["kind"] == "conda" and not data.get("conda_executable") and self.catalog_connection:
+                    data["conda_executable"] = self.catalog_connection.discovery_snapshot.get("software", {}).get("conda", {}).get("executable", "")
+                elif chosen["kind"] != "conda":
+                    data["conda_executable"] = ""
         kind = data.get("kind")
         interpreter = data.get("interpreter", "")
-        absolute = lambda value: bool(re.fullmatch(r"/[A-Za-z0-9_./-]+", value)) and not any(p in {".", ".."} for p in value.split("/"))
-        if not absolute(interpreter) and not (kind == "modules" and interpreter in {"python3", "bash"}):
+        from compute_relay.backends.environments import absolute_environment_path
+        def absolute(value):
+            try:
+                absolute_environment_path(value)
+                return True
+            except ValueError:
+                return False
+        if (not self.inspection or interpreter) and not absolute(interpreter) and not (kind == "modules" and interpreter in {"python3", "bash"}):
             self.add_error("interpreter", "Use an absolute existing interpreter, or python3/bash for a module environment.")
         manual_modules = [line.strip() for line in data.get("modules", "").splitlines() if line.strip()]
         modules = list(dict.fromkeys(data.get("discovered_modules", []) + manual_modules))
@@ -186,17 +221,24 @@ class EnvironmentForm(forms.Form):
             self.add_error("modules", "Use up to 32 exact module/version names.")
         if kind == "modules" and not modules:
             self.add_error("modules", "Select at least one module.")
-        if kind != "modules" and modules:
-            self.add_error("modules", "Module loads belong to a module environment.")
+        if kind == "system" and modules:
+            self.add_error("modules", "Choose Modules, Conda, Poetry or venv when loading modules.")
         paths = [line.strip() for line in data.get("module_paths", "").splitlines() if line.strip()]
         if len(paths) > 16 or any(not absolute(p) or p == "/" or "//" in p or ":" in p for p in paths):
             self.add_error("module_paths", "Use up to 16 canonical absolute directory paths, one per line.")
-        if kind != "modules" and paths:
+        if kind == "system" and paths:
             self.add_error("module_paths", "Module search paths belong to a module environment.")
-        if kind == "conda":
+        if kind == "conda" and not self.inspection:
             for field in ("prefix", "conda_executable"):
                 if not absolute(data.get(field, "")):
                     self.add_error(field, "Provide an existing absolute path on the cluster.")
         data["module_names"] = modules
         data["module_path_list"] = paths
+        for field in ("prefix", "conda_executable"):
+            if data.get(field) and not absolute(data[field]):
+                self.add_error(field, "Use a canonical absolute path on the cluster.")
+        if not self.inspection and self.probe_selection is not None and (data.get("detected_interpreter") or data.get("detected_environment")):
+            from .environment_inspection import module_selection, selection
+            if module_selection(selection(data)) != module_selection(self.probe_selection):
+                self.add_error("discovered_modules", "The module selection changed. Inspect it again before using these detected paths, or select manual paths.")
         return data

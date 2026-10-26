@@ -72,6 +72,8 @@ def enqueue(user, connection_id, kind, payload, revision):
             raise BrokerError("REVISION_CHANGED", "The cluster changed. Reload this page before continuing.", 409)
         if "personal_setup_v1" not in worker.connector_features:
             raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector with the updated broker environment to enable interactive configuration.", 409)
+        if kind == "environment_probe" and "personal_environments_v1" not in worker.connector_features:
+            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to inspect Python and Conda environments.", 409)
         if kind == "mkdir" and "personal_folders_v1" not in worker.connector_features:
             raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable the New folder action.", 409)
         if (kind == "configure" and payload.get("module_availability_enabled") is True
@@ -188,7 +190,7 @@ def tasks(request):
         defaults_deferred = False
         if document.get("hello") is True:
             features = document.get("features", ["personal_setup_v1"])
-            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1"} for item in features):
+            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1"} for item in features):
                 raise BrokerError("INVALID_FEATURES", "Unsupported connector setup capabilities.")
             worker.connector_features = list(dict.fromkeys(features))
             worker.save(update_fields=["connector_features"])
@@ -247,6 +249,13 @@ def report(request, task_id):
         if document.get("outcome") != "succeeded":
             code = document.get("error_code", "CONNECTOR_OPERATION_FAILED")
             task.state, task.error_code = "failed", code if re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", str(code)) else "CONNECTOR_OPERATION_FAILED"
+        elif task.kind == "environment_probe":
+            from .environment_inspection import validate_result
+            try:
+                validate_result(result)
+            except (ValueError, TypeError):
+                raise BrokerError("INVALID_RESULT", "Invalid environment inspection result.") from None
+            task.state, task.result = "succeeded", result
         elif task.kind in {"browse", "mkdir"}:
             allowed = {"ok", "path", "parent", "home", "entries", "writable", "truncated", "scanned_entries"}
             if task.kind == "mkdir":

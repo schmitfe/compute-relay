@@ -112,6 +112,24 @@ def finish_configuration(human, demo, directory):
 def cluster_check(human, demo):
     """Use the same preview, review and settled results a human sees."""
     import re
+    environment_path = f"/clusters/{demo['connection_id']}/environments/new/"
+    page = human.request("GET", environment_path, binary=True)
+    fields = ConfigurationFields(); fields.feed(page.decode())
+    human.request("POST", environment_path, {"action": "inspect", "kind": "modules", "interpreter": "python3",
+        "modules": "fixture-python/1.0", "module_init": "", "module_paths": "/opt/fixture/modulefiles",
+        "connection_revision": fields.values["connection_revision"]}, form=True, binary=True)
+    inspection_path = redirected_path(human)
+    require("?task=" in inspection_path, "Environment inspection was not queued through the personal connector")
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        page = human.request("GET", inspection_path, binary=True)
+        require(b"Inspection failed:" not in page and b"Inspection expired." not in page, "Selected module inspection failed")
+        if b"Compute-node availability is unverified" in page:
+            require(b'<option value="/usr/bin/python3"' in page, "Module Python was not offered in the detected dropdown")
+            break
+        time.sleep(0.25)
+    else:
+        raise SmokeFailure("Selected module inspection did not finish")
     human.request("POST", f"/clusters/{demo['connection_id']}/environments/new/", {
         "name": "Fixture cluster modules", "kind": "modules", "interpreter": "python3",
         "modules": "fixture-python/1.0", "module_init": "", "module_paths": "/opt/fixture/modulefiles",
@@ -239,7 +257,7 @@ def run():
             "removed_configuration": True, "master_closed_on_revocation": True,
             "post_login_directory_browser": True, "created_selected_folder": True,
             "owner_configuration_persisted": True, "reviewed_cluster_check": True,
-            "cluster_provided_modules": True}))
+            "cluster_provided_modules": True, "selected_environment_inspection": True}))
 
 
 if __name__ == "__main__":

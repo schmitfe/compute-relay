@@ -395,3 +395,15 @@ def test_project_post_can_select_environment_when_its_cluster_is_also_selected(c
         connections=[str(context.first.id), str(context.second.id)], environments=[str(context.second_env.id)]))
     assert response.status_code == 302
     assert set(context.project.environments.values_list("id", flat=True)) == {context.second_env.id}
+
+
+def test_existing_poetry_selection_clears_conda_runner_from_previous_choice(catalog):
+    observation = {"python": [], "conda_executable": "/opt/conda/bin/conda", "environments": [
+        {"kind": "poetry", "prefix": "/scratch/science/.venv", "interpreter": "/scratch/science/.venv/bin/python"}]}
+    form = EnvironmentForm(module_data(catalog, kind="conda", interpreter="/usr/bin/python3",
+        detected_environment="/scratch/science/.venv", conda_executable="/opt/conda/bin/conda"),
+        user=catalog.owner, observation=observation)
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["kind"] == "poetry"
+    assert form.cleaned_data["conda_executable"] == ""
+    assert form.cleaned_data["module_names"] == ["Python/3.12"]

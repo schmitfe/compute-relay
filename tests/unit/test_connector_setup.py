@@ -387,3 +387,85 @@ def test_invalid_configuration_errors_follow_their_field_and_link_from_summary(p
         assert f'id="id_{name}_error"' in body
         assert body.index(f'name="{name}"') < body.index(f'id="id_{name}_error"')
     assert 'aria-invalid="true"' in body and 'aria-describedby="id_remote_root_error"' in body
+
+
+def inspection_result(**changes):
+    return {"ok": True, "scope": "login_node", "verified_on_compute": False,
+        "python": ["/opt/miniforge/bin/python3"], "conda_executable": "/opt/miniforge/bin/conda",
+        "poetry_executable": "/opt/poetry/bin/poetry", "conda_status": "available", "truncated": False,
+        "environments": [{"kind": "conda", "prefix": "/scratch/researcher/analysis",
+            "interpreter": "/scratch/researcher/analysis/bin/python"}], **changes}
+
+
+def queue_inspection(context, **changes):
+    context.worker.connector_features += ["personal_environments_v1"]
+    context.worker.save()
+    response = context.human.post(f"/clusters/{context.connection.id}/environments/new/", {
+        "action": "inspect", "kind": "conda", "modules": "python3/miniforge3-24.3-py3.12",
+        "connection_revision": context.connection.revision_sha256, **changes})
+    assert response.status_code == 302, response.content
+    return ConnectorTask.objects.latest("created_at")
+
+
+def test_inspection_populates_cluster_bound_conda_dropdown_without_creating_environment(personal):
+    from compute_relay.control.models import Environment
+    context = personal
+    path = f"/clusters/{context.connection.id}/environments/new/"
+    assert context.human.get(path).status_code == 200
+    assert not ConnectorTask.objects.exists()
+    saved = queue_inspection(context)
+    leased = lease(context)
+    assert leased["kind"] == "environment_probe"
+    assert leased["request"]["environment"] == {"modules": ["python3/miniforge3-24.3-py3.12"]}
+    assert not Environment.objects.exists()
+    assert reply(context, leased, result=inspection_result()).status_code == 200
+    page = context.human.get(path, {"task": str(saved.id)})
+    assert page.status_code == 200
+    assert b"conda: /scratch/researcher/analysis" in page.content
+    assert b"Compute-node availability is unverified" in page.content
+    response = context.human.post(path, {"name": "Analysis", "kind": "conda", "interpreter": "/usr/bin/python3",
+        "modules": "python3/miniforge3-24.3-py3.12", "inspection_task": str(saved.id),
+        "detected_environment": "/scratch/researcher/analysis"})
+    assert response.status_code == 302, response.content
+    recipe = Environment.objects.get()
+    assert recipe.connection == context.connection
+    assert recipe.configuration == {"kind": "conda", "interpreter": "/scratch/researcher/analysis/bin/python",
+        "modules": ["python3/miniforge3-24.3-py3.12"], "prefix": "/scratch/researcher/analysis",
+        "conda_executable": "/opt/miniforge/bin/conda"}
+
+
+def test_inspection_needs_human_post_csrf_current_revision_and_updated_worker(personal):
+    context = personal
+    path = f"/clusters/{context.connection.id}/environments/new/"
+    data = {"action": "inspect", "kind": "system", "connection_revision": context.connection.revision_sha256}
+    assert Client().post(path, data, HTTP_AUTHORIZATION="Bearer cbp_agent").status_code == 403
+    browser = Client(enforce_csrf_checks=True); browser.force_login(context.owner)
+    assert browser.post(path, data).status_code == 403
+    assert context.human.post(path, data).status_code == 409
+    context.worker.connector_features += ["personal_environments_v1"]; context.worker.save()
+    assert context.human.post(path, {**data, "connection_revision": "obsolete"}).status_code == 409
+    assert not ConnectorTask.objects.exists()
+
+
+def test_inspection_stale_modules_or_other_owner_cannot_supply_detected_choices(personal):
+    context = personal
+    task = queue_inspection(context)
+    assert reply(context, lease(context), result=inspection_result()).status_code == 200
+    path = f"/clusters/{context.connection.id}/environments/new/"
+    page = context.human.post(path, {"name": "Stale", "kind": "conda", "interpreter": "/usr/bin/python3",
+        "modules": "different/module", "inspection_task": str(task.id), "detected_environment": "/scratch/researcher/analysis"})
+    assert page.status_code == 200 and "discovered_modules" in page.context["form"].errors
+    other = User.objects.create_user(username="other-environment-owner")
+    client = Client(); client.force_login(other)
+    assert client.get(path, {"task": str(task.id)}).status_code == 404
+    context.connection.revision_sha256 = "d" * 64; context.connection.save()
+    assert context.human.get(path, {"task": str(task.id)}).status_code == 409
+
+
+@pytest.mark.parametrize("change", [
+    {"verified_on_compute": True}, {"python": ["python3"]}, {"shell": "evil"},
+    {"conda_executable": "/opt/bin/other"}, {"environments": [{"kind": "conda", "prefix": "/tmp/prefix", "interpreter": "/elsewhere/python"}]},
+])
+def test_invalid_inspection_worker_result_cannot_become_recipe_choices(personal, change):
+    queue_inspection(personal)
+    assert reply(personal, lease(personal), result=inspection_result(**change)).status_code == 400

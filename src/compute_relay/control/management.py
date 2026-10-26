@@ -19,7 +19,7 @@ from .errors import BrokerError
 from .local_auth import current_user_active
 from .forms import (EnvironmentForm, KeyForm, ProjectForm,
                     owned_connections, owned_environments)
-from .models import (Attempt, Environment, Grant, IdempotencyRecord, Job, Project,
+from .models import (Attempt, ConnectorTask, Environment, Grant, IdempotencyRecord, Job, Project,
                      ProjectCredential)
 
 
@@ -353,23 +353,64 @@ def environment_new(request, connection_id):
         initial["conda_executable"] = software.get("conda", {}).get("executable", "")
     if request.GET.get("module"):
         initial["discovered_modules"] = [request.GET["module"]]
+    task, observation = None, None
+    task_id = request.POST.get("inspection_task") if request.method == "POST" else request.GET.get("task")
+    if task_id:
+        try:
+            task_id = UUID(task_id)
+        except (ValueError, TypeError):
+            raise BrokerError("INVALID_TASK", "Choose a valid environment inspection.") from None
+        task = get_object_or_404(ConnectorTask, id=task_id, owner=request.user, connection=connection, kind="environment_probe")
+        if task.connection_revision != connection.revision_sha256:
+            raise BrokerError("REVISION_CHANGED", "The cluster configuration changed. Start a fresh environment inspection.", 409)
+        initial.update(task.request["draft"])
+        if task.state == "succeeded":
+            observation = task.result
+            if initial["kind"] == "conda":
+                initial["conda_executable"] = observation["conda_executable"]
+                prefixes = [item["prefix"] for item in observation["environments"] if item["kind"] == "conda"]
+                if prefixes:
+                    initial["detected_environment"] = prefixes[0]
+            elif observation["python"] and initial["kind"] in {"modules", "system"}:
+                initial["detected_interpreter"] = observation["python"][0]
+    inspection = request.method == "POST" and request.POST.get("action") == "inspect"
     bound = None
     target_conflict = False
     if request.method == "POST":
         bound = request.POST.copy()
+        if bound.get("connection_revision") and bound["connection_revision"] != connection.revision_sha256:
+            raise BrokerError("REVISION_CHANGED", "The cluster changed. Reload the environment form.", 409)
         supplied = bound.getlist("connection")
         try:
             target_conflict = bool(supplied) and (len(supplied) != 1 or UUID(supplied[0]) != connection.id)
         except (ValueError, TypeError, AttributeError):
             target_conflict = True
         bound["connection"] = str(connection.id)
-    form = EnvironmentForm(bound, user=request.user, initial=initial)
+        if inspection:
+            bound["detected_interpreter"] = bound["detected_environment"] = ""
+    form = EnvironmentForm(bound, user=request.user, initial=initial, inspection=inspection, observation=observation,
+                           probe_selection=task.request["environment"] if observation else None)
     form.fields["connection"].queryset = owned_connections(request.user).filter(id=connection.id)
     valid = form.is_valid() if request.method == "POST" else False
     if target_conflict:
         form.add_error("connection", "This recipe belongs to the cluster in the page address. Open the other cluster to create its recipe.")
         valid = False
-    if valid:
+    if valid and inspection:
+        from .connector_setup import enqueue
+        from .environment_inspection import selection
+        from compute_relay.remote.environment_shell import inspection_request
+        selected = selection(form.cleaned_data)
+        try:
+            inspection_request(selected)
+        except ValueError as exc:
+            form.add_error(None, str(exc))
+        else:
+            draft = {key: form.cleaned_data.get(key, "") for key in ("name", "kind", "interpreter", "prefix", "conda_executable",
+                "discovered_modules", "modules", "module_init", "module_paths")}
+            task = enqueue(request.user, connection.id, "environment_probe", {"environment": selected, "draft": draft},
+                           request.POST.get("connection_revision"))
+            return redirect(f"/clusters/{connection.id}/environments/new/?task={task.id}")
+    elif valid:
         data = form.cleaned_data
         config = {"kind": data["kind"], "interpreter": data["interpreter"], "modules": data["module_names"]}
         if data["kind"] == "modules":
@@ -388,4 +429,7 @@ def environment_new(request, connection_id):
             environment = Environment.objects.create(owner=request.user, connection=connection, name=data["name"], configuration=config, revision_sha256=services.digest(config))
             services.audit(None, request.user.id, "environment.created", environment.id)
             return redirect(f"/clusters/{connection.id}/environments/")
-    return render(request, "broker/environment_form.html", {"form": form, "cluster": connection, "selected_cluster": connection})
+    return render(request, "broker/environment_form.html", {"form": form, "cluster": connection, "selected_cluster": connection,
+        "task": task, "observation": observation,
+        "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
+        "inspection_ready": "personal_environments_v1" in connection.worker.connector_features})

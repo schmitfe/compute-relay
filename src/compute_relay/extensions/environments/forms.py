@@ -13,7 +13,7 @@ class BootstrapChoices(forms.ModelMultipleChoiceField):
 class BuildPolicyForm(forms.Form):
     enabled = forms.BooleanField(required=False, label="Allow agents to request environment builds")
     allowed_bases = BootstrapChoices(queryset=Environment.objects.none(), required=False,
-        label="Approved starting environments", help_text="Choose standalone system Python environments from this project. Module, Conda and virtual-environment bootstraps are not supported yet; normal execution policy must also permit the selection.")
+        label="Approved starting environments", help_text="Choose system or module-provided Python environments from this project. Module setup is preserved when reusing the built venv; normal execution policy must also permit the selection.")
     cpus = forms.IntegerField(min_value=1, max_value=1024, label="Maximum CPU cores per build")
     memory_mib = forms.IntegerField(min_value=128, max_value=16777216, label="Maximum memory per build (MiB)")
     time_limit_minutes = forms.IntegerField(min_value=1, max_value=10080, label="Maximum runtime per build (minutes)")

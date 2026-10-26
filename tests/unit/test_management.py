@@ -882,7 +882,6 @@ def test_modules_environment_form_prefills_paths_and_defaults_to_cluster_command
 
 @pytest.mark.parametrize("kind,details", [
     ("system", {"interpreter": "/usr/bin/python3"}),
-    ("venv", {"interpreter": "/opt/venvs/test/bin/python", "prefix": "/opt/venvs/test"}),
 ])
 def test_nonmodule_environment_rejects_module_search_paths(management, kind, details):
     from compute_relay.control.forms import EnvironmentForm
