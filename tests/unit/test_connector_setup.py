@@ -469,3 +469,27 @@ def test_inspection_stale_modules_or_other_owner_cannot_supply_detected_choices(
 def test_invalid_inspection_worker_result_cannot_become_recipe_choices(personal, change):
     queue_inspection(personal)
     assert reply(personal, lease(personal), result=inspection_result(**change)).status_code == 400
+
+
+@pytest.mark.parametrize("source", ["catalog", "manual"])
+def test_default_recipe_can_inspect_anaconda_then_save_detected_conda_environment(personal, source):
+    from compute_relay.control.models import Environment
+    module = "python3/anaconda3-2024.06-py3.12"
+    personal.connection.discovery_snapshot["software"] = {"modules": {"available": [module]}}
+    personal.connection.save()
+    selected = {"discovered_modules": [module], "modules": ""} if source == "catalog" else {"modules": module}
+    saved = queue_inspection(personal, kind="system", interpreter="/usr/bin/python3", **selected)
+    assert saved.request["environment"] == {"modules": [module]}
+    assert saved.request["draft"]["kind"] == "modules"
+    assert saved.request["draft"]["interpreter"] == "python3"
+    assert reply(personal, lease(personal), result=inspection_result()).status_code == 200
+    path = f"/clusters/{personal.connection.id}/environments/new/"
+    page = personal.human.get(path, {"task": str(saved.id)})
+    assert page.status_code == 200 and page.context["form"].initial["kind"] == "modules"
+    response = personal.human.post(path, {"name": "Detected Anaconda", "kind": "modules", "interpreter": "python3",
+        "inspection_task": str(saved.id), "detected_environment": "/scratch/researcher/analysis", **selected})
+    assert response.status_code == 302, response.content
+    recipe = Environment.objects.get()
+    assert recipe.configuration["kind"] == "conda"
+    assert recipe.configuration["modules"] == [module]
+    assert recipe.configuration["interpreter"] == "/scratch/researcher/analysis/bin/python"

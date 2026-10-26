@@ -9,7 +9,9 @@ account therefore gives it its own observations and recipes.
    Miniforge**, **Existing Poetry virtual environment**, or **Existing Python
    virtual environment**.
 2. Select exact modules from that cluster's saved catalog, or enter exact names
-   manually in load order. Conda, Poetry and venv recipes can retain these module
+   manually in load order. Selecting modules while using the default system
+   recipe automatically selects Modules/Lmod and resolves the default interpreter
+   through the loaded PATH. Conda, Poetry and venv recipes can retain these module
    loads, for example a Miniforge module or the compiler/Python providing runtime
    libraries. Module initialization stays optional and uses the cluster-provided
    command by default.

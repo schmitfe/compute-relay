@@ -193,10 +193,26 @@ def test_foreign_cluster_cannot_supply_module_choices_or_receive_a_new_recipe(ca
     assert Environment.objects.count() == before
 
 
-def test_nonmodule_recipe_cannot_silently_accept_discovered_module_loads(catalog):
+def test_default_recipe_becomes_module_recipe_and_uses_loaded_python(catalog):
     context = catalog
     form = EnvironmentForm(module_data(context, kind="system", interpreter="/usr/bin/python3", module_init="", module_paths=""), user=context.owner)
-    assert not form.is_valid()
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["kind"] == "modules"
+    assert form.cleaned_data["interpreter"] == "python3"
+    response = post(human(context.owner), f"/clusters/{context.first.id}/environments/new/", module_data(context,
+        kind="system", interpreter="/usr/bin/python3", module_init="", module_paths=""))
+    assert response.status_code == 302
+    recipe = Environment.objects.get(name="Chosen catalog module recipe")
+    assert recipe.configuration == {"kind": "modules", "interpreter": "python3", "modules": ["Python/3.12"], "module_init": ""}
+
+
+@pytest.mark.parametrize("interpreter,detected", [("/custom/bin/python3", ""), ("/usr/bin/python3", "/usr/bin/python3")])
+def test_automatic_module_recipe_preserves_custom_and_detected_interpreters(catalog, interpreter, detected):
+    form = EnvironmentForm(module_data(catalog, kind="system", interpreter=interpreter, detected_interpreter=detected),
+        user=catalog.owner, observation={"python": ["/usr/bin/python3"], "environments": []})
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["kind"] == "modules"
+    assert form.cleaned_data["interpreter"] == interpreter
 
 
 class ElementText(HTMLParser):

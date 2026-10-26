@@ -204,6 +204,14 @@ class EnvironmentForm(forms.Form):
                     data["conda_executable"] = self.catalog_connection.discovery_snapshot.get("software", {}).get("conda", {}).get("executable", "")
                 elif chosen["kind"] != "conda":
                     data["conda_executable"] = ""
+        manual_modules = [line.strip() for line in data.get("modules", "").splitlines() if line.strip()]
+        modules = list(dict.fromkeys(data.get("discovered_modules", []) + manual_modules))
+        if data.get("kind") == "system" and modules:
+            data["kind"] = "modules"
+            # The initial system path must not bypass the selected module's
+            # Python. Keep explicitly detected/custom executable paths intact.
+            if not data.get("detected_interpreter") and data.get("interpreter") in {"/usr/bin/python3", "/usr/bin/bash"}:
+                data["interpreter"] = data["interpreter"].rsplit("/", 1)[-1]
         kind = data.get("kind")
         interpreter = data.get("interpreter", "")
         from compute_relay.backends.environments import absolute_environment_path
@@ -215,14 +223,10 @@ class EnvironmentForm(forms.Form):
                 return False
         if (not self.inspection or interpreter) and not absolute(interpreter) and not (kind == "modules" and interpreter in {"python3", "bash"}):
             self.add_error("interpreter", "Use an absolute existing interpreter, or python3/bash for a module environment.")
-        manual_modules = [line.strip() for line in data.get("modules", "").splitlines() if line.strip()]
-        modules = list(dict.fromkeys(data.get("discovered_modules", []) + manual_modules))
         if len(modules) > 32 or any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+@:-]{0,159}", m) or ".." in m.split("/") for m in modules):
             self.add_error("modules", "Use up to 32 exact module/version names.")
         if kind == "modules" and not modules:
             self.add_error("modules", "Select at least one module.")
-        if kind == "system" and modules:
-            self.add_error("modules", "Choose Modules, Conda, Poetry or venv when loading modules.")
         paths = [line.strip() for line in data.get("module_paths", "").splitlines() if line.strip()]
         if len(paths) > 16 or any(not absolute(p) or p == "/" or "//" in p or ":" in p for p in paths):
             self.add_error("module_paths", "Use up to 16 canonical absolute directory paths, one per line.")

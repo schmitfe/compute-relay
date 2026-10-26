@@ -32,6 +32,18 @@
 const detectedEnvironments = JSON.parse(document.getElementById('detected-environments').textContent);
 const detectedPython = document.getElementById('id_detected_interpreter');
 const detectedEnvironment = document.getElementById('id_detected_environment');
+const recipeKind = document.getElementById('id_kind');
+const manualModules = document.getElementById('id_modules');
+function useModuleRecipe() {
+  const selected = document.querySelector('#id_discovered_modules input[type="checkbox"]:checked') || manualModules.value.trim();
+  if (recipeKind.value !== 'system' || !selected) return;
+  recipeKind.value = 'modules';
+  const interpreter = document.getElementById('id_interpreter');
+  if (!detectedPython.value && ['/usr/bin/python3', '/usr/bin/bash'].includes(interpreter.value)) interpreter.value = interpreter.value.split('/').pop();
+}
+document.getElementById('id_discovered_modules')?.addEventListener('change', useModuleRecipe);
+manualModules.addEventListener('input', useModuleRecipe);
+useModuleRecipe();
 function applyDetectedEnvironment() {
   const item = detectedEnvironments[detectedEnvironment.value];
   if (!item) return;
