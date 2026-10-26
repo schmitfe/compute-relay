@@ -18,7 +18,8 @@ from .concurrency import poll_parallel, remote_parallelism
 
 
 class _ConnectorStopped(Exception):
-    pass
+    def __init__(self, reason=None):
+        self.reason = reason
 
 
 class ConnectorStartupError(ValueError):
@@ -137,8 +138,22 @@ def pair(setup, state, session, *, client_factory=JsonClient):
 
 
 async def serve(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None, scheduler=None):
+    from .recovery import SessionRecovery
+    status = status or ConnectorStatus(state)
+    deadline = deadline if deadline is not None else time.monotonic() + state["session_seconds"]
+    recovery = SessionRecovery()
     try:
-        await _serve_session(state, session, state_directory, once=once, deadline=deadline, status=status, extensions=extensions, scheduler=scheduler)
+        while True:
+            reason = await _serve_session(state, session, state_directory, once=once, deadline=deadline, status=status, extensions=extensions, scheduler=scheduler)
+            if reason != "session_lost" or once:
+                return
+            try:
+                async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                    if not await recovery.reconnect(session, status):
+                        return
+            except TimeoutError:
+                status.problem("SSH session lifetime reached during recovery. Restart the connector to sign in again.")
+                return
     finally:
         await session.close_async()
 
@@ -147,6 +162,7 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
     from .async_client import AsyncJsonClient
     from .personal_setup import PersonalWorker
     from .journal import Journal
+    from .recovery import RetryGate
     status = status or ConnectorStatus(state)
     alias, profile = runtime_profile(state, session)
     client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
@@ -157,51 +173,64 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
             scheduler=scheduler, parallelism=parallelism)
         remaining = max(0, deadline - time.monotonic()) if deadline is not None else state["session_seconds"]
         async with asyncio.timeout(remaining):
-            try:
-                await worker.hello()
-            except ControlError as error:
-                if error.status == 401:
-                    status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
-                    return
-                raise
+            broker_gate = RetryGate()
+            while True:
+                epoch = await broker_gate.enter()
+                try:
+                    await worker.hello()
+                except ControlError as error:
+                    if error.status in {401, 403}:
+                        status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
+                        return
+                    await broker_gate.failed()
+                    status.interrupted("broker")
+                else:
+                    await broker_gate.succeeded(epoch)
+                    break
             ready = False
             last_check = 0
             check_lock = asyncio.Lock()
             stopped = False
+            stop_reason = None
             async def poll():
-                nonlocal ready, last_check, stopped
+                nonlocal ready, last_check, stopped, stop_reason
                 async with check_lock:
                     if stopped:
-                        raise _ConnectorStopped()
+                        raise _ConnectorStopped(stop_reason)
                     if not ready or time.monotonic() - last_check >= 2:
                         if not await session.check_async():
                             stopped = True
-                            status.problem("SSH session ended. Restart the connector to sign in again.")
-                            raise _ConnectorStopped()
+                            stop_reason = "session_lost"
+                            raise _ConnectorStopped("session_lost")
                         last_check = time.monotonic()
                     if not ready:
                         status.notice("Connected and ready; waiting for broker commands. Keep this terminal open. Use Ctrl+C to stop.")
                         ready = True
                 try:
+                    epoch = await broker_gate.enter()
                     worked = await worker.poll_once()
                 except ControlError as error:
                     if error.status in {401, 403}:
                         if not stopped:
                             status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
                         stopped = True
+                        stop_reason = "revoked"
                         raise _ConnectorStopped() from None
                     status.interrupted("broker")
+                    await broker_gate.failed()
                     worked = False
                 except Exception:
                     status.interrupted("operation")
+                    await broker_gate.failed()
                     worked = False
                 else:
                     status.recovered()
+                    await broker_gate.succeeded(epoch)
                 return worked
             try:
                 await poll_parallel(poll, concurrency=parallelism, once=once)
-            except _ConnectorStopped:
-                return
+            except _ConnectorStopped as stopped_error:
+                return stop_reason or stopped_error.reason
     except TimeoutError:
         status.problem("SSH session lifetime reached. Restart the connector to sign in again.")
     finally:

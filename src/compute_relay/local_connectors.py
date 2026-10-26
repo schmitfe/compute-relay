@@ -277,8 +277,9 @@ def run_connectors(base_url, state_directory, registry_directory=None, verbose=F
     """Keep the single-user application's own connectors available until stopped.
 
     Invoke on the foreground main thread after the loopback web server is
-    healthy. Registry entries are attempted once per launch; human start
-    requests are the only way to retry a failed or expired connector.
+    healthy. Initial logins are attempted once per launch. A serving connector
+    handles bounded network recovery; a failed authentication, exhausted recovery
+    circuit or expired session requires an explicit human start request.
     """
     from .worker.personal_connector import read_private
     from .extensions import async_worker_names, configured_names

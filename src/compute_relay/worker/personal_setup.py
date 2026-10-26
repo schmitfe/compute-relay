@@ -67,6 +67,15 @@ class PersonalWorker(AsyncWorker):
         self._defer_defaults = False
         self._setup_authorized = True
         self._pending_recovery_notified = None
+        from .recovery import RetryGate
+        self._remote_gate = RetryGate()
+
+    def _backend(self, connection):
+        from compute_relay.backends.async_slurm import AsyncSlurmBackend
+        backend = super()._backend(connection)
+        if isinstance(backend, AsyncSlurmBackend):
+            backend.transport.retry_gate = self._remote_gate
+        return backend
 
     async def setup_before_poll(self):
         return await self.setup_once()

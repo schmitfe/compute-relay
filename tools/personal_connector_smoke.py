@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import signal
 import sys
 import tempfile
 import time
@@ -111,7 +112,34 @@ def finish_configuration(human, demo, directory):
     require(saved["connection"]["remote_root"] == chosen, "Selected baseline was not persisted locally")
 
 
-def parallel_dispatch(human, demo, base):
+def interrupt_master(directory, worker):
+    """Abruptly kill only this fixture connector's owned local master."""
+    import re
+    state = json.loads((directory / "state.json").read_bytes())
+    require(state["connection"]["ssh"]["host"] == "slurm-fixture", "SSH fault injection requires the disposable fixture")
+    command = ["/usr/bin/ssh", "-F", "/dev/null", "-S", str(directory / "s"),
+        "-o", "BatchMode=yes", "-o", "ProxyCommand=/bin/false", "-o", "IdentityFile=none",
+        "-O", "check", "--", "brokerjob@slurm-fixture"]
+    def master_pid():
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False)
+        match = re.search(rb"Master running \(pid=([0-9]+)\)", result.stderr)
+        return int(match.group(1)) if result.returncode == 0 and match else None
+    original = master_pid()
+    require(original is not None and worker.poll() is None, "Fixture SSH master is not running")
+    os.kill(original, signal.SIGKILL)
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        require(worker.poll() is None, "Connector stopped instead of recovering its SSH session")
+        restored = master_pid()
+        if restored is not None and restored != original:
+            require(json.loads((directory / "state.json").read_bytes())["worker_id"] == state["worker_id"],
+                "SSH recovery replaced the broker worker identity")
+            return
+        time.sleep(.25)
+    raise SmokeFailure("Connector did not recover an abruptly interrupted SSH master")
+
+
+def parallel_dispatch(human, demo, base, directory, worker):
     """Eight native submissions before completion on a two-CPU fake institution."""
     require(demo.get("backend") == "slurm" and demo.get("cluster_form", {}).get("host") == "slurm-fixture",
         "Parallel dispatch acceptance requires the disposable Slurm fixture")
@@ -147,9 +175,12 @@ def parallel_dispatch(human, demo, base):
         time.sleep(0.25)
     else:
         raise SmokeFailure(f"Only {len(native_ids)} of eight jobs received distinct scheduler IDs before the dispatch deadline")
+    interrupt_master(directory, worker)
     deadline = time.monotonic() + 150
     while time.monotonic() < deadline:
         attempts = [agent.request("GET", f"/api/v1/jobs/{job_id}")["attempts"][-1] for job_id, _, _ in proposals]
+        require({str(item["native_identity"]["job_id"]) for item in attempts if item.get("native_identity")} == native_ids,
+            "SSH recovery changed the confirmed scheduler job identities")
         require(all(item["state"] not in terminal - {"succeeded", "completed"} for item in attempts), "A parallel fixture job failed")
         if all(item["state"] in {"succeeded", "completed"} and item["accounting_state"] == "settled" for item in attempts):
             break
@@ -275,7 +306,7 @@ def run():
                 run.stage = "reviewed_native_job"
                 job_smoke(base, args.demo_file, 90)
                 run.stage = "eight_parallel_native_submissions"
-                parallel_dispatch(human, demo, base)
+                parallel_dispatch(human, demo, base, directory, worker)
                 run.stage = "portal_cluster_check"
                 cluster_check(human, demo)
             finally:
@@ -312,7 +343,8 @@ def run():
             "post_login_directory_browser": True, "created_selected_folder": True,
             "owner_configuration_persisted": True, "reviewed_cluster_check": True,
             "cluster_provided_modules": True, "selected_environment_inspection": True,
-            "parallel_dispatch_jobs": 8, "parallel_accounting_settled": True}))
+            "parallel_dispatch_jobs": 8, "parallel_accounting_settled": True,
+            "abrupt_ssh_recovery": True, "same_native_ids_after_recovery": True}))
 
 
 if __name__ == "__main__":

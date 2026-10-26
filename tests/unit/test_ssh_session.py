@@ -184,6 +184,64 @@ def test_async_shutdown_finishes_owned_exit_when_cancelled(connection, state, ru
     asyncio.run(scenario())
 
 
+def test_recovery_removes_only_our_refused_stale_socket(connection, state, runner, monkeypatch):
+    session = SSHSession(connection, state).start()
+    runner.close()  # Simulate SIGKILL: the socket inode remains without a listener.
+    async def dead_master(_):
+        raise TransportError("master unavailable")
+    monkeypatch.setattr(session, "_control_async", dead_master)
+    assert asyncio.run(session.retire_async()) is True
+    assert not (state / "s").exists() and session._directory_fd is None
+
+
+def test_recovery_does_not_unlink_a_still_listening_master(connection, state, runner, monkeypatch):
+    session = SSHSession(connection, state).start()
+    runner.sockets[-1].listen()
+    async def unavailable_control(_):
+        raise TransportError("control unavailable")
+    monkeypatch.setattr(session, "_control_async", unavailable_control)
+    assert asyncio.run(session.retire_async()) is False
+    assert (state / "s").exists()
+
+
+def test_recovery_refuses_a_replaced_socket_or_regular_file(connection, state, runner, monkeypatch):
+    session = SSHSession(connection, state).start()
+    (state / "s").unlink()
+    (state / "s").write_text("must be retained")
+    async def no_control(_):
+        pytest.fail("An unknown socket was given a control command")
+    monkeypatch.setattr(session, "_control_async", no_control)
+    assert asyncio.run(session.retire_async()) is False
+    assert (state / "s").read_text() == "must be retained"
+
+
+def test_async_reconnect_is_one_public_key_only_attempt_without_prompts(connection, state, runner, monkeypatch):
+    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    session = SSHSession(connection, state).start()
+    runner.close()
+    (state / "s").unlink()
+    session._release_directory()
+    calls = []
+    async def run(transport, arguments, payload):
+        calls.append((arguments, payload, transport.connection))
+        if "-O" not in arguments:
+            master = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            master.bind(str(state / "s")); os.chmod(state / "s", 0o600)
+            runner.sockets.append(master)
+        return b""
+    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", run)
+    asyncio.run(session.reconnect_async())
+    command, payload, configuration = calls[0]
+    for expected in ("BatchMode=yes", "NumberOfPasswordPrompts=0", "StrictHostKeyChecking=yes",
+            "PreferredAuthentications=publickey", "PasswordAuthentication=no", "KbdInteractiveAuthentication=no",
+            "ConnectionAttempts=1", "IdentityAgent=none", "IdentitiesOnly=yes"):
+        assert expected in options(command)
+    assert command.count("-i") == 1 and payload == b""
+    assert configuration["command_timeout_seconds"] == 30 and "identity_file" not in configuration["ssh"]
+    assert [args[args.index("-O") + 1] for args, _, _ in calls[1:]] == ["check"]
+    asyncio.run(session.close_async())
+
+
 def test_async_control_never_contacts_a_replacement_socket(connection, state, runner, monkeypatch):
     from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
     session = SSHSession(connection, state).start()

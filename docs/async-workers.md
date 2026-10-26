@@ -160,6 +160,43 @@ HTTP verifies its configured origin, rejects redirects/environment proxies and
 compressed bodies, and enforces streamed byte and total time limits. Mutating
 requests are not automatically replayed after timeout.
 
+## Outage recovery
+
+Personal connectors share exponential retry gates across their concurrent
+operations. After a controller or remote-helper failure, retries wait with jitter
+and a 60-second ceiling; only one operation tests recovery after each cooldown.
+Older in-flight successes cannot clear a newer failure. HTTP retries happen at
+the worker's durable polling/report boundary, not by blindly resending arbitrary
+mutations. Controller 401/403 responses stop the connector instead of retrying
+its credential. Helper calls continue to require the owned master and cannot
+fall back to another SSH login themselves.
+
+If the authenticated master disappears, all operation lanes drain first. Their
+submission intents and pending reports remain on disk. The connector retires its
+old master and checks TCP reachability without sending SSH credentials. Checks
+wait approximately 2, 4, 8, 16, 32 and then up to 60 seconds, with jitter and at
+most twelve probes per outage. A still-live or replaced socket is not removed;
+only the unchanged, owned socket with a refused local connection can be cleaned
+up after an abrupt master death.
+
+Once the network is reachable, recovery makes one noninteractive, pinned-host,
+explicit-key authentication attempt. Password and keyboard-interactive/MFA
+authentication, agents and prompts are disabled. Any failed handshake or
+authentication opens the circuit until an explicit connector restart. Successful
+but flapping sessions allow at most three automatic reconnect attempts per
+connector launch, separated by at least 60 seconds. Recovery never extends the
+original session deadline.
+
+An encrypted key that needs its passphrase again, an MFA-only login, a changed
+host key or rejected credentials therefore needs human login through the usual
+local start action. No passphrase, password or MFA answer is retained or replayed.
+An unencrypted authorized key can reconnect automatically. On success the same
+worker identity and journals resume: uncertain submissions reconcile, confirmed
+Slurm IDs remain the same, and existing budget reservations are preserved.
+Interrupted work may wait for its previous lease to expire (normally up to
+120 seconds) before another generation can reconcile it; recovery does not
+bypass that fence.
+
 Ctrl-C cancels and drains all owned operation lanes before closing their SSH
 master and the local portal. A fatal authentication failure also drains every
 lane before closing the session. Slurm allocations
@@ -180,7 +217,9 @@ submissions, 200 admitted attempts with due observations, a 200-job worker queue
 bounded to four concurrent operations, duplicate attempt execution and parallel
 shutdown. The personal connector Slurm fixture additionally checks that eight
 distinct scheduler IDs are assigned before the first jobs finish, even though
-its two-CPU scheduler cannot run all eight jobs at once.
+its two-CPU scheduler cannot run all eight jobs at once. It then kills the local
+SSH master abruptly and verifies automatic reconnection, unchanged native job
+IDs, final accounting and clean shutdown.
 A clean installed-wheel check starts the actual loopback portal
 and verifies shutdown/restart without connecting SSH. Optional disposable Slurm
 acceptance provides separate native scheduler evidence; neither establishes

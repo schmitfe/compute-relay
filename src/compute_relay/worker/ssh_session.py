@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import errno
 import os
 from pathlib import Path
 import stat
+import socket
 import subprocess
 
 from compute_relay.transports.openssh import OpenSSHTransport, TransportError
@@ -250,6 +252,75 @@ class SSHSession:
             return True
         except TransportError:
             return False
+
+    async def retire_async(self):
+        """Retire our master; remove only its proven refused, unchanged socket."""
+        try:
+            metadata = self._socket_metadata()
+            if metadata is not None and self._identity(metadata) == self._socket_identity:
+                try:
+                    await self._control_async("exit")
+                except TransportError:
+                    pass
+            if not self._directory_matches():
+                return False
+            try:
+                metadata = os.stat("s", dir_fd=self._directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return True
+            if self._identity(metadata) != self._socket_identity or self._socket_metadata() is None:
+                return False
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.setblocking(False)
+                refused = probe.connect_ex(self.socket_path) == errno.ECONNREFUSED
+            if not refused or not self._directory_matches():
+                return False
+            metadata = os.stat("s", dir_fd=self._directory_fd, follow_symlinks=False)
+            if self._identity(metadata) != self._socket_identity:
+                return False
+            os.unlink("s", dir_fd=self._directory_fd)
+            return True
+        finally:
+            self._release_directory()
+
+    async def reconnect_async(self):
+        """One bounded public-key-only attempt; cannot prompt or replay MFA."""
+        from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+        if self._directory_fd is not None:
+            raise TransportError("Retire the previous SSH session before reconnecting")
+        launched = False
+        try:
+            self._directory_fd = self._open_directory()
+            self._directory_identity = self._identity(os.fstat(self._directory_fd))
+            try:
+                os.stat("s", dir_fd=self._directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise TransportError("Refusing an existing SSH socket during recovery")
+            argv = self._base_argv()
+            for option in ("PreferredAuthentications=publickey", "PasswordAuthentication=no",
+                    "KbdInteractiveAuthentication=no", "ConnectionAttempts=1", "ProxyCommand=none"):
+                argv += ["-o", option]
+            argv += ["-i", self.connection["ssh"]["identity_file"], "-M", "-N", "-f", "-S", self.socket_path, "--", self._target()]
+            configuration = self.runtime_configuration()
+            configuration["command_timeout_seconds"] = 30
+            launched = True
+            await AsyncOpenSSHTransport(configuration)._run(argv, b"")
+            metadata = self._socket_metadata()
+            if metadata is not None:
+                self._socket_identity = self._identity(metadata)
+            if self._socket_identity is None or not await self.check_async():
+                raise TransportError("SSH recovery did not establish a usable private master")
+        except BaseException as error:
+            if launched and self._socket_identity is None:
+                metadata = self._socket_metadata()
+                if metadata is not None:
+                    self._socket_identity = self._identity(metadata)
+            await self.close_async()
+            if isinstance(error, (OSError, TimeoutError)):
+                raise TransportError("SSH recovery failed or timed out") from None
+            raise
 
     def _release_directory(self):
         if self._directory_fd is not None:

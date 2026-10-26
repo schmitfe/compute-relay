@@ -15,9 +15,22 @@ from .openssh import OpenSSHTransport, TransportError
 
 
 class AsyncOpenSSHTransport(OpenSSHTransport):
+    def __init__(self, connection, *, retry_gate=None):
+        super().__init__(connection)
+        self.retry_gate = retry_gate
+
     async def call_helper(self, source: str, request: dict) -> dict:
         argv, payload = self._helper_command(source, request)
-        return self._helper_response(await self._run(argv, payload))
+        epoch = await self.retry_gate.enter() if self.retry_gate else None
+        try:
+            result = self._helper_response(await self._run(argv, payload))
+        except BaseException:
+            if self.retry_gate:
+                await self.retry_gate.failed()
+            raise
+        if self.retry_gate:
+            await self.retry_gate.succeeded(epoch)
+        return result
 
     async def _run(self, argv: list[str], payload: bytes) -> bytes:
         if len(payload) > self.PAYLOAD_LIMIT:
