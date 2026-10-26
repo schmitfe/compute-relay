@@ -102,14 +102,80 @@ export COMPOSE_PROJECT_NAME=relay-batch-experiment
 export COMPOSE_FILE=deploy/compose.test.yml:deploy/compose.benchmark.yml
 docker compose build control slurm dispatch-benchmark
 docker compose up -d --wait control slurm
-docker compose run --rm --no-deps dispatch-benchmark \
+docker compose run --name relay-batch-results --no-deps dispatch-benchmark \
   --jobs 200 --parallelism 4 \
   --modes standard batched persistent combined --batch-size 32 --timeout 900
+docker cp relay-batch-results:/results/dispatch-benchmark.json ./dispatch-benchmark.json
 docker compose down --volumes --remove-orphans
 ```
 
 The fixture has two scheduler CPUs and runs trusted 0.05-second Python jobs.
 These are control-path measurements, not scientific-compute benchmarks or a
 production-cluster capacity guarantee. Repeat/reverse mode order when assessing
-small differences. Results and remaining limitations will be recorded here
-before considering promotion to `main`.
+small differences. Results are saved atomically after each phase; `ok: true`
+marks a completed run. Copy the file before deleting the results volume. For a
+separate interruption trial, use `--modes combined --interrupt-master`. That
+switch targets only the disposable fixture's known SSH master.
+
+## Recorded results: 26 October 2026
+
+The [aggregate measurements](benchmarks/2026-10-26-batched-persistent.json)
+include 1,200 native Slurm jobs across six 200-job cohorts. Independent checks of
+the controller database and Slurm accounting confirmed every job succeeded and
+settled, with no additional native job IDs. All four modes were exercised in the
+initial run. The first three modes' measurements were retained; the initial
+combined measurements were not retained, so that mode was repeated with saved
+JSON output. A further combined cohort tested SSH interruption and recovery.
+
+| Mode | All scheduler IDs received | All accounting settled | Scheduler status queries | Helper source transferred | Worker peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Standard, preliminary | 32.4 s | 280.0 s | 2,012 | 34.30 MB | 43.9 MiB |
+| Batched, preliminary | 26.4 s | 290.8 s | 311 | 15.08 MB | 45.4 MiB |
+| Persistent, preliminary | 29.6 s | 274.1 s | 2,070 | 0.118 MB | 43.8 MiB |
+| Combined, final revision | 40.6 s | 277.4 s | 397 | 0.090 MB | 46.3 MiB |
+
+The preliminary measurements preceded the final framing, cancellation and lease
+cleanup fixes. The final combined run and interruption trial used implementation
+`f17d73a`. Each row is one trial, with fixed initial mode ordering and uncontrolled
+host load. These timings do not establish a causal speed improvement or
+regression. Adaptive polling also changes how many statuses are observed in each
+trial: query counts measure actual traffic, not an equal number of observations.
+
+The useful result is lower scheduler and transport overhead: batching alone
+reduced status queries by about 85% in the preliminary comparison. Persistent
+helpers removed more than 99% of helper-source transfers. The final combined
+trial served 1,039 status items with 397 scheduler queries and three helper
+process starts. Its aggregate helper RSS high-water estimate was 50.1 MiB,
+separate from the worker RSS above. Total settlement time stayed near the
+baseline in this fixture.
+
+During the interruption trial, the known SSH master was stopped after all 200
+native IDs were confirmed. The connector recovered using the existing bounded
+reconnect policy; all 200 IDs remained unchanged, all jobs settled, and Slurm
+accounting contained exactly 200 successful jobs. Six helper processes started
+over the complete trial as the pool was rebuilt, while simultaneous channels
+remained bounded by four slots. Lost-submit-response tests separately verify
+reconciliation without submitting a second job.
+
+Full suites passed on Python 3.12 and 3.13: **2,187 tests, one skipped and 67
+subtests on each version**. Clean wheel/sdist installation, dependency checking,
+portal startup, HTML rendering, shutdown and same-state restart also passed.
+An additional focused stream test exercises batched observation through a reused
+helper process. The synthetic 500-item tests verify query bounds, independently
+settled budgets and queue fairness without relying on wall-clock assertions.
+
+## Promotion criteria and remaining work
+
+Both options remain off by default, and `main` is unchanged. The tests cover
+hundreds of admitted jobs; a two-CPU fixture does not establish behavior with
+hundreds of simultaneously executing scientific allocations. Before promotion,
+repeat the comparison on a permitted cluster, vary latency, artifact sizes and
+mode order, and include longer runs with hundreds of active jobs.
+
+Per-attempt HTTP leases, heartbeats, reports, package verification and artifact
+collection still cost time. The combined trial made 735 lease requests and
+1,239 report requests for 200 jobs. Lower scheduler traffic therefore does not
+remove every controller bottleneck. Collection within each status batch remains
+sequential to bound transfer fan-out; large result sets need separate measurement.
+The implementation preserves independent job authorization, accounting and
+recovery rather than treating a batch as one execution.

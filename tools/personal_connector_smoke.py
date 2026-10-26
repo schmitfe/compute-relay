@@ -54,7 +54,7 @@ def redirected_path(client):
     return parsed.path + ("?" + parsed.query if parsed.query else "")
 
 
-def finish_configuration(human, demo, directory):
+def finish_configuration(human, demo, directory, *, folder_name="personal-broker-jobs"):
     import re
     connection_id = demo["connection_id"]
     page = human.request("GET", f"/clusters/{connection_id}/configuration/", binary=True)
@@ -74,10 +74,10 @@ def finish_configuration(human, demo, directory):
         raise SmokeFailure("Remote directory listing timed out")
     # Create one folder through the narrow owner operation, then explicitly
     # select it as the baseline. Creation alone must not change worker scope.
-    chosen = home + "/personal-broker-jobs"
+    chosen = home + "/" + folder_name
     original_root = json.loads((directory / "state.json").read_bytes())["connection"]["remote_root"]
     human.request("POST", f"/clusters/{connection_id}/directories/", {
-        "action": "mkdir", "path": home, "name": "personal-broker-jobs",
+        "action": "mkdir", "path": home, "name": folder_name,
         "connection_revision": fields.values["connection_revision"]}, form=True, binary=True)
     pending = redirected_path(human)
     deadline = time.monotonic() + 30

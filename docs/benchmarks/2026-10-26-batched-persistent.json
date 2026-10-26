@@ -1,0 +1,309 @@
+{
+  "date": "2026-10-26",
+  "implementation_commit": "f17d73a",
+  "baseline_commit": "367b2c6",
+  "fixture": {
+    "scheduler_cpus": 2,
+    "job_sleep_seconds": 0.05,
+    "jobs_per_cohort": 200,
+    "command_slots": 4,
+    "status_batch_size": 32
+  },
+  "caveats": [
+    "Single trial per mode, fixed order and uncontrolled host load; not a statistically controlled speed comparison.",
+    "The first three mode measurements preceded final safety fixes. The normal combined measurement and recovery trial use implementation f17d73a.",
+    "All 800 jobs in the initial four-mode run settled successfully, but combined-mode metrics were not retained; a separate combined cohort was run with atomic JSON output.",
+    "Hundreds of admitted jobs were tested; the fixture executes only two scheduler CPUs concurrently.",
+    "Memory metrics exclude controller, SSH master and Slurm daemons. Persistent-helper RSS is an aggregate high-water estimate."
+  ],
+  "preliminary_comparison": [
+    {
+      "parallelism": 4,
+      "jobs": 200,
+      "all_native_ids_seconds": 32.351,
+      "native_ids_per_second": 6.182,
+      "all_settled_seconds": 280.008,
+      "peak_remote_commands": 4,
+      "remote_operations": {
+        "collect": {
+          "count": 200,
+          "median_seconds": 0.0674,
+          "p95_seconds": 0.114
+        },
+        "observe": {
+          "count": 1006,
+          "median_seconds": 0.2475,
+          "p95_seconds": 0.3332
+        },
+        "submit": {
+          "count": 200,
+          "median_seconds": 0.0947,
+          "p95_seconds": 0.1527
+        }
+      },
+      "dispatch_latency": {
+        "count": 200,
+        "median_seconds": 18.3669,
+        "p95_seconds": 30.8205
+      },
+      "status_items": 1006,
+      "status_scheduler_queries": 2012,
+      "persistent_helper_starts": 0,
+      "helper_pool_peak_rss_kib": 0,
+      "helper_source_bytes_sent": 34304994,
+      "http_requests": {
+        "tasks": 1451,
+        "profiles": 5,
+        "lease": 1450,
+        "dispatch": 200,
+        "report": 1206
+      },
+      "mode": "standard",
+      "worker_peak_rss_kib": 44984
+    },
+    {
+      "parallelism": 4,
+      "jobs": 200,
+      "all_native_ids_seconds": 26.419,
+      "native_ids_per_second": 7.57,
+      "all_settled_seconds": 290.847,
+      "peak_remote_commands": 4,
+      "remote_operations": {
+        "collect": {
+          "count": 200,
+          "median_seconds": 0.0663,
+          "p95_seconds": 0.1032
+        },
+        "observe": {
+          "count": 40,
+          "median_seconds": 0.245,
+          "p95_seconds": 0.3099
+        },
+        "observe_many": {
+          "count": 161,
+          "median_seconds": 0.1084,
+          "p95_seconds": 0.2687
+        },
+        "submit": {
+          "count": 200,
+          "median_seconds": 0.0841,
+          "p95_seconds": 0.0978
+        }
+      },
+      "dispatch_latency": {
+        "count": 200,
+        "median_seconds": 15.3496,
+        "p95_seconds": 25.4445
+      },
+      "status_items": 1214,
+      "status_scheduler_queries": 311,
+      "persistent_helper_starts": 0,
+      "helper_pool_peak_rss_kib": 0,
+      "helper_source_bytes_sent": 15078374,
+      "http_requests": {
+        "tasks": 799,
+        "profiles": 5,
+        "lease": 798,
+        "dispatch": 200,
+        "report": 1414
+      },
+      "mode": "batched",
+      "worker_peak_rss_kib": 46524
+    },
+    {
+      "parallelism": 4,
+      "jobs": 200,
+      "all_native_ids_seconds": 29.605,
+      "native_ids_per_second": 6.756,
+      "all_settled_seconds": 274.079,
+      "peak_remote_commands": 4,
+      "remote_operations": {
+        "collect": {
+          "count": 200,
+          "median_seconds": 0.0016,
+          "p95_seconds": 0.0031
+        },
+        "observe": {
+          "count": 1035,
+          "median_seconds": 0.1806,
+          "p95_seconds": 0.1916
+        },
+        "submit": {
+          "count": 200,
+          "median_seconds": 0.0237,
+          "p95_seconds": 0.0321
+        }
+      },
+      "dispatch_latency": {
+        "count": 200,
+        "median_seconds": 16.1189,
+        "p95_seconds": 28.4136
+      },
+      "status_items": 1035,
+      "status_scheduler_queries": 2070,
+      "persistent_helper_starts": 4,
+      "helper_pool_peak_rss_kib": 68368,
+      "helper_source_bytes_sent": 118028,
+      "http_requests": {
+        "tasks": 1480,
+        "profiles": 5,
+        "lease": 1478,
+        "dispatch": 200,
+        "report": 1235
+      },
+      "mode": "persistent",
+      "worker_peak_rss_kib": 44808
+    }
+  ],
+  "final_combined": {
+    "ok": true,
+    "fixture_only": true,
+    "job_sleep_seconds": 0.05,
+    "fixture_cpus": 2,
+    "phases": [
+      {
+        "parallelism": 4,
+        "jobs": 200,
+        "all_native_ids_seconds": 40.601,
+        "native_ids_per_second": 4.926,
+        "all_settled_seconds": 277.375,
+        "peak_remote_commands": 3,
+        "remote_operations": {
+          "collect": {
+            "count": 200,
+            "median_seconds": 0.0025,
+            "p95_seconds": 0.0049
+          },
+          "observe": {
+            "count": 104,
+            "median_seconds": 0.1823,
+            "p95_seconds": 0.1989
+          },
+          "observe_many": {
+            "count": 129,
+            "median_seconds": 0.0429,
+            "p95_seconds": 0.2177
+          },
+          "submit": {
+            "count": 200,
+            "median_seconds": 0.0292,
+            "p95_seconds": 0.0453
+          }
+        },
+        "dispatch_latency": {
+          "count": 200,
+          "median_seconds": 19.164,
+          "p95_seconds": 37.7474
+        },
+        "status_items": 1039,
+        "status_scheduler_queries": 397,
+        "persistent_helper_starts": 3,
+        "helper_pool_peak_rss_kib": 51280,
+        "helper_source_bytes_sent": 90168,
+        "http_requests": {
+          "tasks": 737,
+          "profiles": 5,
+          "lease": 735,
+          "dispatch": 200,
+          "report": 1239
+        },
+        "mode": "combined",
+        "worker_peak_rss_kib": 47376,
+        "ssh_interrupted": false,
+        "native_ids_unchanged": true
+      }
+    ]
+  },
+  "ssh_interruption": {
+    "ok": true,
+    "fixture_only": true,
+    "job_sleep_seconds": 0.05,
+    "fixture_cpus": 2,
+    "phases": [
+      {
+        "parallelism": 4,
+        "jobs": 200,
+        "all_native_ids_seconds": 55.973,
+        "native_ids_per_second": 3.573,
+        "all_settled_seconds": 274.116,
+        "peak_remote_commands": 3,
+        "remote_operations": {
+          "collect": {
+            "count": 200,
+            "median_seconds": 0.0019,
+            "p95_seconds": 0.0039
+          },
+          "observe": {
+            "count": 42,
+            "median_seconds": 0.1795,
+            "p95_seconds": 0.1903
+          },
+          "observe_many": {
+            "count": 104,
+            "median_seconds": 0.0179,
+            "p95_seconds": 0.197
+          },
+          "submit": {
+            "count": 200,
+            "median_seconds": 0.0391,
+            "p95_seconds": 0.0598
+          }
+        },
+        "dispatch_latency": {
+          "count": 200,
+          "median_seconds": 32.6402,
+          "p95_seconds": 54.4728
+        },
+        "status_items": 818,
+        "status_scheduler_queries": 213,
+        "persistent_helper_starts": 6,
+        "helper_pool_peak_rss_kib": 51120,
+        "helper_source_bytes_sent": 180336,
+        "http_requests": {
+          "tasks": 687,
+          "profiles": 5,
+          "lease": 685,
+          "dispatch": 200,
+          "report": 930
+        },
+        "mode": "combined",
+        "worker_peak_rss_kib": 51724,
+        "ssh_interrupted": true,
+        "native_ids_unchanged": true
+      }
+    ]
+  },
+  "independent_accounting_checks": {
+    "relay-batch-experiment-20261026": {
+      "expected_jobs": 800,
+      "native_jobs": 800,
+      "all_succeeded_and_settled": true,
+      "extra_native_jobs": 0
+    },
+    "relay-batch-recovery-20261026": {
+      "expected_jobs": 200,
+      "native_jobs": 200,
+      "all_succeeded_and_settled": true,
+      "extra_native_jobs": 0
+    },
+    "relay-batch-results-20261026": {
+      "expected_jobs": 200,
+      "native_jobs": 200,
+      "all_succeeded_and_settled": true,
+      "extra_native_jobs": 0
+    }
+  },
+  "validation": {
+    "python_3_12": {
+      "passed": 2187,
+      "skipped": 1,
+      "subtests_passed": 67
+    },
+    "python_3_13": {
+      "passed": 2187,
+      "skipped": 1,
+      "subtests_passed": 67
+    },
+    "packaging": "Clean wheel and sdist installation, dependency check, portal startup, HTML rendering, Ctrl-C and same-state restart passed."
+  }
+}

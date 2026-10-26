@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN groupadd --gid 10001 broker \
     && useradd --uid 10001 --gid 10001 --create-home broker \
     && install -d -o broker -g broker /app \
-    && install -d -o broker -g broker -m 0700 /data /data/artifacts /run/demo /run/worker /worker-state
+    && install -d -o broker -g broker -m 0700 /data /data/artifacts /run/demo /run/worker /worker-state /results
 WORKDIR /app
 COPY pyproject.toml README.md requirements.lock ./
 COPY src/ ./src/

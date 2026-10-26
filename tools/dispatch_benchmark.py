@@ -102,9 +102,24 @@ def distribution(values):
         "p95_seconds": round(values[math.ceil(len(values) * .95) - 1], 4)}
 
 
+def save_results(path, reports, *, complete=False):
+    document = {"ok": complete, "fixture_only": True, "job_sleep_seconds": .05, "fixture_cpus": 2, "phases": reports}
+    if path is not None:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+            json.dump(document, stream, indent=2)
+            stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+            temporary = stream.name
+        os.replace(temporary, path)
+    return document
+
+
 def summarize(events, started, jobs, parallelism):
-    submitted = {e["attempt"]: e["at"] for e in events if e["event"] == "submitted"}
-    settled = {e["attempt"]: e["at"] for e in events if e["event"] == "settled"}
+    submitted, settled = {}, {}
+    for event in events:
+        if event["event"] == "submitted":
+            submitted.setdefault(event["attempt"], event["at"])
+        elif event["event"] == "settled":
+            settled.setdefault(event["attempt"], event["at"])
     require(len(submitted) == len(settled) == jobs, "Benchmark lost a submission or final report")
     remote = [e for e in events if e["event"] == "remote"]
     edges = [(e["started"], 1) for e in remote] + [(e["at"], -1) for e in remote]
@@ -176,7 +191,7 @@ def run(args):
                     time.sleep(.2)
                 else:
                     raise SmokeFailure("Benchmark setup timed out")
-                finish_configuration(human, demo, directory)
+                finish_configuration(human, demo, directory, folder_name="benchmark-" + uuid4().hex[:12])
             finally:
                 stop(worker)
         reports = []
@@ -215,18 +230,22 @@ def run(args):
             completed = [agent.request("GET", f"/api/v1/jobs/{job_id}") for job_id in job_ids]
             require(all(job["state"] in {"succeeded", "completed"} for job in completed), "A benchmark job did not succeed")
             receipts = {event["attempt"]: event["native_job_id"] for event in read_events(log) if event["event"] == "submitted"}
+            require(all(event["native_job_id"] == receipts[event["attempt"]] for event in read_events(log)
+                if event["event"] == "submitted"), "A repeated receipt changed native identity")
             require(all(receipts[job["attempts"][-1]["id"]] == str(job["attempts"][-1]["native_identity"]["job_id"])
                 for job in completed), "A confirmed native job identity changed")
             report = summarize(read_events(log), started, args.jobs, parallelism)
             report.update(mode=mode, worker_peak_rss_kib=peak_rss, ssh_interrupted=interrupted, native_ids_unchanged=True)
             reports.append(report)
+            save_results(args.output, reports)
             print(json.dumps({"phase": index, **report}), flush=True)
-        print(json.dumps({"ok": True, "fixture_only": True, "job_sleep_seconds": .05, "fixture_cpus": 2, "phases": reports}), flush=True)
+        print(json.dumps(save_results(args.output, reports, complete=True)), flush=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo-file", type=Path, default=Path("/run/demo/demo.json"))
+    parser.add_argument("--output", type=Path, help="Atomically save metrics after each phase")
     parser.add_argument("--jobs", type=int, choices=range(1, 501), default=24, metavar="1..500")
     parser.add_argument("--parallelism", type=int, nargs="+", choices=range(1, 9), default=[1, 4, 4, 1])
     parser.add_argument("--modes", nargs="+", choices=["standard", "batched", "persistent", "combined"], default=["standard"])

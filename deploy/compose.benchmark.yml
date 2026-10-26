@@ -4,10 +4,11 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       target: worker
-    entrypoint: [python, /opt/dispatch_benchmark.py]
+    entrypoint: [python, /opt/dispatch_benchmark.py, --output, /results/dispatch-benchmark.json]
     volumes:
       - demo-metadata:/run/demo:ro
       - fixture-ssh:/run/fixture-ssh:ro
+      - benchmark-results:/results
       - ../tools/dispatch_benchmark.py:/opt/dispatch_benchmark.py:ro
       - ../tools/personal_connector_smoke.py:/opt/personal_connector_smoke.py:ro
     depends_on:
@@ -18,3 +19,5 @@ services:
     tmpfs: ["/tmp:rw,nosuid,nodev,size=128m,mode=1777"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+volumes:
+  benchmark-results: {}

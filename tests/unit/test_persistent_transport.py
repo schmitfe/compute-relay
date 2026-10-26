@@ -41,6 +41,8 @@ def test_repeated_calls_reuse_one_process_and_keep_package_submission_once(site,
             for _ in range(8):
                 assert (await backend.observe(native, manifest=package["manifest"]))["state"] == "running"
             assert pool.process_starts == 1 and pool.requests == 9
+            batched = await backend.observe_many([{"native_identity": native, "manifest": package["manifest"]}])
+            assert batched[attempt]["state"] == "running" and pool.process_starts == 1
             assert (await backend.reconcile(attempt, package["manifest"]))["native_identity"] == native
             assert site[4].read_text().splitlines().count("sbatch") == 1
             channels = tuple(pool.channels)
