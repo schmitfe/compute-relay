@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import logging
+import json
 import uuid
 from datetime import datetime, timedelta
 
@@ -468,7 +469,9 @@ def serialize_job(job, *, package=False):
     return result
 
 
-def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
+def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observation_batch=1):
+    if type(observation_batch) is not int or not 1 <= observation_batch <= 64:
+        raise BrokerError("INVALID_REQUEST", "Observation batch must be from 1 through 64.")
     now = timezone.now()
     from compute_relay.extensions import control_names
     enabled_extensions = set(control_names()) & set(worker.supported_extensions)
@@ -490,31 +493,69 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
             # an already-waiting submission. Cancellation/recovery win ties.
             .order_by("next_poll_at", "lifecycle_priority", "created_at", "id"))
         for attempt in candidates[:30]:
-            if attempt.cancel_requested and attempt.native_identity and attempt.error_code != "CANCEL_IDENTITY_MISMATCH":
-                operation = "cancel"
-            elif attempt.dispatch_started and not attempt.native_identity:
-                operation = "reconcile"
-            elif attempt.native_identity:
-                operation = "observe"
-            else:
-                operation = "submit"
-            attempt.generation += 1
-            attempt.lease_id = uuid.uuid4()
-            attempt.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
-            attempt.lease_deadline_at = now + timedelta(seconds=MAX_LEASE_LIFETIME_SECONDS)
-            attempt.operation = operation
-            attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation"])
-            files = {item.path: base64.b64encode(read_blob(item.blob)).decode("ascii") for item in attempt.job.files.select_related("blob")}
-            lease = {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation, "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration, "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
-            if attempt.job.extension_name in control_names():
-                from compute_relay.extensions import job_hook
-                context = job_hook(attempt.job, "worker_lease_context", attempt)
-                if context:
-                    if not isinstance(context, dict) or len(rfc8785.dumps(context)) > 65536:
-                        raise BrokerError("EXTENSION_CONTEXT_LIMIT", "Extension metadata exceeds its limit.")
-                    lease["extension_context"] = {attempt.job.extension_name: context}
-            return {"lease": lease}
+            entries = list(attempt.job.files.select_related("blob"))
+            lease = _lease_attempt(attempt, entries, now)
+            result = {"lease": lease}
+            if observation_batch > 1 and lease["operation"] == "observe":
+                used = _lease_size_bound(attempt, entries)
+                observations = []
+                # Do not skip over an older submission, cancellation, recovery
+                # or another connection just to fill a batch.
+                for extra in candidates[:observation_batch - 1]:
+                    if not extra.native_identity or extra.cancel_requested or extra.connection_id != attempt.connection_id:
+                        break
+                    files = list(extra.job.files.select_related("blob"))
+                    size = _lease_size_bound(extra, files)
+                    if used + size > 8 * 1024 * 1024:
+                        break
+                    try:
+                        with transaction.atomic():
+                            additional = _lease_attempt(extra, files, now)
+                    except Exception:
+                        logging.getLogger(__name__).warning("Additional status lease deferred; completed batch items remain available")
+                        break
+                    observations.append(additional)
+                    used += size
+                if observations:
+                    result["observations"] = observations
+            return result
     return {"lease": None}
+
+
+def _lease_size_bound(attempt, entries):
+    # Includes the maximum extension context plus structural JSON overhead.
+    metadata = json.dumps({"manifest": attempt.job.manifest, "configuration": attempt.connection.configuration,
+        "native_identity": attempt.native_identity}, ensure_ascii=True)
+    context = 6 * 65536 if attempt.job.extension_name else 0
+    return len(metadata) + context + 4096 + sum(4 * ((item.blob.size_bytes + 2) // 3) + 6 * len(item.path) + 32 for item in entries)
+
+
+def _lease_attempt(attempt, entries, now):
+    from compute_relay.extensions import control_names
+    if attempt.cancel_requested and attempt.native_identity and attempt.error_code != "CANCEL_IDENTITY_MISMATCH":
+        operation = "cancel"
+    elif attempt.dispatch_started and not attempt.native_identity:
+        operation = "reconcile"
+    else:
+        operation = "observe" if attempt.native_identity else "submit"
+    attempt.generation += 1
+    attempt.lease_id = uuid.uuid4()
+    attempt.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+    attempt.lease_deadline_at = now + timedelta(seconds=MAX_LEASE_LIFETIME_SECONDS)
+    attempt.operation = operation
+    attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation"])
+    files = {item.path: base64.b64encode(read_blob(item.blob)).decode("ascii") for item in entries}
+    lease = {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation,
+        "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration,
+        "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
+    if attempt.job.extension_name in control_names():
+        from compute_relay.extensions import job_hook
+        context = job_hook(attempt.job, "worker_lease_context", attempt)
+        if context:
+            if not isinstance(context, dict) or len(rfc8785.dumps(context)) > 65536:
+                raise BrokerError("EXTENSION_CONTEXT_LIMIT", "Extension metadata exceeds its limit.")
+            lease["extension_context"] = {attempt.job.extension_name: context}
+    return lease
 
 
 def checked_lease(worker, attempt_id, data, *, allow_expired=False):
@@ -740,6 +781,9 @@ def report(worker, attempt_id, data):
             delay = 30 if previous_cancel_error == "CANCEL_UNCONFIRMED" else 5
         elif outcome == "cancel_identity_mismatch":
             delay = 60
+        if (attempt.cancel_requested and attempt.native_identity and outcome in {"submitted", "observed"}
+                and attempt.error_code != "CANCEL_IDENTITY_MISMATCH"):
+            delay = 0  # A cancellation arriving during observation must not inherit its backoff.
         attempt.next_poll_at = timezone.now() + timedelta(seconds=delay)
         attempt.save()
         response = {"accepted": True, "attempt": serialize_attempt(attempt)}

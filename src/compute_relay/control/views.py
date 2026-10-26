@@ -278,17 +278,20 @@ def artifact_content(request, artifact_id):
 @boundary("POST")
 def lease(request):
     worker = worker_identity(request)
-    document = body(request, maximum=4096)
-    if not isinstance(document, dict) or set(document) - {"core_only", "in_progress"} or type(document.get("core_only", False)) is not bool:
+    document = body(request, maximum=32768)
+    if not isinstance(document, dict) or set(document) - {"core_only", "in_progress", "observation_batch"} or type(document.get("core_only", False)) is not bool:
         raise BrokerError("INVALID_REQUEST", "Invalid worker polling options.")
+    batch = document.get("observation_batch", 1)
+    if type(batch) is not int or not 1 <= batch <= 64:
+        raise BrokerError("INVALID_REQUEST", "Observation batch must be from 1 through 64.")
     excluded = document.get("in_progress", [])
-    if not isinstance(excluded, list) or len(excluded) > 8:
+    if not isinstance(excluded, list) or len(excluded) > 8 * batch:
         raise BrokerError("INVALID_REQUEST", "Too many in-progress operations.")
     try:
         excluded = [str(UUID(value)) for value in excluded]
     except (ValueError, TypeError, AttributeError):
         raise BrokerError("INVALID_REQUEST", "Invalid in-progress attempt.") from None
-    core = services.lease_work(worker, exclude_attempt_ids=excluded)
+    core = services.lease_work(worker, exclude_attempt_ids=excluded, observation_batch=batch)
     if core.get("lease") and core["lease"]["operation"] in {"cancel", "reconcile"}:
         return core
     try:
@@ -309,7 +312,7 @@ def lease(request):
             return extension_work
     except Exception:
         logger.warning("Extension maintenance deferred; core work remains available")
-    return services.lease_work(worker, exclude_attempt_ids=excluded)
+    return services.lease_work(worker, exclude_attempt_ids=excluded, observation_batch=batch)
 
 
 @boundary("GET")

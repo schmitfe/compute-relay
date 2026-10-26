@@ -166,6 +166,7 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
     status = status or ConnectorStatus(state)
     alias, profile = runtime_profile(state, session)
     client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
+    worker = None
     try:
         parallelism = remote_parallelism()
         worker = PersonalWorker(client, {}, Journal(state_directory / "journal"), credential_profiles={alias: profile},
@@ -234,7 +235,11 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
     except TimeoutError:
         status.problem("SSH session lifetime reached. Restart the connector to sign in again.")
     finally:
-        await client.close()
+        try:
+            if worker is not None:
+                await worker.close()
+        finally:
+            await client.close()
 
 
 @contextmanager

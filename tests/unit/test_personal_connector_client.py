@@ -305,6 +305,8 @@ def patch_async_runtime(monkeypatch, *, poll):
             pass
         async def setup_once(self):
             return False
+        async def close(self):
+            pass
     monkeypatch.setattr(async_client, "AsyncJsonClient", Client)
     monkeypatch.setattr(async_runner, "AsyncWorker", Worker)
     monkeypatch.setattr(personal_setup, "PersonalWorker", Worker)

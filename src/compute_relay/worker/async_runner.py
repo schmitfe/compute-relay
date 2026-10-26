@@ -7,6 +7,7 @@ network I/O and optional extension helpers use awaitable HTTP/OpenSSH transports
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 import logging
 import os
 from pathlib import Path
@@ -33,7 +34,9 @@ class AsyncWorker(Worker):
         self.scheduler = scheduler or PrincipalScheduler(max_concurrency=self.parallelism, max_per_owner=self.parallelism)
         self.owner_id = self.scheduler.register(owner_id)
         self._poll_lock = asyncio.Lock()
-        self._in_progress = set()
+        self._in_progress = {}
+        from .experimental import status_batch_size
+        self.observation_batch = status_batch_size()
 
     @staticmethod
     def _backend(connection):
@@ -54,8 +57,11 @@ class AsyncWorker(Worker):
                 return False
             if self._profiles_published_at is None or time.monotonic() - self._profiles_published_at >= 60:
                 await self.publish_profiles()
-            lease = (await self.client.request("POST", "/internal/v1/lease", {
-                "core_only": bool(self._in_progress), "in_progress": sorted(self._in_progress)})).get("lease")
+            options = {"core_only": bool(self._in_progress), "in_progress": sorted(self._in_progress)}
+            if self.observation_batch > 1:
+                options["observation_batch"] = self.observation_batch
+            response = await self.client.request("POST", "/internal/v1/lease", options)
+            lease = response.get("lease")
             if lease is None:
                 return False
             if lease.get("operation") in {"discover", "extension"}:
@@ -63,18 +69,35 @@ class AsyncWorker(Worker):
                     raise ControlError("CONFIGURATION_WHILE_BUSY")
                 await self._execute(lease)
                 return True
-            attempt_id = str(UUID(lease["attempt_id"]))
-            if attempt_id in self._in_progress:
+            batch = [lease, *response.get("observations", [])]
+            if len(batch) > self.observation_batch or len(batch) > 1 and any(
+                    item.get("operation") != "observe" or item.get("connection_id") != lease["connection_id"]
+                    or item.get("configuration") != lease.get("configuration") for item in batch):
+                raise ControlError("INVALID_STATUS_BATCH")
+            attempts = {str(UUID(item["attempt_id"])) for item in batch}
+            if len(attempts) != len(batch) or attempts.intersection(self._in_progress):
                 raise ControlError("DUPLICATE_ACTIVE_LEASE")
-            self._in_progress.add(attempt_id)
+            self._in_progress.update({str(UUID(item["attempt_id"])): item["id"] for item in batch})
         try:
-            await self._execute(lease)
+            if len(batch) > 1:
+                await self._execute_observations(batch)
+            else:
+                await self._execute(lease)
             return True
         finally:
-            self._in_progress.discard(attempt_id)
+            for item in batch:
+                self._release_in_progress(item)
+
+    def _release_in_progress(self, lease):
+        attempt = str(UUID(lease["attempt_id"]))
+        if self._in_progress.get(attempt) == lease["id"]:
+            self._in_progress.pop(attempt)
 
     async def setup_before_poll(self):
         return False
+
+    async def close(self):
+        pass
 
     @property
     def configuration_pending(self):
@@ -153,24 +176,78 @@ class AsyncWorker(Worker):
                     else:
                         result = {"outcome": "observed", "native_identity": native,
                             "observation": await backend.observe(native, manifest=manifest)}
-                if result.get("outcome") == "observed" and terminal_observation(result.get("observation")):
-                    self.journal.write_report(attempt_id, report_record(lease, digest, result, phase="observed"))
-                    try:
-                        from compute_relay.extensions import worker_after_observation_async
-                        extension_data = await worker_after_observation_async(self.extensions, backend, native, manifest,
-                            lease.get("extension_context", {}))
-                        if extension_data:
-                            result["extension_data"] = extension_data
-                    except Exception:
-                        result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
-                    try:
-                        collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
-                        result.update(self._serialized_collection(collected, manifest))
-                    except Exception:
-                        result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED")
+                await self._finish_observation(lease, work, native, backend, result)
                 record = report_record(lease, digest, result)
                 self.journal.write_report(attempt_id, record)
             await self.deliver_report(attempt_id, record)
+
+    async def _finish_observation(self, lease, work, native, backend, result):
+        if result.get("outcome") != "observed" or not terminal_observation(result.get("observation")):
+            return
+        manifest = work.manifest
+        self.journal.write_report(work.attempt_id, report_record(lease, work.manifest_sha256, result, phase="observed"))
+        try:
+            from compute_relay.extensions import worker_after_observation_async
+            extension_data = await worker_after_observation_async(self.extensions, backend, native, manifest, lease.get("extension_context", {}))
+            if extension_data:
+                result["extension_data"] = extension_data
+        except Exception:
+            result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
+        try:
+            collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
+            result.update(self._serialized_collection(collected, manifest))
+        except Exception:
+            result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED")
+
+    async def _execute_observations(self, leases):
+        contexts = []
+        async with AsyncExitStack() as scope:
+            for lease in leases:
+                item_lock = AsyncExitStack()
+                scope.push_async_callback(item_lock.aclose)
+                try:
+                    work = PreparedWork.decode(lease)
+                    if work.operation != "observe":
+                        raise ValueError("Only observations can be batched")
+                    public = lease.get("configuration", {})
+                    connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[work.connection_id]
+                    await item_lock.enter_async_context(self.journal.async_locked(work.attempt_id))
+                    previous = self.journal.read(work.attempt_id)
+                    work.verify(connection, previous, self.extensions)
+                    native = native_for(lease, previous)
+                    if not native:
+                        raise ValueError("Missing native identity")
+                    saved = self.journal.read_report(work.attempt_id)
+                    result = replay_result(saved, lease, work.manifest_sha256, native)
+                    if result is not None and saved["phase"] == "ready":
+                        await self.deliver_report(work.attempt_id, report_record(lease, work.manifest_sha256, result))
+                        await item_lock.aclose()
+                        self._release_in_progress(lease)
+                        continue
+                    renewal = AsyncExitStack()
+                    scope.push_async_callback(renewal.aclose)
+                    await renewal.enter_async_context(renewing_async(self.client, lease))
+                    contexts.append((lease, work, native, connection, result, renewal, item_lock))
+                except (ValueError, KeyError, EnrollmentError):
+                    await item_lock.aclose()
+                    self._release_in_progress(lease)
+                    logging.getLogger(__name__).error("Invalid batch item deferred; other observations remain available")
+            if not contexts:
+                return
+            backend = self.backend_factory(contexts[0][3])
+            pending = [{"native_identity": native, "manifest": work.manifest}
+                for _, work, native, _, result, _, _ in contexts if result is None]
+            observed = await backend.observe_many(pending) if pending else {}
+            for lease, work, native, _, result, renewal, item_lock in contexts:
+                if result is None:
+                    result = {"outcome": "observed", "native_identity": native, "observation": observed[native["attempt_id"]]}
+                await self._finish_observation(lease, work, native, backend, result)
+                record = report_record(lease, work.manifest_sha256, result)
+                self.journal.write_report(work.attempt_id, record)
+                await renewal.aclose()
+                await self.deliver_report(work.attempt_id, record)
+                await item_lock.aclose()
+                self._release_in_progress(lease)
 
     async def deliver_report(self, attempt_id, record):
         self.journal.write_report(attempt_id, record)

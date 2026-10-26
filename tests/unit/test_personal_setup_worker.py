@@ -277,7 +277,7 @@ def test_environment_inspection_reports_only_typed_result_without_changing_crede
 def test_configuration_waits_until_parallel_job_operations_have_drained(runtime):
     pending = task()
     runtime.client.queue = [pending]
-    runtime.worker._in_progress.add("synthetic-active-attempt")
+    runtime.worker._in_progress["synthetic-active-attempt"] = "synthetic-active-lease"
     before = read_private(runtime.directory / "state.json")
     assert asyncio.run(runtime.worker.poll_once()) is False
     assert runtime.worker._pending_task == pending

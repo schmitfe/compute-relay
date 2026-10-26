@@ -47,6 +47,28 @@ class AsyncSlurmBackend(SlurmBackend):
         except (TransportError, KeyError):
             return {"state": "unknown", "native_state": "UNKNOWN", "terminal": False, "accounting": {"final": False}}
 
+    async def observe_many(self, items):
+        if not 1 <= len(items) <= 64:
+            raise ValueError("Invalid status batch size")
+        requests = [{"native_identity": item["native_identity"], **self._management(item["manifest"])} for item in items]
+        unknown = {"state": "unknown", "native_state": "UNKNOWN", "terminal": False, "accounting": {"final": False}}
+        try:
+            response = await self._call("observe_many", items=requests)
+            values = response["items"]
+            if not isinstance(values, dict):
+                raise ValueError("Invalid batch status response")
+        except (TransportError, KeyError, ValueError, TypeError):
+            values = {}
+        results = {}
+        for item in items:
+            native = item["native_identity"]
+            value = values.get(native["attempt_id"], {})
+            try:
+                results[native["attempt_id"]] = parse_observation(native, value["queue"], value["accounting"], value.get("expected_gpus", 0))
+            except (KeyError, ValueError, TypeError, AttributeError):
+                results[native["attempt_id"]] = dict(unknown)
+        return results
+
     async def cancel(self, native_identity: dict, *, manifest: dict) -> dict:
         try:
             result = await self._call("cancel", native_identity=native_identity, **self._management(manifest))

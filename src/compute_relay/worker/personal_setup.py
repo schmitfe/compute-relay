@@ -69,12 +69,25 @@ class PersonalWorker(AsyncWorker):
         self._pending_recovery_notified = None
         from .recovery import RetryGate
         self._remote_gate = RetryGate()
+        from .experimental import persistent_enabled
+        self._helper_pool = None
+        if persistent_enabled():
+            from compute_relay.transports.persistent_openssh import PersistentHelperPool
+            self._helper_pool = PersistentHelperPool(self.parallelism)
+
+    async def close(self):
+        if self._helper_pool is not None:
+            await self._helper_pool.close()
 
     def _backend(self, connection):
         from compute_relay.backends.async_slurm import AsyncSlurmBackend
         backend = super()._backend(connection)
         if isinstance(backend, AsyncSlurmBackend):
-            backend.transport.retry_gate = self._remote_gate
+            if self._helper_pool is None:
+                backend.transport.retry_gate = self._remote_gate
+            else:
+                from compute_relay.transports.persistent_openssh import PersistentOpenSSHTransport
+                backend.transport = PersistentOpenSSHTransport(connection, self._helper_pool, retry_gate=self._remote_gate)
         return backend
 
     async def setup_before_poll(self):

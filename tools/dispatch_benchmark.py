@@ -6,6 +6,7 @@ Only durations, operation names and synthetic attempt IDs enter its private log.
 """
 
 import argparse
+import itertools
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
@@ -21,13 +22,14 @@ import time
 from uuid import UUID, uuid4
 
 from container_smoke import Client, SmokeFailure, create_job, revealed_key, require
-from personal_connector_smoke import finish_configuration, redirected_path
+from personal_connector_smoke import finish_configuration, interrupt_master, redirected_path
 
 
 def connector_child(directory):
     from compute_relay.worker.personal_connector import read_private
     from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
     from compute_relay.worker.async_client import AsyncJsonClient
+    from compute_relay.transports.persistent_openssh import _Channel
     state = read_private(directory / "state.json")
     require(state["connection"]["ssh"]["host"] == "slurm-fixture" and state["broker_url"] == "http://control:8765",
         "Instrumentation requires the disposable fixture")
@@ -36,14 +38,25 @@ def connector_child(directory):
         print(json.dumps({"event": event, "at": time.monotonic(), **fields}), flush=True)
 
     original_remote, original_http = AsyncOpenSSHTransport.call_helper, AsyncJsonClient.request
+    original_start = _Channel._start
+
+    async def start_channel(self):
+        await original_start(self)
+        emit("helper_start", helper_bytes=len(self.source.encode()))
 
     async def remote(self, source, request):
         started = time.monotonic()
+        result = {}
         try:
-            return await original_remote(self, source, request)
+            result = await original_remote(self, source, request)
+            return result
         finally:
+            pool = getattr(self, "pool", None)
             emit("remote", operation=request["operation"], started=started,
-                seconds=time.monotonic() - started, helper_bytes=len(source.encode()))
+                seconds=time.monotonic() - started, helper_bytes=0 if pool else len(source.encode()),
+                status_items=len(request.get("items", [])) if request["operation"] == "observe_many" else int(request["operation"] == "observe"),
+                status_scheduler_queries=result.get("scheduler_queries", 2 if request["operation"] == "observe" else 0),
+                helper_pool_rss_kib=sum(channel.max_rss_kib for channel in pool.channels) if pool else None)
 
     async def http(self, method, path, document=None, **kwargs):
         started = time.monotonic()
@@ -53,13 +66,14 @@ def connector_child(directory):
         if kind == "report" and document:
             attempt = path.split("/")[-2]
             if document.get("outcome") == "submitted":
-                emit("submitted", attempt=attempt)
+                emit("submitted", attempt=attempt, native_job_id=str(document["native_identity"]["job_id"]))
             observation = document.get("observation", {})
             if observation.get("terminal") and observation.get("accounting", {}).get("final"):
                 emit("settled", attempt=attempt)
         return result
 
     AsyncOpenSSHTransport.call_helper, AsyncJsonClient.request = remote, http
+    _Channel._start = start_channel
     from compute_relay.cli import main
     main(["connector", "--state-directory", str(directory), "--non-interactive", "--allow-insecure-http"])
 
@@ -104,7 +118,12 @@ def summarize(events, started, jobs, parallelism):
         "peak_remote_commands": peak,
         "remote_operations": {op: distribution([e["seconds"] for e in remote if e["operation"] == op])
             for op in sorted({e["operation"] for e in remote})},
-        "helper_source_bytes_sent": sum(e["helper_bytes"] for e in remote),
+        "dispatch_latency": distribution([value - started for value in submitted.values()]),
+        "status_items": sum(e["status_items"] for e in remote),
+        "status_scheduler_queries": sum(e["status_scheduler_queries"] for e in remote),
+        "persistent_helper_starts": sum(e["event"] == "helper_start" for e in events),
+        "helper_pool_peak_rss_kib": max((e["helper_pool_rss_kib"] or 0 for e in remote), default=0),
+        "helper_source_bytes_sent": sum(e["helper_bytes"] for e in events if e["event"] in {"remote", "helper_start"}),
         "http_requests": dict(Counter(e["operation"] for e in events if e["event"] == "http"))}
 
 
@@ -139,7 +158,7 @@ def run(args):
     revision = re.search(rb'name="setup_revision" value="([0-9]+)"', page)
     setup = human.request("POST", f"/clusters/{demo['connection_id']}/connect/",
         {"setup_revision": revision.group(1).decode()} if revision else {}, form=True)
-    setup["local"] = {"identity_file": "/run/fixture-ssh/id_ed25519", "known_hosts": "/run/fixture-ssh/known_hosts", "session_seconds": 300}
+    setup["local"] = {"identity_file": "/run/fixture-ssh/id_ed25519", "known_hosts": "/run/fixture-ssh/known_hosts", "session_seconds": 3600}
     with tempfile.TemporaryDirectory(prefix="relay-bench-", dir="/tmp") as temporary:
         root = Path(temporary); root.chmod(0o700)
         path = root / "setup.json"; path.write_text(json.dumps(setup)); path.chmod(0o600)
@@ -161,19 +180,29 @@ def run(args):
             finally:
                 stop(worker)
         reports = []
-        for index, parallelism in enumerate(args.parallelism):
+        for index, (mode, parallelism) in enumerate(itertools.product(args.modes, args.parallelism)):
             agent, project, job_ids = prepare_project(human, demo, args.jobs, index)
             log = root / f"phase-{index}.log"
             with log.open("wb") as output:
                 started = time.monotonic()
                 worker = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--connector-state", str(directory)],
-                    env={**os.environ, "COMPUTE_RELAY_MAX_REMOTE_OPERATIONS": str(parallelism)},
+                    env={**os.environ, "COMPUTE_RELAY_MAX_REMOTE_OPERATIONS": str(parallelism),
+                        "COMPUTE_RELAY_EXPERIMENTAL_STATUS_BATCH_SIZE": str(args.batch_size if mode in {"batched", "combined"} else 1),
+                        "COMPUTE_RELAY_EXPERIMENTAL_PERSISTENT_HELPER": "1" if mode in {"persistent", "combined"} else "0"},
                     stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+                peak_rss, interrupted = 0, False
                 try:
-                    deadline = started + 240
+                    deadline = started + args.timeout
                     while time.monotonic() < deadline:
                         require(worker.poll() is None, "Instrumented connector stopped")
+                        memory = Path(f"/proc/{worker.pid}/status").read_text()
+                        rss = re.search(r"^VmHWM:\s+([0-9]+) kB", memory, re.MULTILINE)
+                        peak_rss = max(peak_rss, int(rss.group(1)) if rss else 0)
                         events = read_events(log)
+                        if (args.interrupt_master and not interrupted
+                                and len({e["attempt"] for e in events if e["event"] == "submitted"}) == args.jobs):
+                            interrupt_master(directory, worker)
+                            interrupted = True
                         if len({e["attempt"] for e in events if e["event"] == "settled"}) == args.jobs:
                             break
                         time.sleep(.1)
@@ -183,9 +212,13 @@ def run(args):
                     stop(worker)
             budget = agent.request("GET", f"/api/v1/projects/{project}/allowance")
             require(budget["reserved"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}, "Benchmark retained reservations")
-            require(all(agent.request("GET", f"/api/v1/jobs/{job_id}")["state"] in {"succeeded", "completed"}
-                for job_id in job_ids), "A benchmark job did not succeed")
+            completed = [agent.request("GET", f"/api/v1/jobs/{job_id}") for job_id in job_ids]
+            require(all(job["state"] in {"succeeded", "completed"} for job in completed), "A benchmark job did not succeed")
+            receipts = {event["attempt"]: event["native_job_id"] for event in read_events(log) if event["event"] == "submitted"}
+            require(all(receipts[job["attempts"][-1]["id"]] == str(job["attempts"][-1]["native_identity"]["job_id"])
+                for job in completed), "A confirmed native job identity changed")
             report = summarize(read_events(log), started, args.jobs, parallelism)
+            report.update(mode=mode, worker_peak_rss_kib=peak_rss, ssh_interrupted=interrupted, native_ids_unchanged=True)
             reports.append(report)
             print(json.dumps({"phase": index, **report}), flush=True)
         print(json.dumps({"ok": True, "fixture_only": True, "job_sleep_seconds": .05, "fixture_cpus": 2, "phases": reports}), flush=True)
@@ -194,8 +227,12 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo-file", type=Path, default=Path("/run/demo/demo.json"))
-    parser.add_argument("--jobs", type=int, choices=range(1, 101), default=24, metavar="1..100")
+    parser.add_argument("--jobs", type=int, choices=range(1, 501), default=24, metavar="1..500")
     parser.add_argument("--parallelism", type=int, nargs="+", choices=range(1, 9), default=[1, 4, 4, 1])
+    parser.add_argument("--modes", nargs="+", choices=["standard", "batched", "persistent", "combined"], default=["standard"])
+    parser.add_argument("--batch-size", type=int, choices=range(1, 65), default=32)
+    parser.add_argument("--timeout", type=int, choices=range(60, 3301), default=900, metavar="60..3300")
+    parser.add_argument("--interrupt-master", action="store_true", help="Kill the fixture SSH master once all native IDs are confirmed")
     parser.add_argument("--connector-state", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:

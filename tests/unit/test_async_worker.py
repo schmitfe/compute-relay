@@ -485,3 +485,147 @@ def test_explicit_remote_concurrency_is_bounded(value):
     from compute_relay.worker.concurrency import remote_parallelism
     with pytest.raises(ValueError):
         remote_parallelism(value)
+
+
+def test_two_hundred_observations_use_four_batches_and_preserve_each_terminal_report(configured):
+    from collections import deque
+    from copy import deepcopy
+    from compute_relay.worker.async_runner import serve_workers
+    async def scenario():
+        c = configured
+        c.worker.observation_batch = 64
+        leases = [{**deepcopy(c.lease), "id": str(uuid4()), "attempt_id": str(uuid4()), "operation": "observe"} for _ in range(200)]
+        for index, lease in enumerate(leases):
+            lease["native_identity"] = {"job_id": str(index + 1), "attempt_id": lease["attempt_id"]}
+        queue = deque(leases)
+        done = asyncio.Event()
+        reports, batches = set(), []
+        class QueueControl(Control):
+            async def request(self, method, path, body=None):
+                if path == "/internal/v1/lease":
+                    assert body["observation_batch"] == 64 and len(body["in_progress"]) <= 256
+                    group = [queue.popleft() for _ in range(min(64, len(queue)))]
+                    return {"lease": group[0], "observations": group[1:]} if group else {"lease": None}
+                if path.endswith("/renew"):
+                    return {"renewed": True}
+                if path.endswith("/report"):
+                    attempt = path.split("/")[-2]
+                    assert attempt not in reports and body["observation"]["accounting"]["final"]
+                    reports.add(attempt)
+                    if len(reports) == 200:
+                        done.set()
+                return await super().request(method, path, body)
+        class BatchedBackend(Backend):
+            async def observe_many(self, items):
+                batches.append(len(items))
+                return {item["native_identity"]["attempt_id"]: await self.observe(item["native_identity"], manifest=item["manifest"]) for item in items}
+        c.worker.client = QueueControl()
+        c.worker.backend_factory = lambda _: BatchedBackend()
+        serving = asyncio.create_task(serve_workers([c.worker]))
+        try:
+            await asyncio.wait_for(done.wait(), timeout=60)
+        finally:
+            serving.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await serving
+        assert sorted(batches) == [8, 64, 64, 64]
+        assert len(reports) == 200 and not c.worker._in_progress and not list(c.journal.pending_reports())
+    asyncio.run(scenario())
+
+
+def test_completed_batch_item_stops_renewing_while_other_items_collect(configured, monkeypatch):
+    from copy import deepcopy
+    from compute_relay.worker import lease as lease_module
+    async def scenario():
+        c = configured
+        reported = set()
+        proposals = [{**deepcopy(c.lease), "operation": "observe", "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(2)]
+        for index, proposal in enumerate(proposals):
+            proposal["native_identity"] = {"job_id": str(index + 1), "attempt_id": proposal["attempt_id"]}
+        class RenewalControl(Control):
+            async def request(self, method, path, body=None):
+                attempt = path.split("/")[-2]
+                if path.endswith("/renew"):
+                    assert attempt not in reported
+                    return {"renewed": True}
+                if path.endswith("/report"):
+                    reported.add(attempt)
+                return await super().request(method, path, body)
+        class SlowCollection(Backend):
+            async def observe_many(self, items):
+                return {item["native_identity"]["attempt_id"]: await self.observe(item["native_identity"], manifest=item["manifest"]) for item in items}
+            async def collect(self, native, outputs, *, manifest):
+                if native["job_id"] == "2":
+                    await asyncio.sleep(.06)
+                return await super().collect(native, outputs, manifest=manifest)
+        c.worker.client = RenewalControl()
+        c.worker.backend_factory = lambda _: SlowCollection()
+        monkeypatch.setattr(lease_module, "RENEWAL_INTERVAL_SECONDS", .01)
+        await c.worker._execute_observations(proposals)
+        assert len(reported) == 2
+    asyncio.run(scenario())
+
+
+def test_new_cancellation_lease_survives_older_batch_cleanup(configured):
+    from copy import deepcopy
+    from compute_relay.worker.async_runner import serve_workers
+    async def scenario():
+        c = configured
+        c.worker.observation_batch = 2
+        first, second = [{**deepcopy(c.lease), "operation": "observe", "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(2)]
+        for index, proposal in enumerate((first, second)):
+            proposal["native_identity"] = {"job_id": str(index + 1), "attempt_id": proposal["attempt_id"]}
+        cancellation = {**deepcopy(first), "id": str(uuid4()), "generation": 2, "operation": "cancel"}
+        first_reported = False
+        issued_batch = issued_cancel = False
+        cancel_started, release_cancel, release_second, old_finished, done = [asyncio.Event() for _ in range(5)]
+        class QueueControl(Control):
+            async def request(self, method, path, body=None):
+                nonlocal issued_batch, issued_cancel, first_reported
+                if path == "/internal/v1/lease":
+                    if not issued_batch:
+                        issued_batch = True
+                        return {"lease": first, "observations": [second]}
+                    if first_reported and not issued_cancel and first["attempt_id"] not in body["in_progress"]:
+                        issued_cancel = True
+                        return {"lease": cancellation}
+                    return {"lease": None}
+                if path.endswith("/report"):
+                    if body["lease_id"] == first["id"]:
+                        first_reported = True
+                    if body["lease_id"] == cancellation["id"]:
+                        done.set()
+                return await super().request(method, path, body)
+        class SlowBackend(Backend):
+            async def observe_many(self, items):
+                return {first["attempt_id"]: {"state": "running", "terminal": False},
+                    second["attempt_id"]: await self.observe(second["native_identity"], manifest=items[1]["manifest"])}
+            async def collect(self, native, outputs, *, manifest):
+                await release_second.wait()
+                return await super().collect(native, outputs, manifest=manifest)
+            async def cancel(self, native, *, manifest):
+                cancel_started.set()
+                await release_cancel.wait()
+                return await super().cancel(native, manifest=manifest)
+        c.worker.client = QueueControl()
+        c.worker.backend_factory = lambda _: SlowBackend()
+        original = c.worker._execute_observations
+        async def tracked(leases):
+            try:
+                return await original(leases)
+            finally:
+                old_finished.set()
+        c.worker._execute_observations = tracked
+        serving = asyncio.create_task(serve_workers([c.worker]))
+        try:
+            await asyncio.wait_for(cancel_started.wait(), timeout=5)
+            release_second.set()
+            await asyncio.wait_for(old_finished.wait(), timeout=2)
+            assert c.worker._in_progress[first["attempt_id"]] == cancellation["id"]
+            release_cancel.set()
+            await asyncio.wait_for(done.wait(), timeout=2)
+        finally:
+            serving.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await serving
+    asyncio.run(scenario())

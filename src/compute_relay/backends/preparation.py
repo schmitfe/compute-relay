@@ -100,6 +100,8 @@ def connection_revision_sha256(connection: dict) -> str:
 def helper_source(operation: str = "submit") -> str:
     if operation == "discover":
         return bundle_source("discovery")
+    if operation == "observe_many":
+        return bundle_source("batch_status")
     if operation in JOB_OPERATIONS:
         return bundle_source("jobs")
     raise BackendError("Unsupported fixed helper operation")

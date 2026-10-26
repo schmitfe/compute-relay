@@ -26,7 +26,8 @@ DISCOVERY_COMPONENTS = (
 )
 ENTRYPOINT = "entrypoint.py"
 ENVIRONMENT_COMPONENTS = ("prelude.py", "probes.py", "environment_shell.py", "environment_probe.py", ENTRYPOINT)
-_ALLOWED_COMPONENTS = frozenset((*COMMON_COMPONENTS, *JOB_COMPONENTS, *DISCOVERY_COMPONENTS, *ENVIRONMENT_COMPONENTS, ENTRYPOINT))
+_ALLOWED_COMPONENTS = frozenset((*COMMON_COMPONENTS, *JOB_COMPONENTS, *DISCOVERY_COMPONENTS, *ENVIRONMENT_COMPONENTS,
+    ENTRYPOINT, "batch_status.py", "stream_entrypoint.py"))
 
 
 def _component(name: str) -> str:
@@ -43,6 +44,9 @@ def component_names(kind: str) -> tuple[str, ...]:
         return (*COMMON_COMPONENTS, *DISCOVERY_COMPONENTS, ENTRYPOINT)
     if kind == "environment":
         return ENVIRONMENT_COMPONENTS
+    if kind in {"batch_status", "stream_jobs"}:
+        return (*COMMON_COMPONENTS, *JOB_COMPONENTS, ENTRYPOINT, "batch_status.py",
+            *(("stream_entrypoint.py",) if kind == "stream_jobs" else ()))
     raise ValueError("Unsupported fixed remote bundle")
 
 
@@ -96,7 +100,7 @@ def _link_component(name: str, source: str) -> LinkedComponent:
     return LinkedComponent("".join(lines), tuple(dependencies), exports)
 
 
-def _assemble(names: tuple[str, ...], dispatch: str, protocol: str) -> str:
+def _assemble(names: tuple[str, ...], dispatch: str, protocol: str, *, entrypoint="main") -> str:
     if ENTRYPOINT not in names or len(names) != len(set(names)) or set(names) - _ALLOWED_COMPONENTS:
         raise ValueError("Unknown or duplicate remote component")
     components = {name: _link_component(name, _component(name)) for name in sorted(names)}
@@ -114,12 +118,21 @@ def _assemble(names: tuple[str, ...], dispatch: str, protocol: str) -> str:
     source += "BUNDLE_PROTOCOL = " + repr(protocol) + "\n"
     for name in ordered:
         source += "\n# Component: " + name + "\n" + components[name].source
-    source += "\n" + dispatch + "\nif __name__ == '__main__':\n    main(execute)\n"
+    if entrypoint not in {"main", "stream_main"}:
+        raise ValueError("Unsupported fixed helper entrypoint")
+    source += "\n" + dispatch + "\nif __name__ == '__main__':\n    " + entrypoint + "(execute)\n"
     return source
 
 
 def bundle_source(kind: str) -> str:
     names = component_names(kind)
+    if kind in {"batch_status", "stream_jobs"}:
+        dispatch = ("def execute(config, request):\n"
+                    "    if request.get('operation') == 'observe_many':\n"
+                    "        return observe_many(config, request)\n"
+                    "    return execute_jobs(config, request)\n") if kind == "stream_jobs" else (
+                    "def execute(config, request):\n    return observe_many(config, request)\n")
+        return _assemble(names, dispatch, JOB_PROTOCOL, entrypoint="stream_main" if kind == "stream_jobs" else "main")
     if kind == "environment":
         dispatch = ("def execute(config, request):\n"
                     "    if request.get('operation') != 'inspect_environment':\n"
