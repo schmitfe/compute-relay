@@ -55,12 +55,16 @@ include a negative or regression case for security-relevant behavior, and
 document site assumptions. Attribute copied or adapted upstream code with its
 original license notices.
 
-No public remote or release is configured in this workspace. Before public
-distribution, the maintainers must choose a license and complete the release,
+## Contribution licensing
+
+Compute Relay is licensed under the [Apache License, Version 2.0](LICENSE).
+Unless explicitly stated otherwise, contributions intentionally submitted for
+inclusion in this project are provided under that license, as described in
+Section 5. Contributors must have the right to submit their work and preserve
+any required third-party notices. No copyright assignment is required.
+
+Before a public package release, maintainers must complete the release,
 dependency, security and deployment checks documented in the project roadmap.
-Repository ownership and contribution licensing must also be established
-before external contributions are accepted. No CLA, DCO or license agreement
-is implied by this blueprint.
 
 For security issues, follow [SECURITY.md](SECURITY.md) and avoid publishing
 sensitive details in an ordinary issue.

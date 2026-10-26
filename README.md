@@ -81,6 +81,11 @@ The former multi-user server, LDAP, and PostgreSQL implementation is retained on
 | [Modules](docs/extensions.md) | Storage, environment builds, and workflows |
 | [Testing](docs/testing.md) | SQLite, package, and optional Slurm acceptance |
 
+## License
+
+Compute Relay is licensed under the [Apache License, Version 2.0](LICENSE).
+Third-party components remain subject to their respective licenses.
+
 ## Public release
 
-The intended distribution has not been published. Before publication, the rights holder must choose a license, maintainers must establish a private security-reporting channel, and release checks must pass. No redistribution license has been granted yet. See [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).
+The intended distribution has not been published. Before publication, maintainers must establish a private security-reporting channel, and release checks must pass. See [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).

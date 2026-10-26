@@ -8,6 +8,7 @@ SSH credential, existing installation, project key, or cluster is used.
 from __future__ import annotations
 
 import argparse
+from email.parser import BytesParser
 import json
 import os
 from pathlib import Path
@@ -53,6 +54,16 @@ def inspect_distributions(source, distribution):
         raise RuntimeError("Expected exactly one wheel and source distribution")
     expected = expected_package_files(source)
     with zipfile.ZipFile(wheels[0]) as wheel:
+        metadata_files = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+        if len(metadata_files) != 1:
+            raise RuntimeError("Expected exactly one wheel metadata file")
+        metadata = BytesParser().parsebytes(wheel.read(metadata_files[0]))
+        license_path = metadata_files[0].removesuffix("METADATA") + "licenses/LICENSE"
+        if (metadata.get("License-Expression") != "Apache-2.0"
+                or "LICENSE" not in metadata.get_all("License-File", [])
+                or license_path not in wheel.namelist()
+                or wheel.read(license_path) != (source / "LICENSE").read_bytes()):
+            raise RuntimeError("Wheel omitted Apache-2.0 metadata or license text")
         missing = expected - set(wheel.namelist())
         if missing:
             raise RuntimeError("Wheel omitted runtime files: " + ", ".join(sorted(missing)))
@@ -62,7 +73,7 @@ def inspect_distributions(source, distribution):
     with tarfile.open(sdists[0]) as archive:
         members = {"/".join(item.name.split("/")[1:]) for item in archive.getmembers()}
         missing = {"src/" + name for name in expected} - members
-        if missing or "pyproject.toml" not in members or "README.md" not in members:
+        if missing or not {"pyproject.toml", "README.md", "LICENSE"}.issubset(members):
             raise RuntimeError("Source distribution is incomplete")
     return wheels[0], len(expected)
 
@@ -132,7 +143,7 @@ def main():
     clean_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     with tempfile.TemporaryDirectory(prefix="compute-relay-package-") as temporary:
         root = Path(temporary);source = root / "source";source.mkdir()
-        for name in ("pyproject.toml", "README.md"):
+        for name in ("pyproject.toml", "README.md", "LICENSE"):
             shutil.copy2(ROOT / name, source / name)
         shutil.copytree(ROOT / "src", source / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"))
         distribution = root / "dist"
