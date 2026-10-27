@@ -88,6 +88,14 @@ precede new submissions. Paused projects, disabled connections and unsupported
 extensions therefore cannot fill the first batch with undispatched work and
 hide later management of running jobs.
 
+Cluster removal normally waits for final accounting and output collection. The
+local owner can explicitly **Remove anyway** after acknowledging the displayed
+unfinished counts and budget holds. This archives only the configuration: it
+does not synthesize cancellation, settle unknown usage, release reservations or
+reset job limits. Exclusive personal connectors are revoked; shared connectors
+can continue accounting for existing jobs. Retained unresolved job pages show
+that their cluster configuration was removed and their status may be stale.
+
 ## Local storage and metadata bounds
 
 Object storage and durable metadata have separate admission accounting. Current

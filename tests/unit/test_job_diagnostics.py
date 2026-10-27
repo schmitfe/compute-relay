@@ -44,6 +44,32 @@ def test_reported_failure_shows_typed_scheduler_facts_and_actual_usage_without_p
     assert "PRIVATE-" not in text
 
 
+@pytest.mark.parametrize("unresolved", ["execution", "accounting", "collection"])
+def test_removed_cluster_exposes_last_recorded_status_without_inventing_final_usage(unresolved):
+    value = changed()
+    value.connection.archived = True
+    if unresolved == "execution":
+        value.state, value.accounting_state = "running", "reserved"
+    elif unresolved == "accounting":
+        value.accounting_state = "settlement_pending"
+    else:
+        value.collection_pending, value.collection_state = True, "retry_pending"
+    detail = build_attempt_diagnostics(value)
+    assert detail["category"] == "cluster_removed_unresolved" and detail["connection_removed"] is True
+    text = rendered(value)
+    assert "last recorded status" in text and "configuration removed" in text
+    assert '/clusters/' not in text and "retry automatically" not in text
+    assert detail["state"] == value.state and detail["accounting_state"] == value.accounting_state
+
+
+def test_removed_cluster_keeps_confirmed_finished_diagnostics():
+    value = changed()
+    value.connection.archived = True
+    detail = build_attempt_diagnostics(value)
+    assert detail["category"] == "failed" and detail["accounting_state"] == "settled"
+    assert detail["cpu_core_seconds"] == 2 and detail["connection_removed"] is True
+
+
 @pytest.mark.parametrize("path", ["/usr/share/lmod/lmod/init/bash", "/usr/share/lmod/8.7.47/init/bash",
     "/etc/profile.d/modules.sh", "/usr/share/Modules/init/bash"])
 def test_missing_known_initializer_reports_environment_cause_without_claiming_python_ran(path):

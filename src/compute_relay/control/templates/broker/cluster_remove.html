@@ -4,13 +4,29 @@
 <p>This removes the cluster from your active configurations. Your recorded jobs, results and accounting history are retained.</p>
 <p>No files, software environments or jobs on the cluster will be deleted. A personal connector used only by this configuration will lose access to the service. Shared service connectors stay available.</p>
 {% if busy %}
-<p class="error">This cluster still has executions, output collection or accounting to finish. Finish or reconcile them before removing its configuration.</p>
+<section class="notice" aria-labelledby="unfinished-work-title">
+  <h2 id="unfinished-work-title">Unfinished work</h2>
+  <p>This cluster has {{ unfinished.attempts }} execution record{{ unfinished.attempts|pluralize }} with unfinished accounting or output collection.</p>
+  <ul>
+    <li>{{ unfinished.accounting }} awaiting final accounting.</li>
+    <li>{{ unfinished.outputs }} awaiting output collection.</li>
+    <li>Retained budget holds: {{ reserved_cpu_hours|floatformat:2 }} CPU-core hours and {{ reserved_gpu_hours|floatformat:2 }} GPU-device hours.</li>
+  </ul>
+  <p>You can finish or reconcile this work first, or remove the configuration anyway if its connector is no longer usable.</p>
+  <p><strong>Removing anyway does not stop remote jobs or establish their final usage.</strong> Their last recorded status, results and budget holds remain. A dedicated personal connector will lose access, so further status updates and collection may stop. Shared connectors can continue tracking existing jobs.</p>
+  <p>Check or cancel remaining jobs directly in Slurm before retiring a connector. An empty queue does not establish final accounting. Unresolved reservations may still limit the project's available allowance and jobs.</p>
+</section>
 {% endif %}
 <form method="post">
   {% csrf_token %}
   {% if setup_revision %}<input type="hidden" name="setup_revision" value="{{ setup_revision }}">{% endif %}
   {% if connection_revision_sha256 %}<input type="hidden" name="connection_revision_sha256" value="{{ connection_revision_sha256 }}">{% endif %}
-  <button type="submit"{% if busy %} disabled{% endif %}>Remove cluster configuration</button>
+  {% if busy %}
+  <p><label><input type="checkbox" name="acknowledge_unfinished" value="yes" required> I understand that remote jobs may continue and unresolved accounting and budget holds will be retained.</label></p>
+  <button type="submit" name="action" value="remove_anyway" class="reject">Remove anyway</button>
+  {% else %}
+  <button type="submit" name="action" value="remove">Remove cluster configuration</button>
+  {% endif %}
   <a href="/clusters/">Cancel</a>
 </form>
 {% endblock %}

@@ -33,9 +33,24 @@ and [personal connectors](personal-connectors.md) for details.
 
 Configuration changes are fenced by saved revisions and cannot replace a
 connection with unsettled executions. Disabling or removing a cluster retains
-job history, artifacts and accounting; removal is refused until its managed
-attempts settle. It does not delete HPC files. A stopped or expired connector
-needs another local login before it can dispatch or collect results.
+job history, artifacts and accounting. Normal removal waits for final accounting
+and output collection. If a connector is no longer usable, the removal page
+shows the unfinished execution count and retained budget holds, with a separate
+**Remove anyway** action. Acknowledge its consequences before confirming.
+
+Removing anyway archives the configuration and records the override and pending
+counts in the audit trail. It leaves execution states, artifacts, accounting and
+budget reservations unchanged. It does not stop remote jobs or establish their
+final usage; verify or cancel those jobs in Slurm independently. A personal
+connector used only by that configuration loses service access. Shared
+connectors remain available and can still settle previously submitted jobs.
+Historical job pages label unresolved work on a removed cluster as the last
+recorded status, rather than suggesting it is a current scheduler observation.
+Retained reservations and unresolved attempts can still consume allowance and
+active-job capacity; removing a configuration does not reset either limit.
+
+Removal does not delete HPC files or software environments. A stopped or expired
+connector needs another local login before it can dispatch or collect results.
 
 ## Projects and job policy
 

@@ -22,6 +22,9 @@ _MODULE_INITIALIZER = re.compile(
     r"usr/share/lmod/(?:lmod|[0-9][A-Za-z0-9_.-]*)/init/bash): No such file or directory\r?$"
 )
 _MESSAGES = {
+    "cluster_removed_unresolved": ("warning", "Cluster removed with unresolved work",
+        "This cluster configuration was removed while execution, accounting or output collection was unresolved. The status shown below is the last recorded status, not a current scheduler observation.",
+        "Check the retained Slurm job identity and accounting independently. Remote jobs may continue, and budget holds remain until final accounting is established."),
     "submission_uncertain": ("warning", "Submission outcome is uncertain",
         "The broker cannot yet determine whether the scheduler accepted this attempt. A local timeout or lost connection is not proof of rejection.",
         "Keep this attempt and its reservation. Reconnect the connector and let reconciliation resolve it; do not submit a replacement as a retry."),
@@ -178,6 +181,12 @@ def build_attempt_diagnostics(attempt):
     stdout, stdout_truncated = _log(getattr(attempt, "stdout", None))
     stderr, stderr_truncated = _log(getattr(attempt, "stderr", None))
     category = _category(attempt, state, native_state, error, stderr)
+    connection = getattr(attempt, "connection", None)
+    connection_removed = getattr(connection, "archived", False) is True
+    if connection_removed and (state not in {"succeeded", "failed", "cancelled", "expired"}
+            or getattr(attempt, "accounting_state", None) not in {"settled", "released"}
+            or getattr(attempt, "collection_pending", False)):
+        category = "cluster_removed_unresolved"
     severity, title, message, suggestion = _MESSAGES[category]
     raw_accounting = getattr(attempt, "accounting_state", None)
     accounting_state = raw_accounting if isinstance(raw_accounting, str) and raw_accounting in _ACCOUNTING else "unknown"
@@ -188,8 +197,10 @@ def build_attempt_diagnostics(attempt):
     log_state = getattr(attempt, "log_state", {})
     log_updates = [value["updated_at"] for value in log_state.values()
         if isinstance(value, dict) and isinstance(value.get("updated_at"), str)] if isinstance(log_state, dict) else []
-    if collection_state == "retry_pending":
+    if collection_state == "retry_pending" and not connection_removed:
         notices.append("Output collection will retry automatically. Compute will not run again.")
+    elif collection_state == "retry_pending":
+        notices.append("Output collection remains pending. Its connector may no longer be available after removal.")
     if accounting_state == "settled":
         notices.append("Accounting is settled. A failed allocation can still consume compute allowance." if state == "failed" else "Accounting is settled.")
     elif accounting_state in {"reserved", "settlement_pending"}:
@@ -200,12 +211,12 @@ def build_attempt_diagnostics(attempt):
         notices.append("Some declared outputs could not be collected or stored; this is separate from the allocation result and accounting.")
     if error == "OBSERVED_OVERAGE":
         notices.append("Actual usage exceeded the reservation and was charged in full. Inspect the remaining project allowance and any debt before requesting more work.")
-    connection = getattr(attempt, "connection", None)
     raw_name = getattr(connection, "name", None)
     cluster_name = raw_name[:100] if isinstance(raw_name, str) else "Cluster not recorded"
     source = {"sacct": "Slurm accounting", "squeue": "Slurm queue", "none": "No scheduler observation"}.get(observation.get("source")) if isinstance(observation.get("source"), str) else None
     return {"attempt_id": _uuid(getattr(attempt, "id", None)), "job_id": _uuid(getattr(attempt, "job_id", None)),
         "connection_id": _uuid(getattr(attempt, "connection_id", None)), "cluster_name": cluster_name,
+        "connection_removed": connection_removed,
         "state": state, "native_job_id": native_job_id, "native_state": native_state, "exit_code": exit_code,
         "error_code": error, "accounting_state": accounting_state, "source": source,
         "elapsed_seconds": _integer(observation.get("elapsed_seconds")),

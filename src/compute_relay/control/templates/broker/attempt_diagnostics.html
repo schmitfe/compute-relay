@@ -5,7 +5,7 @@
 <p><strong>Next step:</strong> {{ diagnostics.suggestion }}</p>
 <dl>
 <dt>Slurm job ID</dt><dd>{{ diagnostics.native_job_id|default:"Not recorded" }}</dd>
-<dt>Cluster</dt><dd>{% if diagnostics.connection_id %}<a href="/clusters/{{ diagnostics.connection_id }}/">{{ diagnostics.cluster_name }}</a>{% else %}{{ diagnostics.cluster_name }}{% endif %}</dd>
+<dt>Cluster</dt><dd>{% if diagnostics.connection_removed %}{{ diagnostics.cluster_name }} (configuration removed){% elif diagnostics.connection_id %}<a href="/clusters/{{ diagnostics.connection_id }}/">{{ diagnostics.cluster_name }}</a>{% else %}{{ diagnostics.cluster_name }}{% endif %}</dd>
 <dt>Broker attempt</dt><dd>{{ diagnostics.attempt_id|default:"Not recorded" }}</dd>
 <dt>Broker job</dt><dd>{{ diagnostics.job_id|default:"Not recorded" }}</dd>
 <dt>Execution state</dt><dd>{{ diagnostics.state }}</dd>

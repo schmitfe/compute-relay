@@ -1,7 +1,7 @@
 """Owner-confirmed archival of configuration; no scheduler or filesystem calls."""
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
@@ -22,16 +22,35 @@ def _active_configuration(registration=None, connection=None):
         raise BrokerError("CLUSTER_REMOVED", "This cluster configuration has already been removed.", 409)
 
 
-def _busy(connection):
-    return connection is not None and Attempt.objects.filter(connection=connection).filter(
-        ~Q(accounting_state__in=["settled", "released"]) | Q(collection_pending=True)).exists()
+def _unfinished(connection):
+    if connection is None:
+        return {"attempts": 0, "accounting": 0, "outputs": 0, "reserved_cpu": 0, "reserved_gpu": 0}
+    pending = ~Q(accounting_state__in=["settled", "released"])
+    counts = Attempt.objects.filter(connection=connection).filter(pending | Q(collection_pending=True)).aggregate(
+        attempts=Count("id"), accounting=Count("id", filter=pending),
+        outputs=Count("id", filter=Q(collection_pending=True)),
+        reserved_cpu=Sum("reservation_cpu", filter=pending), reserved_gpu=Sum("reservation_gpu", filter=pending))
+    return {key: value or 0 for key, value in counts.items()}
+
+
+def _force_requested(request):
+    action = request.POST.get("action", "remove")
+    if action not in {"remove", "remove_anyway"}:
+        raise BrokerError("INVALID_REQUEST", "Choose a removal action from the confirmation page.")
+    if action == "remove_anyway" and request.POST.get("acknowledge_unfinished") != "yes":
+        raise BrokerError("UNFINISHED_WORK_ACKNOWLEDGEMENT_REQUIRED",
+            "Acknowledge that remote jobs may continue and unresolved accounting and budget holds will be retained before removing anyway.")
+    return action == "remove_anyway"
 
 
 def _confirmation(request, registration=None, connection=None):
     _active_configuration(registration, connection)
+    unfinished = _unfinished(connection)
     return render(request, "broker/cluster_remove.html", {"cluster_name": registration.name if registration else connection.name,
         "setup_revision": str(registration.revision) if registration else None,
-        "connection_revision_sha256": connection.revision_sha256 if connection else None, "busy": _busy(connection)})
+        "connection_revision_sha256": connection.revision_sha256 if connection else None,
+        "busy": bool(unfinished["attempts"]), "unfinished": unfinished,
+        "reserved_cpu_hours": unfinished["reserved_cpu"] / 3600, "reserved_gpu_hours": unfinished["reserved_gpu"] / 3600})
 
 
 def _check_revisions(request, registration=None, connection=None):
@@ -52,9 +71,10 @@ def _lock_connection(connection_id, owner):
     return current, worker
 
 
-def _archive(owner, registration=None, connection=None, worker=None):
+def _archive(owner, registration=None, connection=None, worker=None, *, force=False):
     _active_configuration(registration, connection)
-    if _busy(connection):
+    unfinished = _unfinished(connection)
+    if unfinished["attempts"] and not force:
         raise BrokerError("CONNECTION_BUSY", "Finish or reconcile executions, output collection and accounting before removing this cluster.", 409)
     if connection is not None:
         connection.archived, connection.enabled, connection.setup_complete = True, False, False
@@ -75,7 +95,8 @@ def _archive(owner, registration=None, connection=None, worker=None):
         WorkerIdentity.objects.filter(pk=worker.pk).update(revoked=True)
     audit(None, owner.id, "cluster.removed", connection.id if connection else registration.id,
         {"registration_id": str(registration.id) if registration else None,
-            "connection_id": str(connection.id) if connection else None})
+            "connection_id": str(connection.id) if connection else None,
+            "forced": force, "unfinished": unfinished})
 
 
 @human_view
@@ -92,7 +113,7 @@ def registration(request, registration_id):
         linked, worker = _lock_connection(current.connection_id, owner) if current.connection_id else (None, None)
         _active_configuration(current, linked)
         _check_revisions(request, current, linked)
-        _archive(owner, current, linked, worker)
+        _archive(owner, current, linked, worker, force=_force_requested(request))
     return redirect("/clusters/")
 
 
@@ -114,5 +135,5 @@ def connection(request, connection_id):
         current, worker = _lock_connection(reference.id, owner)
         _active_configuration(current_registration, current)
         _check_revisions(request, current_registration, current)
-        _archive(owner, current_registration, current, worker)
+        _archive(owner, current_registration, current, worker, force=_force_requested(request))
     return redirect("/clusters/")

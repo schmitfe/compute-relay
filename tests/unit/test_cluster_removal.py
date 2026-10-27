@@ -6,13 +6,15 @@ from uuid import uuid4
 
 import pytest
 from django.test import Client
+from django.db import transaction
 from django.urls import include, path
 from django.utils import timezone
 
 from compute_relay.control import cluster_removal
+from compute_relay.control import services
 from compute_relay.control.auth import token_hash
 from compute_relay.control.models import (Artifact, Attempt, AuditEvent, ClusterRegistration,
-    Connection, ConnectorEnrollment, ExecutionRequest, Job, User, WorkerIdentity)
+    Connection, ConnectorEnrollment, ExecutionRequest, Job, LedgerEntry, User, WorkerIdentity)
 from test_management import management, prepared
 
 
@@ -138,7 +140,8 @@ def test_even_terminal_jobs_block_removal_until_accounting_is_final(management, 
     context = management;linked = context.connections[0];current = registration(context, linked)
     existing = attempt(context, accounting_state)
     response = human(context.owner).get(f"/clusters/{linked.id}/remove/")
-    assert response.context["busy"] and b" disabled" in response.content
+    assert response.context["busy"] and b"Remove anyway" in response.content
+    assert b'name="acknowledge_unfinished"' in response.content and b" required" in response.content
     response = human(context.owner).post(f"/clusters/{linked.id}/remove/", fences(current, linked))
     assert response.status_code == 409 and response.context["code"] == "CONNECTION_BUSY"
     linked.refresh_from_db();current.refresh_from_db();existing.refresh_from_db()
@@ -219,3 +222,112 @@ def test_owner_authority_is_rechecked_inside_removal_transaction(management, mon
     response = human(context.owner).post(f"/clusters/{linked.id}/remove/", fences(connection=linked))
     assert response.status_code == 403
     linked.refresh_from_db();assert not linked.archived
+
+
+@pytest.mark.parametrize("route", ["registration", "connection"])
+@pytest.mark.parametrize("accounting_state,collect", [("reserved", False), ("settlement_pending", True), ("settled", True)])
+def test_force_removal_retains_exact_execution_artifact_and_ledger_state(management, route, accounting_state, collect):
+    context = management;linked = context.connections[0]
+    personal = WorkerIdentity.objects.create(owner=context.owner, name="Retiring personal", token_hash=token_hash(str(uuid4())))
+    linked.worker = personal;linked.save()
+    current = registration(context, linked);pairing(current, worker=personal, consumed=True)
+    existing = attempt(context, accounting_state)
+    existing.state, existing.dispatch_started = "running", True
+    existing.native_identity = {"job_id": "123", "work_dir": "/private/retained-job-directory"}
+    existing.reservation_cpu, existing.reservation_gpu = 7200, 1800
+    existing.collection_pending = collect
+    existing.save()
+    if accounting_state != "settled":
+        context.grant.reserved_cpu, context.grant.reserved_gpu = 7200, 1800
+        context.grant.save()
+    LedgerEntry.objects.create(grant=context.grant, attempt=existing, action="reserve", cpu=7200, gpu=1800, evidence={"retained": True})
+    artifact = Artifact.objects.create(attempt=existing, path="retained.txt", blob=existing.job.files.first().blob)
+    before = Attempt.objects.values().get(id=existing.id)
+    balances = (context.grant.reserved_cpu, context.grant.reserved_gpu, context.grant.spent_cpu, context.grant.spent_gpu)
+    ledger = list(LedgerEntry.objects.values())
+    url = f"/clusters/setup/{current.id}/remove/" if route == "registration" else f"/clusters/{linked.id}/remove/"
+    client = human(context.owner)
+    preview = client.get(url)
+    assert preview.context["unfinished"]["attempts"] == 1
+    assert preview.context["unfinished"]["outputs"] == int(collect)
+    assert b"does not stop remote jobs" in preview.content and b"budget holds remain" in preview.content
+    posted = {**fences(current, linked), "action": "remove_anyway", "acknowledge_unfinished": "yes"}
+    assert client.post(url, posted).status_code == 302
+    linked.refresh_from_db();current.refresh_from_db();personal.refresh_from_db();context.grant.refresh_from_db()
+    assert linked.archived and current.archived and personal.revoked
+    assert Attempt.objects.values().get(id=existing.id) == before
+    assert list(LedgerEntry.objects.values()) == ledger
+    assert (context.grant.reserved_cpu, context.grant.reserved_gpu, context.grant.spent_cpu, context.grant.spent_gpu) == balances
+    assert Artifact.objects.get(id=artifact.id).blob_id == artifact.blob_id
+    event = AuditEvent.objects.get(action="cluster.removed")
+    assert event.details["forced"] is True and event.details["unfinished"]["attempts"] == 1
+    assert event.details["unfinished"]["accounting"] == int(accounting_state != "settled")
+    assert client.post(url, posted).status_code == 409
+    assert AuditEvent.objects.filter(action="cluster.removed").count() == 1
+    assert b"private/retained" not in preview.content
+    assert client.get(f"/review/{existing.job_id}/").status_code == 200
+    detail = client.get(f"/review/{existing.job_id}/").content
+    assert b"Cluster removed with unresolved work" in detail and b"last recorded status" in detail
+
+
+@pytest.mark.parametrize("acknowledgement", [None, "", "true", "no"])
+def test_force_removal_requires_explicit_acknowledgement(management, acknowledgement):
+    context = management;linked = context.connections[0]
+    attempt(context, "reserved")
+    posted = {**fences(connection=linked), "action": "remove_anyway"}
+    if acknowledgement is not None:
+        posted["acknowledge_unfinished"] = acknowledgement
+    response = human(context.owner).post(f"/clusters/{linked.id}/remove/", posted)
+    assert response.status_code == 400 and response.context["code"] == "UNFINISHED_WORK_ACKNOWLEDGEMENT_REQUIRED"
+    linked.refresh_from_db();assert not linked.archived
+    assert not AuditEvent.objects.filter(action="cluster.removed").exists()
+
+
+@pytest.mark.parametrize("restriction", ["outsider", "bearer", "csrf", "revision"])
+def test_force_removal_preserves_owner_csrf_and_revision_boundaries(management, restriction):
+    context = management;linked = context.connections[0]
+    attempt(context, "reserved")
+    posted = {**fences(connection=linked), "action": "remove_anyway", "acknowledge_unfinished": "yes"}
+    url = f"/clusters/{linked.id}/remove/"
+    if restriction == "outsider":
+        response = human(context.outsider).post(url, posted)
+        assert response.status_code == 404
+    elif restriction == "bearer":
+        response = Client().post(url, posted, HTTP_AUTHORIZATION="Bearer " + context.token)
+        assert response.status_code == 403
+    elif restriction == "csrf":
+        client = Client(enforce_csrf_checks=True);client.force_login(context.owner)
+        assert client.post(url, posted).status_code == 403
+    else:
+        linked.revision_sha256 = "b" * 64;linked.save()
+        assert human(context.owner).post(url, posted).status_code == 409
+    linked.refresh_from_db();assert not linked.archived
+
+
+def test_shared_connector_can_complete_accounting_after_force_removal(management):
+    context = management;linked = context.connections[0]
+    context.grant.policy["mode"] = "budgeted";context.grant.save()
+    job = prepared(context)
+    with transaction.atomic():
+        requested, _ = services.request_execution(job, context.credential)
+    current = Attempt.objects.get(id=requested["attempt_id"])
+    lease = services.lease_work(context.worker)["lease"]
+    services.dispatch(context.worker, current.id, {"lease_id": lease["id"], "generation": lease["generation"],
+        "manifest_sha256": job.manifest_sha256, "connection_revision_sha256": linked.revision_sha256})
+    native = {"job_id": "123", "attempt_id": str(current.id), "cluster": "synthetic"}
+    services.report(context.worker, current.id, {"lease_id": lease["id"], "generation": lease["generation"],
+        "outcome": "submitted", "native_identity": native})
+    response = human(context.owner).post(f"/clusters/{linked.id}/remove/", {
+        **fences(connection=linked), "action": "remove_anyway", "acknowledge_unfinished": "yes"})
+    assert response.status_code == 302
+    context.worker.refresh_from_db();assert not context.worker.revoked
+    Attempt.objects.filter(id=current.id).update(next_poll_at=timezone.now())
+    observed = services.lease_work(context.worker)["lease"]
+    assert observed["operation"] == "observe"
+    services.report(context.worker, current.id, {"lease_id": observed["id"], "generation": observed["generation"],
+        "outcome": "observed", "native_identity": native, "observation": {"state": "completed", "terminal": True,
+            "accounting": {"final": True, "cpu_core_seconds": 3, "gpu_device_seconds": 0}}})
+    current.refresh_from_db();context.grant.refresh_from_db()
+    assert current.state == "succeeded" and current.accounting_state == "settled"
+    assert context.grant.reserved_cpu == 0 and context.grant.spent_cpu == 3
+    assert LedgerEntry.objects.filter(attempt=current, action="settle").count() == 1
