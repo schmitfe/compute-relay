@@ -55,7 +55,7 @@ class Worker:
                 # One unavailable connection must not block healthy targets.
                 # No invalid profile is advertised and no secret is logged.
                 logging.getLogger(__name__).warning("A credential profile is invalid and was not advertised")
-        payload = {"profiles": profiles}
+        payload = {"profiles": profiles, "execution_features": ["availability_v1"]}
         if self.extensions:
             payload["extensions"] = list(self.extensions)
         self.client.request("POST", "/internal/v1/worker/profiles", payload)
@@ -81,6 +81,9 @@ class Worker:
             self.connections[connection_id] = configuration
 
     def execute(self, lease):
+        if lease.get("operation") == "availability":
+            self.availability(lease)
+            return
         if lease.get("operation") == "discover":
             self.discover(lease)
             return
@@ -165,6 +168,17 @@ class Worker:
                 {key: record["report"][key] for key in ("lease_id", "generation")})
             self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
         self.journal.clear_report(attempt_id, record)
+
+    def availability(self, lease):
+        public = lease.get("configuration", {})
+        connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[lease["connection_id"]]
+        try:
+            snapshot = self.backend_factory(connection).availability()
+        except Exception:
+            snapshot = {"partitions": [], "nodes_status": "unknown", "queue_status": "unknown"}
+        self.client.request("POST", f"/internal/v1/connections/{lease['connection_id']}/availability-report", {
+            "lease_id": lease["id"], "generation": lease["generation"], "connection_revision_sha256": lease["connection_revision_sha256"],
+            "snapshot": snapshot})
 
     def replay_pending_reports(self):
         for attempt_id, _ in self.journal.pending_reports():

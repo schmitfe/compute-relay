@@ -26,6 +26,10 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `POST /api/v1/jobs` | `jobs:submit` | Create immutable revision from the job-request schema; does not execute |
 | `POST /api/v1/jobs/{id}/prepare` | `jobs:submit` | Queue preparation; return `202` with operation ID and job link |
 | `GET /api/v1/jobs/{id}` | `jobs:read` | Preparation, decision, attempt and accounting states, safe explanation/actions |
+| `GET /api/v1/projects/{id}/jobs` | `jobs:read` | Implemented key-scoped recovery inbox, state filter and keyset pagination |
+| `POST /api/v1/jobs/{id}/cancel-prepared` | `jobs:cancel` | Dismiss a never-submitted draft without deleting its evidence |
+| `GET /api/v1/projects/{id}/availability` | `jobs:read` | Cached timestamped scheduler-visible CPU/GPU and queue observations |
+| `POST /api/v1/projects/{id}/availability` | `jobs:read` | Request bounded read-only refreshes for permitted clusters; rate limited per cluster |
 | `GET /api/v1/jobs/{id}/package` | `jobs:read` | Manifest, externally computed digest, exact script file links and maximum charge |
 | `POST /api/v1/jobs/{id}/execution-requests` | `jobs:submit` | Enter review or attempt deterministic authorization under policy; return `202` and status |
 | `POST /api/v1/jobs/{id}/decisions` | Human approver | Approve/reject exact revision+digest, with optional comment; never accepts project keys |
@@ -33,6 +37,7 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `POST /api/v1/attempts/{id}/cancel` | `jobs:cancel` | Idempotent cancellation request; does not imply scheduler confirmation or refund |
 | `POST /api/v1/jobs/{job}/execution-requests/{request}/cancel` | `jobs:cancel` | Release an unapproved request's hold, or request safe cancellation of its admitted attempt |
 | `GET /api/v1/attempts/{id}/logs` | `jobs:read` | Bounded UTF-8-safe stdout/stderr slices, cursor and truncation flags |
+| `POST /api/v1/attempts/{id}/acknowledge-results` | `jobs:read` | Acknowledge terminal results for this key; no scientific validation or accounting change |
 | `POST /api/v1/attempts/{id}/collect` | `jobs:write` | Retry declared output collection after native completion, preserving execution and settled accounting |
 | `GET /api/v1/attempts/{id}/artifacts` | `artifacts:read` | Authorized registered outputs, hashes, sizes, retention and download links |
 | `GET /api/v1/artifacts/{id}/content` | `artifacts:read` | Project-authorized download/range; no arbitrary filesystem path |
@@ -55,6 +60,14 @@ A human decision binds an execution-request UUID as well as the immutable revisi
 `GET /api/v1/context` returns `schema_version: "1.0"`, `project` (`id`, `name`) and `credential` (`id`, `scopes`, `execution_mode`). It requires a valid project bearer key and current issuing-user eligibility/project membership. Keys with `jobs:read` also receive `compute` (the current `/api/v1/connections` payload) and `allowance` (the project's current allowance response); other keys receive identity metadata only. Human browser sessions and worker keys do not authorize it. It returns only the key's own project and no token, token hash, SSH settings or private credential references; success responses use `Cache-Control: no-store` and vary on `Authorization`.
 
 The stdio adapter uses this endpoint before starting MCP and derives routing identity from the verified key. `get_project_context` refreshes the same metadata. Job preparation/revision and workflow node requests may omit `project_id` through MCP; the adapter inserts it before calling the existing REST API. Direct REST job requests still require the canonical project ID, and all REST endpoints continue to enforce their own scopes/project checks. The authenticated key is the sole project selector; there is no separately configured project UUID.
+
+Keys with `jobs:read` also receive `work_summary`: unfinished project jobs,
+unread results and results awaiting acknowledgement, with the recovery tool name.
+Compute targets include current availability cache freshness and queue visibility;
+enabled environment inventory adds observed runtime summaries. See
+[agent recovery and availability](agent-recovery.md) and
+[environment builds](environment-builds.md) for the implemented routes, per-key
+result tracking, scheduled Python inventory and immutable package updates.
 
 Read current `effective_limits` from `list_compute_targets` before sizing work. Each target combines the project's per-job CPU/GPU/memory/walltime ceilings with the configured cluster ceilings and protocol bounds. `per_job_limits` contains the usable minima, `allocation_floors` describes CPU/GPU rounding, and `project_limits`/`cluster_limits` explain the inputs. `feasible`, `blocking_reasons` and `unknowns` report configurations that cannot fit even a minimal request or lack necessary information. An independent maximum does not prove that all maxima coexist on one node or that a selected partition/account/QoS accepts the job. These are configured ceilings, not live free-resource counts. `mixed` policy permits a separate human-review path above its automatic envelope while cluster caps and allowance still apply.
 

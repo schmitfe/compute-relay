@@ -99,6 +99,8 @@ def connection_revision_sha256(connection: dict) -> str:
 
 
 def helper_source(operation: str = "submit") -> str:
+    if operation == "availability":
+        return bundle_source("availability")
     if operation == "discover":
         return bundle_source("discovery")
     if operation == "observe_many":

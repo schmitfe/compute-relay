@@ -9,6 +9,26 @@ def register(server, facade):
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
 
     @server.tool(annotations=readonly)
+    def get_environment_inventory(environment_id: str) -> dict:
+        """Read the actual observed Python version, installed packages and fingerprint, with observation time and managed-revision drift status. A registered name/version is not runtime proof. Missing/stale inventories can be refreshed by inspect_environment; Python is supported first."""
+        return facade.client.request("GET", f"/api/v1/environments/{_uuid(environment_id)}/inventory")
+
+    @server.tool(annotations=write)
+    def inspect_environment(environment_id: str, resources: dict | None = None, slurm: dict | None = None,
+                            idempotency_key: str | None = None) -> dict:
+        """Request a bounded compute-node Python/package inventory as an ordinary prepared and approved/budgeted job. Returns job/attempt or pending-review identity. Poll get_environment_inventory. No installer runs; requires normal job write/execute scopes."""
+        data = {key: value for key, value in (("resources", resources), ("slurm", slurm)) if value is not None}
+        return facade._mutate(f"/api/v1/environments/{_uuid(environment_id)}/inspect", data, idempotency_key)
+
+    @server.tool(annotations=write)
+    def request_environment_packages(environment_id: str, packages: list[dict], name: str | None = None,
+                                     resources: dict | None = None, slurm: dict | None = None,
+                                     idempotency_key: str | None = None) -> dict:
+        """Build a new usable Python environment or update a managed one through a new immutable revision. packages are uploaded wheel descriptors {name,version,filename,sha256,size_bytes}; include a closed pinned dependency set. Existing managed requirements are retained except names explicitly replaced. This prepares and requests an ordinary compute job. Project policy may auto-permit verified results; otherwise promotion needs a human. The old prefix/revision remains unchanged."""
+        data = {"packages": packages, **{key: value for key, value in (("name", name), ("resources", resources), ("slurm", slurm)) if value is not None}}
+        return facade._mutate(f"/api/v1/environments/{_uuid(environment_id)}/packages", data, idempotency_key)
+
+    @server.tool(annotations=readonly)
     def get_environment_build_policy() -> dict:
         """Read explicitly enabled builders, bootstrap environments, resource/storage limits and target platform."""
         return facade.client.request("GET", f"/api/v1/projects/{facade.project_id}/environment-build-policy")
@@ -30,5 +50,5 @@ def register(server, facade):
 
     @server.tool(annotations=readonly)
     def get_environment_build(build_id: str) -> dict:
-        """Read build/provenance status and the published environment reference. A human must explicitly permit a ready environment in project policy."""
+        """Read build/provenance, observed runtime inventory and the published environment reference. permitted_for_jobs reflects the project's automatic-use policy or explicit human promotion."""
         return facade.client.request("GET", f"/api/v1/environment-builds/{_uuid(build_id)}")

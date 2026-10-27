@@ -54,16 +54,32 @@ for this workflow, identically to compatible OpenAI and Claude MCP clients:
 2. The agent calls `get_environment_build_policy`. Its response includes the
    approved bootstrap recipe references, cluster connection IDs and configurations,
    supported managers, target Python/platform and resource/storage limits.
-3. The agent calls `create_environment_build` with a pinned `venv` recipe using
+3. The agent checks `get_environment_inventory` for the actual Python version,
+   package versions and observation time. `inspect_environment` schedules a
+   bounded probe when this is missing or needs refreshing; it returns an existing
+   pending probe when resumed. The registered environment name is descriptive.
+4. The agent can call `request_environment_packages` with uploaded pinned wheel
+   descriptors. This creates, prepares and requests a normal build. For a managed
+   environment, the same tool creates an updated immutable revision, preserving
+   the original prefix and retaining pinned packages except names explicitly
+   replaced. The complete dependency closure must be provided; no package-name
+   resolver is included. Alternatively `create_environment_build` accepts
+   a pinned `venv` recipe using
    an approved system or module-provided Python. It can request a standard-library
    environment or a hash-pinned uploaded-wheel closure.
-4. `prepare_environment_build` creates a normal reviewable job package.
+5. For the granular recipe API, `prepare_environment_build` creates a normal reviewable job package.
    `request_environment_build` follows the project's approval/budget policy and
    consumes its ordinary compute allowance and submission slot. Installation and
    verification run in the scheduled compute job.
-5. `get_environment_build` returns status and a ready environment reference after
-   settled accounting and receipt verification. The human explicitly permits the
-   published environment before subsequent jobs use it.
+6. `get_environment_build` returns status and a ready environment reference after
+   settled accounting and receipt verification. If the administrator enabled
+   `auto_permit_builds`, a complete verified runtime inventory and current key
+   authority allow ordinary jobs to use the revision automatically. Otherwise
+   the human explicitly permits it. Compute review/budget rules still apply.
+
+Built environments include their actual runtime inventory in the immutable
+receipt. Later compute-node inspection can flag package/version drift from that
+receipt. Python is supported first; Julia inventory and builds are future work.
 
 A venv built from module Python retains the base module names, module paths and
 optional initializer when reused. Retain its prefix and base runtime on that

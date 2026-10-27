@@ -23,6 +23,8 @@ def _unverified():
 
 
 def after_observation(backend, native, manifest, context):
+    if context.get("inspection_id"):
+        return {"inventory_collection": True, "generation": context.get("generation")}
     if getattr(backend, "connection", {}).get("backend") == "fake":
         return _result(context, {"verified": False, "error_code": "SIMULATED_BUILD_NOT_PUBLISHED"})
     try:
@@ -33,6 +35,8 @@ def after_observation(backend, native, manifest, context):
 
 
 async def after_observation_async(backend, native, manifest, context):
+    if context.get("inspection_id"):
+        return {"inventory_collection": True, "generation": context.get("generation")}
     if getattr(backend, "connection", {}).get("backend") == "fake":
         return _result(context, {"verified": False, "error_code": "SIMULATED_BUILD_NOT_PUBLISHED"})
     try:

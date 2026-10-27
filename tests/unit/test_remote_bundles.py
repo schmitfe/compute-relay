@@ -33,6 +33,7 @@ def test_fixed_bundles_are_deterministic_stdlib_programs_with_complete_sources()
     }
     expected["batch_status"] = expected["jobs"] | {"batch_status.py"}
     expected["stream_jobs"] = expected["batch_status"] | {"stream_entrypoint.py"}
+    expected["availability"] = {"prelude.py", "filesystem.py", "scheduler.py", "availability.py", "entrypoint.py"}
     for kind, names in expected.items():
         source = bundles.bundle_source(kind)
         assert source == bundles.bundle_source(kind)

@@ -41,6 +41,16 @@ def services_for(name):
     return import_module(EXTENSIONS[name][0] + ".services")
 
 
+def environment_details(environment, project):
+    """Optional observation metadata without coupling core to extension models."""
+    result = {}
+    for name in control_names():
+        handler = getattr(services_for(name), "environment_summary", None)
+        if handler:
+            result[name] = handler(environment, project)
+    return result
+
+
 def metadata_items(attribute):
     from importlib.util import find_spec
     result = []

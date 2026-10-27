@@ -34,6 +34,7 @@ def test_context_returns_only_current_keys_project_and_public_metadata(broker):
     result = response.json()
     assert result.pop("compute")["per_job_limits"]["cpu_cores"] == 8
     assert result.pop("allowance")["project_id"] == str(c.project.id)
+    assert result.pop("work_summary")["recovery_tool"] == "list_project_jobs"
     assert result == {"schema_version": "1.0",
         "project": {"id": str(c.project.id), "name": c.project.name},
         "credential": {"id": str(c.credential.id), "scopes": c.credential.scopes,
@@ -122,7 +123,7 @@ def test_real_stdio_session_needs_only_endpoint_and_token_file(broker, context_l
             async with ClientSession(read, write) as client:
                 await client.initialize()
                 tools = {tool.name for tool in (await client.list_tools()).tools}
-                assert "get_project_context" in tools and "retry_job_outputs" in tools and len(tools) == 15
+                assert "get_project_context" in tools and "list_project_jobs" in tools and len(tools) == 19
                 assert "cancel_execution_request" in tools
                 assert "approve_job" not in tools
 

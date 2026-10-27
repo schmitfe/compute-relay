@@ -12,6 +12,8 @@ class BootstrapChoices(forms.ModelMultipleChoiceField):
 
 class BuildPolicyForm(forms.Form):
     enabled = forms.BooleanField(required=False, label="Allow agents to request environment builds")
+    auto_permit_builds = forms.BooleanField(required=False, label="Automatically permit verified environments and later revisions",
+        help_text="Delegate use of builds within this policy to keys with environment-build permission. Every update creates a new revision; installations still follow the project's compute approval and budget policy.")
     allowed_bases = BootstrapChoices(queryset=Environment.objects.none(), required=False,
         label="Approved starting environments", help_text="Choose system or module-provided Python environments from this project. Module setup is preserved when reusing the built venv; normal execution policy must also permit the selection.")
     cpus = forms.IntegerField(min_value=1, max_value=1024, label="Maximum CPU cores per build")
@@ -30,7 +32,7 @@ class BuildPolicyForm(forms.Form):
             "cpus": 1, "memory_mib": 1024, "time_limit_seconds": 600}, "platform_tag": "linux-x86_64",
             "python_major_minor": "3.13", "max_environment_bytes": 1073741824, "max_environment_files": 20000,
             "minimum_free_bytes": 1073741824, "minimum_free_files": 10000}
-        initial = {key: configuration.get(key, 0) for key in ("enabled", "platform_tag", "python_major_minor", "max_environment_bytes",
+        initial = {key: configuration.get(key, 0) for key in ("enabled", "auto_permit_builds", "platform_tag", "python_major_minor", "max_environment_bytes",
             "max_environment_files", "minimum_free_bytes", "minimum_free_files")}
         initial.update(allowed_bases=configuration["allowed_base_environment_ids"], cpus=configuration["resource_limits"]["cpus"],
             memory_mib=configuration["resource_limits"]["memory_mib"], time_limit_minutes=configuration["resource_limits"]["time_limit_seconds"] // 60)
@@ -41,7 +43,7 @@ class BuildPolicyForm(forms.Form):
         data = super().clean()
         if self.errors:
             return data
-        configuration = {key: data[key] for key in ("enabled", "platform_tag", "python_major_minor", "max_environment_bytes",
+        configuration = {key: data[key] for key in ("enabled", "auto_permit_builds", "platform_tag", "python_major_minor", "max_environment_bytes",
             "max_environment_files", "minimum_free_bytes", "minimum_free_files")}
         configuration.update(allowed_base_environment_ids=[str(value.id) for value in data["allowed_bases"]],
             allowed_managers=["venv"], allowed_sources=["uploaded_wheels"], resource_limits={"cpus": data["cpus"],

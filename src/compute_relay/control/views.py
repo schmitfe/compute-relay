@@ -103,6 +103,8 @@ def project_context(request):
         from .resource_api import compute_context
         payload["compute"] = compute_context(credential)
         payload["allowance"] = services.allowance(credential.project)
+        from .recovery import summary
+        payload["work_summary"] = summary(credential)
     response = JsonResponse(payload)
     response["Cache-Control"] = "no-store"
     response["Vary"] = "Authorization"
@@ -244,7 +246,7 @@ def cancel(request, attempt_id):
 
 @boundary("GET")
 def logs(request, attempt_id):
-    _, attempt = scope(request, "jobs:read", attempt_id=attempt_id)
+    credential, attempt = scope(request, "jobs:read", attempt_id=attempt_id)
     if "stream" in request.GET:
         stream = request.GET["stream"]
         cursor = int(request.GET.get("cursor", "0"))
@@ -252,13 +254,20 @@ def logs(request, attempt_id):
         if stream not in {"stdout", "stderr"} or not 0 <= cursor <= 2**53 - 1 or not 1 <= limit <= 65536:
             raise BrokerError("INVALID_REQUEST", "Invalid log stream, cursor or limit.")
         from .progress import log_window
-        return log_window(attempt, stream, cursor, limit)
-    return {"stdout": attempt.stdout, "stderr": attempt.stderr}
+        response = log_window(attempt, stream, cursor, limit)
+    else:
+        response = {"stdout": attempt.stdout, "stderr": attempt.stderr}
+    if attempt.state in services.TERMINAL:
+        from .recovery import record_access
+        record_access(credential, attempt, "bytes_requested_at")
+    return response
 
 
 @boundary("GET")
 def artifacts(request, attempt_id):
-    _, attempt = scope(request, "artifacts:read", attempt_id=attempt_id)
+    credential, attempt = scope(request, "artifacts:read", attempt_id=attempt_id)
+    from .recovery import record_access
+    record_access(credential, attempt, "inventory_seen_at")
     return {"artifacts": [{"id": str(a.id), "path": a.path, "sha256": a.blob.sha256, "size_bytes": a.blob.size_bytes}
                           for a in attempt.artifacts.select_related("blob").order_by("path")]}
 
@@ -268,11 +277,13 @@ def artifact_content(request, artifact_id):
     credential, _ = scope(request, "artifacts:read")
     artifact = Artifact.objects.select_related("blob").get(id=artifact_id, attempt__job__project=credential.project)
     require_connection(credential, artifact.attempt.connection_id)
+    from .recovery import record_access
     if "offset" in request.GET:
         from .storage import blob_chunk
         response = HttpResponse(blob_chunk(artifact.blob, int(request.GET["offset"])), content_type="application/octet-stream")
         response["X-Content-SHA256"] = artifact.blob.sha256
         response["Cache-Control"] = "no-store, private"
+        record_access(credential, artifact.attempt, "bytes_requested_at")
         return response
     if artifact.blob.size_bytes > 10 * 1024 * 1024:
         from django.http import FileResponse
@@ -280,9 +291,12 @@ def artifact_content(request, artifact_id):
         verify_blob(artifact.blob)
         import os
         fd = os.open(blob_path(artifact.blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        return FileResponse(os.fdopen(fd, "rb"), as_attachment=True, filename="artifact.bin")
+        response = FileResponse(os.fdopen(fd, "rb"), as_attachment=True, filename="artifact.bin")
+        record_access(credential, artifact.attempt, "bytes_requested_at")
+        return response
     response = HttpResponse(read_blob(artifact.blob), content_type="application/octet-stream")
     response["Content-Disposition"] = 'attachment; filename="artifact.bin"'
+    record_access(credential, artifact.attempt, "bytes_requested_at")
     return response
 
 
@@ -302,6 +316,10 @@ def lease(request):
         excluded = [str(UUID(value)) for value in excluded]
     except (ValueError, TypeError, AttributeError):
         raise BrokerError("INVALID_REQUEST", "Invalid in-progress attempt.") from None
+    from .availability import lease_availability
+    observation = lease_availability(worker, exclude_attempt_ids=excluded)
+    if observation:
+        return observation
     core = services.lease_work(worker, exclude_attempt_ids=excluded, observation_batch=batch)
     if core.get("lease") and core["lease"]["operation"] in {"cancel", "reconcile"}:
         return core

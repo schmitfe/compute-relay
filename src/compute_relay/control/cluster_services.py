@@ -21,6 +21,9 @@ SITE_FIELDS = {"partitions", "accounts", "qos", "allocated_cpus", "allocated_gpu
 def publish_profiles(worker, document):
     from compute_relay.extensions import EXTENSIONS
     extensions = document.get("extensions", [])
+    features = document.get("execution_features", [])
+    if not isinstance(features, list) or any(value != "availability_v1" for value in features):
+        raise BrokerError("INVALID_PROFILES", "Invalid execution capabilities.")
     if not isinstance(extensions, list) or any(not isinstance(name, str) or name not in EXTENSIONS for name in extensions) or len(set(extensions)) != len(extensions):
         raise BrokerError("INVALID_PROFILES", "Invalid worker extension capabilities.")
     profiles = deepcopy(document.get("profiles"))
@@ -46,7 +49,8 @@ def publish_profiles(worker, document):
         for field in ("allowed_hosts", "allowed_users", "allowed_ports", "remote_root_prefixes"):
             if not isinstance(profile[field], list) or not 1 <= len(profile[field]) <= 100:
                 raise BrokerError("INVALID_PROFILES", "Invalid worker target scope.")
-    WorkerIdentity.objects.filter(id=worker.id).update(profiles=profiles, supported_extensions=extensions, last_seen_at=timezone.now())
+    WorkerIdentity.objects.filter(id=worker.id).update(profiles=profiles, supported_extensions=extensions,
+        execution_features=list(set(features)), last_seen_at=timezone.now())
     return {"accepted": True}
 
 

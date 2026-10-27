@@ -135,7 +135,7 @@ def test_tampered_package_never_dispatches_and_poll_explicitly_clears_sync_exten
             await c.worker.execute(c.lease)
         assert c.control.calls == [] and c.backend.submitted == 0
         assert await c.worker.poll_once() is False
-        assert c.control.calls[0][2] == {"profiles": [], "extensions": []}
+        assert c.control.calls[0][2] == {"profiles": [], "extensions": [], "execution_features": ["availability_v1"]}
     asyncio.run(scenario())
 
 
@@ -224,7 +224,7 @@ def test_async_journal_lock_keeps_cross_process_fence_without_blocking_loop(conf
 def test_async_runner_advertises_only_installed_native_async_extension_hooks(configured):
     worker = AsyncWorker(configured.control, {}, configured.journal, owner_id=uuid4(), extensions=["storage", "environments", "workflows"])
     asyncio.run(worker.publish_profiles())
-    assert configured.control.calls[-1][2] == {"profiles": [], "extensions": ["storage", "environments", "workflows"]}
+    assert configured.control.calls[-1][2] == {"profiles": [], "extensions": ["storage", "environments", "workflows"], "execution_features": ["availability_v1"]}
 
 
 def extension_worker(configured, name, *, enabled=True):

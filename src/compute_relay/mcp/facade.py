@@ -47,6 +47,30 @@ class ProjectFacade:
             raise ValueError("API key project changed; reconnect the MCP adapter")
         return {**context, "adapter": adapter_metadata()}
 
+    def list_project_jobs(self, state="attention", cursor=None, limit=20):
+        if state not in {"attention", "unfinished", "unread_results", "all"} or not 1 <= limit <= 100:
+            raise ValueError("Invalid job listing options")
+        query = {"state": state, "limit": limit}
+        if cursor:
+            query["cursor"] = cursor
+        return self.client.request("GET", f"/api/v1/projects/{self.project_id}/jobs?" + urlencode(query))
+
+    def acknowledge_job_results(self, attempt_id):
+        return self._mutate(f"/api/v1/attempts/{_uuid(attempt_id)}/acknowledge-results", {})
+
+    def cancel_prepared_job(self, job_id):
+        return self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/cancel-prepared", {})
+
+    def get_compute_availability(self, connection_ids=None, refresh=False):
+        ids = [_uuid(value) for value in connection_ids] if connection_ids is not None else None
+        result = self.client.request("POST" if refresh else "GET", f"/api/v1/projects/{self.project_id}/availability",
+            {"connection_ids": ids} if refresh and ids is not None else {} if refresh else None)
+        if ids is not None:
+            if set(ids) - {value["id"] for value in result["connections"]}:
+                raise ValueError("A selected cluster is outside this key's scope")
+            result["connections"] = [value for value in result["connections"] if value["id"] in ids]
+        return result
+
     def project_request(self, request: dict):
         """Fill internal routing identity without changing the caller's document."""
         if "project_id" in request and request["project_id"] != self.project_id:
@@ -172,6 +196,19 @@ def create_server(facade: ProjectFacade):
         "when explicitly requested. The allowance refresh defaults to response_mode=budget. "
         "Before planning work, call get_project_context once: it already contains "
         "permitted compute targets, environments, effective limits and shared allowance. "
+        "Check context.work_summary and use list_project_jobs to recover unfinished work and "
+        "unacknowledged results after reconnecting or losing context; never blindly resubmit. "
+        "Acknowledge finished results after recording/reviewing them; acknowledgement does not "
+        "assert scientific validity. Effective limits are admission ceilings, not idle hardware. "
+        "For placement across clusters, use get_compute_availability(refresh=True), then read its "
+        "timestamped snapshots with refresh=False; compare queue_pressure ratios per schedulable "
+        "node and matching GPU device rather than absolute pending counts. Respect unknown/stale data and "
+        "partition overlap. Availability is no placement guarantee or cost estimate. "
+        "Where the environments extension is enabled, check observed runtime metadata before "
+        "relying on a registered environment label. inspect_environment schedules an ordinary "
+        "bounded Python/package probe; reuse its pending job. request_environment_packages builds "
+        "a new immutable environment from uploaded pinned wheels and can update managed environments. "
+        "Verified builds are usable automatically only when the human-owned build policy enables it. "
         "The separate target and allowance tools are optional focused refreshes; do not "
         "routinely repeat all three discovery calls. Use each target's effective_limits, which combine the "
         "project and cluster limits, and account for allocation rounding. Reserve against "
@@ -196,13 +233,33 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=readonly)
     def get_project_context() -> dict:
-        """Single discovery call: project, clusters/environments, active limits, allowance, scopes and review preference; adapter metadata identifies this loaded local MCP process. Requires no project ID. Refresh before planning; separate discovery tools are optional."""
+        """Single discovery call: project, permitted clusters/environments and observed runtimes, active limits, allowance, work_summary for restart recovery, scopes and review preference. Adapter metadata identifies this loaded local MCP process. Requires no project ID. Separate discovery tools are optional."""
         return facade.get_project_context()
 
     @server.tool(annotations=readonly)
     def get_broker_capabilities() -> dict:
         """Optional: inspect enabled extensions when an extension tool is needed. Ordinary job planning uses get_project_context."""
         return facade.get_broker_capabilities()
+
+    @server.tool(annotations=readonly)
+    def list_project_jobs(state: str = "attention", cursor: str | None = None, limit: int = 20) -> dict:
+        """Recover work for the API key's project after restart or lost context. attention includes prepared/unsubmitted jobs, pending reviews, active/accounting/collection work and unacknowledged finished results. unfinished, unread_results and all are explicit filters. Follow next_cursor; listing never executes or cancels work."""
+        return facade.list_project_jobs(state, cursor, limit)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def acknowledge_job_results(attempt_id: str) -> dict:
+        """Mark a finished attempt's results as acknowledged for this key after reviewing or recording them. This does not assert scientific validity, cancel work or alter accounting."""
+        return facade.acknowledge_job_results(attempt_id)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False))
+    def cancel_prepared_job(job_id: str) -> dict:
+        """Dismiss an abandoned draft/prepared job with no execution requests, preserving its package/history. Requires jobs:cancel. Jobs with execution requests use their existing cancellation tools."""
+        return facade.cancel_prepared_job(job_id)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+    def get_compute_availability(connection_ids: list[str] | None = None, refresh: bool = False) -> dict:
+        """Compare timestamped scheduler-visible CPU/GPU availability and queue pressure across this key's clusters. Compare queue_pressure.pending_jobs_per_schedulable_node and pending_gpu_jobs_per_schedulable_device for the requested GPU type, together with raw counts, capacity and untyped requests; job size/duration remain unknown. refresh=True queues bounded read-only observations; poll with refresh=False. Check stale/status/query visibility; idle devices do not guarantee placement or wait times. This is independent of admission limits; costs and automatic placement are not configured."""
+        return facade.get_compute_availability(connection_ids, refresh)
 
     @server.tool(annotations=readonly)
     def list_compute_targets() -> dict:

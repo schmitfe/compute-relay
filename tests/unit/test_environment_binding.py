@@ -102,6 +102,7 @@ def test_inventory_exposes_only_recipes_for_effective_allowed_clusters(catalog):
     assert response.status_code == 200
     payload = response.json()
     assert [item["id"] for item in payload["connections"]] == [str(catalog.targets[0].id)]
+    assert payload["environments"][0].pop("observations")["environments"]["status"] == "inspection_required"
     assert payload["environments"] == [{"id": str(catalog.environments[0].id), "name": "Python",
                                         "revision_sha256": catalog.environments[0].revision_sha256,
                                         "connection_id": str(catalog.targets[0].id)}]

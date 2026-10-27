@@ -27,6 +27,8 @@ def project_limits(policy):
 def compute_context(credential):
     """Use current project policy plus only this key's usable cluster bindings."""
     project = credential.project
+    from .availability import public_availability
+    from compute_relay.extensions import environment_details
     grant = Grant.objects.filter(project=project).first()
     if grant is None:
         return {"policy_revision": None, "per_job_limits": {}, "connections": [], "environments": [],
@@ -52,11 +54,13 @@ def compute_context(credential):
             "capabilities": {field: value for field, value in connection.configuration.get("site_profile", {}).items()
                              if field in PUBLIC_PROFILE_FIELDS},
             "effective_limits": effective_resource_limits(policy, connection.configuration, backend=connection.backend),
+            "availability": public_availability(connection),
             **approval_requirements(policy, credential.execution_mode, connection.configuration),
             "connection_revision_sha256": connection.revision_sha256,
         } for connection in targets],
         "environments": [{"id": str(environment.id), "name": environment.name,
-            "revision_sha256": environment.revision_sha256, "connection_id": str(environment.connection_id)}
+            "revision_sha256": environment.revision_sha256, "connection_id": str(environment.connection_id),
+            "observations": environment_details(environment, project)}
             for environment in environments],
     }
 

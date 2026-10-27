@@ -34,6 +34,7 @@ class EnvironmentBuild(models.Model):
     policy_revision = models.PositiveIntegerField()
     policy_sha256 = models.CharField(max_length=64)
     credential = models.ForeignKey("broker.ProjectCredential", on_delete=models.PROTECT)
+    parent_environment = models.ForeignKey("broker.Environment", null=True, on_delete=models.PROTECT, related_name="derived_builds")
     job = models.OneToOneField("broker.Job", null=True, on_delete=models.PROTECT, related_name="environment_build")
     attempt = models.OneToOneField("broker.Attempt", null=True, on_delete=models.PROTECT, related_name="environment_build")
     environment = models.OneToOneField("broker.Environment", null=True, on_delete=models.PROTECT, related_name="build_provenance")
@@ -41,3 +42,16 @@ class EnvironmentBuild(models.Model):
     receipt = models.JSONField(default=dict)
     error_code = models.CharField(max_length=80, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
+
+
+class EnvironmentInspection(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey("broker.Project", on_delete=models.PROTECT)
+    environment = models.ForeignKey("broker.Environment", on_delete=models.PROTECT)
+    credential = models.ForeignKey("broker.ProjectCredential", on_delete=models.PROTECT)
+    job = models.OneToOneField("broker.Job", null=True, on_delete=models.PROTECT)
+    attempt = models.OneToOneField("broker.Attempt", null=True, on_delete=models.PROTECT)
+    observation = models.JSONField(default=dict)
+    state = models.CharField(max_length=32, default="draft")
+    created_at = models.DateTimeField(default=timezone.now)
+    observed_at = models.DateTimeField(null=True)

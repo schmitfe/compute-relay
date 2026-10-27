@@ -14,6 +14,7 @@ A project administrator configures `/projects/{project_id}/environment-build-pol
   "allowed_base_environment_ids": ["11111111-1111-4111-8111-111111111111"],
   "allowed_managers": ["venv"],
   "allowed_sources": ["uploaded_wheels"],
+  "auto_permit_builds": true,
   "resource_limits": {"cpus": 1, "memory_mib": 1024, "time_limit_seconds": 600},
   "platform_tag": "linux-x86_64",
   "python_major_minor": "3.13",
@@ -26,11 +27,11 @@ A project administrator configures `/projects/{project_id}/environment-build-pol
 
 These are illustrative values. Pin the Python version and `sysconfig.get_platform()` observed on the intended compute platform; login-node discovery is not compute validation. Builds are CPU-only, single-node jobs, with whole-minute walltime. The venv builder accepts system Python or an approved module-provided Python bootstrap. Published venv recipes preserve the base module names, initializer and module paths, so module-provided runtime libraries remain available on reuse. Conda, Poetry and existing-venv bootstraps remain unsupported; selecting an existing environment for ordinary jobs does not enable a builder for its package manager. The bootstrap environment must already be permitted by ordinary project execution policy. A changed build policy, bootstrap binding or connection revision requires a fresh build and review.
 
-Give an agent the optional `environments:build` scope together with `jobs:write`, `jobs:execute` and the read scopes needed to monitor its jobs. Uploads additionally require `objects:write`. A scope never overrides project review, compute allowance, total submission cap, active-job cap, current connection permissions or the protected worker's capabilities. Policy and scopes are checked again at admission and immediately before first dispatch. A human can reject a build on the ordinary job-review page and return a comment.
+Give an agent the optional `environments:build` scope together with `jobs:write`, `jobs:execute` and the read scopes needed to monitor its jobs. Uploads additionally require `objects:write`. A scope never overrides project review, compute allowance, total submission cap, active-job cap, current connection permissions or the protected worker's capabilities. Policy and scopes are checked again at admission and immediately before first dispatch. A human can reject a build on the ordinary job-review page and return a comment. `auto_permit_builds` defaults to false; enabling it authorizes verified builds and subsequent immutable updates for ordinary project jobs, subject to their normal admission rules.
 
 ## Build API
 
-All mutation requests use the ordinary `Idempotency-Key` header. The normal API object-upload endpoint must receive each wheel before a recipe references its hash. Current uploads are limited to 512 KiB per object; large scientific wheels and full stacks such as NumPy need a future reviewed, bounded upload/staging mechanism. This release does not fetch arbitrary URLs or increase those limits.
+Build and inspection mutation requests use the ordinary `Idempotency-Key` header. Stage wheels through the resumable file helper before referencing their hashes. The inline object endpoint retains its 512 KiB limit; resumable uploads accept files up to 8 GiB, with a 64 GiB aggregate bundle, subject to project quotas. This release does not resolve package names against PyPI or fetch arbitrary URLs.
 
 Create an empty closure with `POST /api/v1/projects/{project_id}/environment-builds`:
 
@@ -51,11 +52,14 @@ Create an empty closure with `POST /api/v1/projects/{project_id}/environment-bui
 }
 ```
 
-A nonempty `requirements` entry has exactly `name`, `version`, `filename`, `sha256` and `size_bytes`. The wheel filename must match its exact name and version. At most 64 distinct wheels and 100 MiB aggregate recipe wheel bytes are accepted, subject to the smaller current upload/object quotas. There are no editable sources, source distributions, environment hooks, dependency ranges or remote indexes. The caller supplies the full closure. Compute-side installation uses `--no-index --no-deps --only-binary=:all: --require-hashes`, followed by `pip check`; unresolved dependencies fail the build. Installation may still execute installed package behavior on the compute node. The built interpreter is never executed by control, the credential worker or the login-node metadata finalizer.
+A nonempty `requirements` entry has exactly `name`, `version`, `filename`, `sha256` and `size_bytes`. The wheel filename must match its exact name and version. At most 64 distinct wheels, 8 GiB per wheel and 64 GiB aggregate recipe wheel bytes are accepted, subject to project quotas. There are no editable sources, source distributions, environment hooks, dependency ranges or remote indexes. The caller supplies the full closure. Compute-side installation uses `--no-index --no-deps --only-binary=:all: --require-hashes`, followed by `pip check`; unresolved dependencies fail the build. Installation may still execute installed package behavior on the compute node. The built interpreter is never executed by control, the credential worker or the login-node metadata finalizer.
 
 | Request | Result |
 | --- | --- |
 | `GET /api/v1/projects/{id}/environment-build-policy` | Current explicit policy and available builder |
+| `GET /api/v1/environments/{id}/inventory` | Actual observed Python/packages/fingerprint/time and managed-receipt drift status |
+| `POST /api/v1/environments/{id}/inspect` | Prepare and request a bounded scheduled inventory job; resume an existing pending probe |
+| `POST /api/v1/environments/{id}/packages` | Prepare and request a new environment or immutable update from uploaded wheel descriptors |
 | `GET /api/v1/projects/{id}/environment-builds` | Bounded project build list, filtered by key's cluster access |
 | `POST /api/v1/projects/{id}/environment-builds` | Immutable normalized spec and a build, or a ready cache match |
 | `POST /api/v1/environment-builds/{id}/prepare` with `{}` | Ordinary immutable Job package, including complete build script, recipe, lock and wheel descriptors |
@@ -63,7 +67,7 @@ A nonempty `requirements` entry has exactly `name`, `version`, `filename`, `sha2
 | `GET /api/v1/environment-builds/{id}` | State, ordinary job/attempt links, receipt, estimates and published environment reference |
 | `POST /api/v1/environment-builds/{id}/promote` | Human project-admin session and CSRF only; explicitly adds a ready environment revision to the project execution allowlist |
 
-Optional MCP tools mirror policy read, create, prepare, execution request and status. They expose no policy update, environment promotion, package-manager command, shell endpoint, local-file read or SSH credential.
+Optional MCP tools mirror policy read, inventory, inspection, package requests, create, prepare, execution request and status. They expose no policy update, environment promotion, package-manager command, shell endpoint, local-file read or SSH credential. `request_environment_packages(environment_id, packages, ...)` combines recipe creation, preparation and ordinary execution request. For an existing ready managed environment it retains the original approved bootstrap and pinned requirements, replacing only explicitly supplied package names. It records the parent environment reference and creates a fresh prefix/revision. A ready cache hit returns without submitting another job.
 
 ## Execution, publication and reuse
 
@@ -73,7 +77,9 @@ The compute job creates its final prefix directly at `<protected remote_root>/<p
 
 After a successful terminal observation, the extension's fixed remote operation reads metadata only. It verifies the broker's own attempt journal and exact native identity, service-derived work directory, declared recipe hash, bounded receipt, and no-follow regular-file metadata for `pyvenv.cfg` and the copied `bin/python`. Special files, symlinks and hardlinks in these checked paths fail closed. It does not import packages, run `pip`, execute the built interpreter or read SSH secrets. The control service publishes an immutable cluster/project-bound Environment only after usable final accounting has settled and matching finalization metadata passes the current policy checks.
 
-Publishing makes the recipe visible in the project but does not authorize jobs to use it. A human administrator must explicitly promote it. Promotion updates the ordinary project environment allowlist and audit record. A fake backend marks the build `simulation_only`; it can never publish or promote an environment because it never ran the payload. Missing, failed, stale-generation, mismatched or uncertain receipts likewise cannot publish.
+Publishing makes the recipe visible in the project. With `auto_permit_builds=true`, a verified, complete runtime inventory and still-authorized creating key also permit the revision through the ordinary project allowlist and audit trail. Otherwise a human administrator explicitly promotes it. Normal compute approval and budget rules continue to apply. A fake backend marks the build `simulation_only`; it can never publish or promote an environment because it never ran the payload. Missing, failed, stale-generation, mismatched or uncertain receipts likewise cannot publish.
+
+Compute inventory records the actual Python version, implementation, platform, distribution names/versions, full-inventory fingerprint and observation time. Registered labels remain descriptive. Existing recipes can be inspected through an ordinary metered job without enabling installation policy. Displayed inventories are bounded and explicitly mark truncation; automatic permission requires a complete managed build inventory. A later inspection compares its fingerprint with the immutable managed receipt and reports drift. This identifies version/package changes, not arbitrary modifications to package file contents. Python is the first supported language; Julia is not implemented.
 
 Cache reuse is restricted to a ready environment under the same project, connection/base revision, normalized recipe/lock/platform, and unchanged build policy revision/hash. Failed or unknown prefixes are never cache hits. A cache hit refers to the original immutable prefix; it does not claim the files still exist, attest all their contents or share them across users/projects. The cluster account remains the filesystem trust boundary. Same-UID hostile code can alter same-user data in this development deployment.
 
@@ -85,7 +91,7 @@ Byte/file estimates, `statvfs` headroom checks and timestamped measured bytes/fi
 
 The implemented prefix is under the protected attempt staging root. It does not yet route to an enrolled environment storage target, claim that an unrelated selected target reserved its space, or use the optional storage extension's reservations. Retain this attempt directory and the trusted bootstrap runtime for as long as jobs use its environment. Automatic cleanup, reference-counted leases, deletion, dependency repair, packed/relocatable archives, node-local staging, Apptainer images and migration across storage roots are future work. Python venv prefixes generally cannot be assumed relocatable. Conda/micromamba/Poetry builds need separate tested lock/source validation and validation receipts before being enabled.
 
-The test suite verifies renderer purity, pinned wheel validation, ordinary approvals and budgets/caps, generic-route and dispatch fencing, explicit promotion, conservative cache reuse, fake/failed/stale/mismatched publication denial, durable metadata recovery, typed MCP tools, and a synthetic metadata finalizer whose sentinel interpreter would reveal accidental execution. These tests do not run a package installer on the control or credential worker. Actual Slurm empty-venv acceptance is a separate disposable-cluster test.
+The test suite verifies renderer purity, pinned wheel validation, ordinary approvals and budgets/caps, generic-route and dispatch fencing, explicit/automatic permission, conservative cache reuse, fake/failed/stale/mismatched publication denial, durable metadata recovery, typed MCP tools, and a synthetic metadata finalizer whose sentinel interpreter would reveal accidental execution. A separate MCP integration test runs the exact first-party inventory/build scripts in disposable compute directories, installs real fixture wheels, updates version 1 to version 2 while preserving version 1, and detects changed package metadata. It does not execute an installer inside control or a credential worker. Actual Slurm acceptance is a separate disposable-cluster test.
 
 ## Opt-in disposable Slurm acceptance
 

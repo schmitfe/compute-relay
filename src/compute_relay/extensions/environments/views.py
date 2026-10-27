@@ -14,6 +14,76 @@ from .forms import BuildPolicyForm
 from .models import EnvironmentBuild, EnvironmentBuildPolicy
 
 
+@boundary("GET")
+def inventory(request, environment_id):
+    from . import inspection
+    credential, _ = scope(request, "jobs:read")
+    environment = inspection.environment_for(credential, environment_id)
+    latest = inspection.latest(environment, credential.project)
+    pending = inspection.EnvironmentInspection.objects.filter(environment=environment, project=credential.project).order_by("-created_at", "-id").first()
+    build = EnvironmentBuild.objects.filter(environment=environment, spec__project=credential.project).first()
+    runtime = latest.observation.get("runtime") if latest else build.receipt.get("receipt", {}).get("runtime") if build else None
+    return {"environment_id": str(environment.id), "registered_name": environment.name,
+        "registered_revision_sha256": environment.revision_sha256, "summary": services.environment_summary(environment, credential.project),
+        "runtime": runtime, "latest_inspection": inspection.serialize(pending) if pending else None,
+        "supported_languages": ["python"]}
+
+
+@boundary("POST")
+def inspect(request, environment_id):
+    from . import inspection
+    from .requests import defaults
+    credential, _ = scope(request, "jobs:write")
+    environment = inspection.environment_for(credential, environment_id)
+    data = body(request)
+    if set(data) - {"resources", "slurm"}:
+        raise ValueError("Invalid inspection options")
+    from compute_relay.control.models import Grant
+    resources, slurm = defaults(environment.connection, data.get("resources"), data.get("slurm"),
+        project_policy=Grant.objects.get(project=credential.project).policy)
+    created, _ = idem(request, credential, "environment:inspect:" + str(environment.id), data,
+        lambda: inspection.create(credential, environment, resources, slurm))
+    current = inspection.EnvironmentInspection.objects.get(id=created["id"])
+    inspection.prepare(current, resources, slurm)
+    existing = current.job.execution_requests.order_by("-created_at", "-id").first()
+    if existing:
+        attempt = services.core.Attempt.objects.filter(execution_request=existing).first()
+        execution = {"id": str(existing.id), "state": existing.state, "attempt_id": str(attempt.id) if attempt else None}
+    else:
+        # A resumed probe may have a different client idempotency key. Fence
+        # execution by inspection identity so concurrent resumptions admit once.
+        execution, _ = services.core.idempotent(credential.project, "inspection:execute:" + str(current.id), "execution", {},
+            lambda: services.core.request_execution(current.job, credential))
+    if execution["state"] == "awaiting_approval":
+        inspection.EnvironmentInspection.objects.filter(id=current.id).update(state="awaiting_approval")
+    current.refresh_from_db()
+    return {**inspection.serialize(current), "execution": execution}
+
+
+@boundary("POST")
+def packages(request, environment_id):
+    from .inspection import environment_for
+    from .requests import package_recipe
+    credential, _ = scope(request, "environments:build")
+    environment = environment_for(credential, environment_id)
+    data = body(request)
+    if "packages" not in data or set(data) - {"packages", "name", "resources", "slurm"}:
+        raise ValueError("Invalid package request")
+    # Bind idempotency to the caller's original request, before resolving mutable
+    # parent/catalog metadata. The new environment always has a unique prefix.
+    created, _ = idem(request, credential, "environment:packages:" + str(environment.id), data,
+        lambda: services.create_build(credential, package_recipe(credential, environment, data)))
+    build = EnvironmentBuild.objects.get(id=created["id"])
+    if created.get("cache_hit"):
+        return {"build": services.serialize(build, cache_hit=True), "execution": None,
+            "updates_replace_existing_environment": False}
+    services.prepare_build(build, credential)
+    build.refresh_from_db()
+    execution, _ = idem(request, credential, "environment:run:" + str(build.id), {}, lambda: services.request_build(build, credential))
+    build.refresh_from_db()
+    return {"build": services.serialize(build), "execution": execution, "updates_replace_existing_environment": False}
+
+
 def _build(request, build_id, permission):
     credential, project = scope(request, permission)
     build = EnvironmentBuild.objects.select_related("spec__project", "spec__connection", "policy").get(id=build_id, spec__project=project)

@@ -20,6 +20,50 @@ project connection; the broker shares and reserves their allowance atomically.
 If a delegated agent lacks these tools or permissions, its parent mediates broker
 operations rather than issuing another credential or expanding tool permissions.
 
+After reconnecting or losing context, inspect `work_summary` and call
+`list_project_jobs` to recover the API key's project work. Follow `next_cursor`.
+The default `attention` filter includes drafts/prepared jobs, pending reviews,
+active/accounting/collection work and unacknowledged finished results. Check
+`get_job` and reuse existing request/attempt identities before considering another
+execution. `unread_results` specifically finds finished attempts whose log/output
+bytes this key has not requested since tracking was introduced. Inventory listing
+does not count as reading bytes. After recording/reviewing results, use
+`acknowledge_job_results`; this clears the reminder without asserting scientific
+validity. Cancel an abandoned unsubmitted draft with `cancel_prepared_job`.
+
+Effective limits describe admission authority. For placement, especially across
+multiple permitted clusters, call `get_compute_availability(refresh=True)` and
+poll with `refresh=False`. Compare timestamped partition CPU/GPU observations,
+typed GPU queue pressure and pending reasons. Compare
+`queue_pressure.pending_jobs_per_schedulable_node` and
+`pending_gpu_jobs_per_schedulable_device` for the requested GPU type together
+with their raw counts and capacity: 10 pending jobs on 5 schedulable nodes is
+2 per node, whereas 100 on 200 is 0.5. Compare relevant partitions; do not sum
+overlapping capacities. These are rough pressure indicators; resource request
+sizes, job durations, priorities and untyped GPU requests still matter.
+Check status, age, truncation,
+unknown allocation and site visibility. Partition totals can overlap and idle
+resources can be fragmented or reserved; they do not guarantee a start time.
+Refreshes are bounded read-only scheduler queries, rate limited to 30 seconds.
+Costs and automatic placement are not configured; the workflow chooses the target.
+
+With the environments extension, inspect each environment's `observations` and
+use `get_environment_inventory` for the actual observed Python/package list.
+A registered name is not proof of the installed Python version. Missing or old
+inventory can be refreshed with `inspect_environment`, which prepares and requests
+a small scheduled job under normal review/budget rules. Reuse a pending probe.
+If packages are missing, read `get_environment_build_policy`, upload a complete
+hash-pinned wheel closure through the file helper, and call
+`request_environment_packages` with its wheel descriptors. Select an approved
+system/module bootstrap for the first build or a managed environment to update
+it. Updates retain existing pinned requirements except explicitly replaced names
+and create another prefix/revision. Check `permitted_for_jobs`; verified builds
+can become usable automatically when the administrator has enabled
+`auto_permit_builds`. Otherwise follow the existing human promotion path.
+Record the observed fingerprint and time with the experiment; a later inspection
+can flag drift from a managed build receipt. Only Python inventory/builds are
+implemented currently.
+
 Make a brief placement plan grounded in the task:
 
 - Local work suits derivations, code inspection, small unit tests and bounded

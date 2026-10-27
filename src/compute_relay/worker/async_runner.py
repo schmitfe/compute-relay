@@ -64,6 +64,9 @@ class AsyncWorker(Worker):
             lease = response.get("lease")
             if lease is None:
                 return False
+            if lease.get("operation") == "availability":
+                await self.availability(lease)
+                return True
             if lease.get("operation") in {"discover", "extension"}:
                 if self._in_progress:
                     raise ControlError("CONFIGURATION_WHILE_BUSY")
@@ -110,7 +113,8 @@ class AsyncWorker(Worker):
                 profiles.append(profile_metadata(alias, profile))
             except EnrollmentError:
                 logging.getLogger(__name__).warning("A credential profile is invalid and was not advertised")
-        await self.client.request("POST", "/internal/v1/worker/profiles", {"profiles": profiles, "extensions": list(self.extensions)})
+        await self.client.request("POST", "/internal/v1/worker/profiles", {"profiles": profiles, "extensions": list(self.extensions),
+            "execution_features": ["availability_v1"]})
         self._profiles_published_at = time.monotonic()
 
     async def execute(self, lease):
@@ -133,6 +137,9 @@ class AsyncWorker(Worker):
 
     async def _execute(self, lease):
         operation = lease.get("operation")
+        if operation == "availability":
+            await self.availability(lease)
+            return
         if operation == "discover":
             await self.discover(lease)
             return
@@ -270,6 +277,17 @@ class AsyncWorker(Worker):
                 {key: record["report"][key] for key in ("lease_id", "generation")})
             await self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
         self.journal.clear_report(attempt_id, record)
+
+    async def availability(self, lease):
+        public = lease.get("configuration", {})
+        connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[lease["connection_id"]]
+        try:
+            snapshot = await self.backend_factory(connection).availability()
+        except Exception:
+            snapshot = {"partitions": [], "nodes_status": "unknown", "queue_status": "unknown"}
+        await self.client.request("POST", f"/internal/v1/connections/{lease['connection_id']}/availability-report", {
+            "lease_id": lease["id"], "generation": lease["generation"], "connection_revision_sha256": lease["connection_revision_sha256"],
+            "snapshot": snapshot})
 
     async def replay_pending_reports(self):
         for attempt_id, _ in self.journal.pending_reports():

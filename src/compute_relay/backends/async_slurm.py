@@ -101,3 +101,7 @@ class AsyncSlurmBackend(SlurmBackend):
 
     async def discover(self) -> dict:
         return parse_discovery(await self._call("discover"), self.connection)
+
+    async def availability(self):
+        from .availability import parse_availability
+        return parse_availability(await self._call("availability"))

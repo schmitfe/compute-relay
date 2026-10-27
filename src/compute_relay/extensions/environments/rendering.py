@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from .inventory import INVENTORY_PROGRAM
 
 SUPPORTED_MANAGERS = ("venv",)
 _NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
@@ -18,11 +19,13 @@ def integer(value, label, maximum, minimum=0):
 def validate_policy(document):
     required = {"enabled", "allowed_base_environment_ids", "allowed_managers", "allowed_sources",
                 "resource_limits", "platform_tag", "python_major_minor", "max_environment_bytes", "max_environment_files"}
-    optional = {"minimum_free_bytes", "minimum_free_files"}
+    optional = {"minimum_free_bytes", "minimum_free_files", "auto_permit_builds"}
     if not isinstance(document, dict) or not required <= set(document) or set(document) - required - optional:
         raise ValueError("Invalid environment build policy fields")
     if type(document["enabled"]) is not bool:
         raise ValueError("enabled must be boolean")
+    if type(document.get("auto_permit_builds", False)) is not bool:
+        raise ValueError("auto_permit_builds must be boolean")
     from uuid import UUID
     bases = document["allowed_base_environment_ids"]
     if not isinstance(bases, list) or len(bases) > 100 or any(not isinstance(value, str) for value in bases) or len(set(bases)) != len(bases):
@@ -55,7 +58,7 @@ def validate_policy(document):
 
 def normalize_request(document, policy):
     allowed = {"name", "connection_id", "base_environment", "manager", "requirements", "resources", "slurm", "estimated_bytes", "estimated_files"}
-    if not isinstance(document, dict) or set(document) != allowed:
+    if not isinstance(document, dict) or not allowed <= set(document) or set(document) - allowed - {"parent_environment"}:
         raise ValueError("Invalid environment build request fields")
     if not isinstance(document["name"], str) or not _NAME.fullmatch(document["name"]):
         raise ValueError("Invalid environment name")
@@ -84,11 +87,11 @@ def normalize_request(document, policy):
             raise ValueError("Duplicate distribution or wheel")
         if not isinstance(row["sha256"], str) or not _DIGEST.fullmatch(row["sha256"]):
             raise ValueError("Every wheel needs SHA-256")
-        integer(row["size_bytes"], "wheel size", 104857600, 1)
+        integer(row["size_bytes"], "wheel size", 8 * 1024**3, 1)
         names.add(normalized)
         filenames.add(filename)
         requirements.append({**row, "name": normalized})
-    if sum(row["size_bytes"] for row in rows) > 100 * 1024 * 1024:
+    if sum(row["size_bytes"] for row in rows) > 64 * 1024**3:
         raise ValueError("Wheel closure exceeds package limit")
     resources = document["resources"]
     if not isinstance(resources, dict) or set(resources) != {"nodes", "cpus", "gpus", "memory_mib", "time_limit_seconds"}:
@@ -129,13 +132,15 @@ venv.EnvBuilder(with_pip=bool(recipe['requirements']),symlinks=False).create(pre
 python=str(prefix/'bin/python')
 env={'PATH':str(prefix/'bin')+':/usr/bin:/bin','HOME':str(root),'LANG':'C','LC_ALL':'C','PYTHONNOUSERSITE':'1',
      'PIP_CONFIG_FILE':'/dev/null','PIP_DISABLE_PIP_VERSION_CHECK':'1','PIP_NO_INPUT':'1','PIP_NO_CACHE_DIR':'1'}
+for key in ('LD_LIBRARY_PATH','DYLD_LIBRARY_PATH'):
+    if key in os.environ: env[key]=os.environ[key]
 if recipe['requirements']:
     subprocess.run([python,'-I','-m','pip','install','--no-index','--no-deps','--only-binary=:all:',
         '--require-hashes','--find-links',str(root/'_environment/wheels'),'-r',str(root/'_environment/requirements.lock')],env=env,check=True)
     subprocess.run([python,'-I','-m','pip','check'],env=env,check=True)
-probe=subprocess.run([python,'-I','-c','import json,sys,sysconfig; print(json.dumps({"version":sys.version.split()[0],"platform":sysconfig.get_platform()}))'],
+probe=subprocess.run([python,'-I','-c',__INVENTORY_SOURCE__],
     env=env,check=True,capture_output=True,text=True,timeout=30)
-if len(probe.stdout)>4096: raise RuntimeError('Validation output exceeded limit')
+if len(probe.stdout)>30000: raise RuntimeError('Validation output exceeded limit')
 observed=json.loads(probe.stdout)
 if observed['platform']!=recipe['platform_tag'] or '.'.join(observed['version'].split('.')[:2])!=recipe['python_major_minor']:
     raise RuntimeError('Created interpreter failed target validation')
@@ -151,7 +156,7 @@ for directory,dirs,files in os.walk(prefix,followlinks=False):
 receipt={'schema_version':'1.0','build_id':recipe['build_id'],'spec_sha256':recipe['spec_sha256'],'attempt_id':attempt_id,
     'manager':'venv','prefix_relative':'environment','interpreter_relative':'environment/bin/python',
     'python_version':observed['version'],'python_major_minor':recipe['python_major_minor'],'platform_tag':recipe['platform_tag'],
-    'validated':True,'measured_bytes':size,'measured_files':count,'measured_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'validated':True,'runtime':observed,'measured_bytes':size,'measured_files':count,'measured_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
     'requirements_sha256':hashlib.sha256((root/'_environment/requirements.lock').read_bytes()).hexdigest()}
 temporary=root/'_environment/receipt.tmp'
 with temporary.open('x') as stream:
@@ -164,6 +169,7 @@ print('ENVIRONMENT_BUILD_VALIDATED')
 def render_build_files(document, *, build_id, spec_sha256, policy):
     lock = requirements_text(document)
     recipe = {**document, "build_id": str(build_id), "spec_sha256": spec_sha256, "policy": policy}
-    return {"_environment/build.py": BUILD_SCRIPT.encode(),
+    script = BUILD_SCRIPT.replace("__INVENTORY_SOURCE__", repr(INVENTORY_PROGRAM + "\nprint(json.dumps(inventory()))\n"))
+    return {"_environment/build.py": script.encode(),
             "_environment/recipe.json": json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode(),
             "_environment/requirements.lock": lock.encode()}

@@ -20,6 +20,7 @@ class WorkerIdentity(models.Model):
     supported_extensions = models.JSONField(default=list)
     last_seen_at = models.DateTimeField(null=True)
     connector_features = models.JSONField(default=list)
+    execution_features = models.JSONField(default=list)
 
     def __str__(self):
         return self.name
@@ -44,6 +45,12 @@ class Connection(models.Model):
     discovery_generation = models.PositiveIntegerField(default=0)
     discovery_lease_id = models.UUIDField(null=True)
     discovery_lease_expires_at = models.DateTimeField(null=True)
+    availability_snapshot = models.JSONField(default=dict)
+    availability_requested_at = models.DateTimeField(null=True)
+    availability_checked_at = models.DateTimeField(null=True)
+    availability_lease_id = models.UUIDField(null=True)
+    availability_lease_expires_at = models.DateTimeField(null=True)
+    availability_generation = models.PositiveIntegerField(default=0)
 
     def __str__(self):
         from .connection_identity import public_ssh_identity
@@ -381,6 +388,17 @@ class Artifact(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["attempt", "path"], name="artifact_path_once")]
+
+
+class ResultAccess(models.Model):
+    credential = models.ForeignKey(ProjectCredential, on_delete=models.CASCADE)
+    attempt = models.ForeignKey(Attempt, on_delete=models.CASCADE)
+    inventory_seen_at = models.DateTimeField(null=True)
+    bytes_requested_at = models.DateTimeField(null=True)
+    acknowledged_at = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["credential", "attempt"], name="key_attempt_result_access")]
 
 
 class IdempotencyRecord(models.Model):

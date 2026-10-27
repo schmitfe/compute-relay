@@ -212,6 +212,51 @@ def test_real_verified_settled_build_publishes_without_broadening_project_grant(
     assert build.environment_id == before
 
 
+@pytest.mark.parametrize("withdraw", ["revoked", "scope", "connection"])
+def test_auto_permission_requires_current_creating_key_authority(context, withdraw):
+    from compute_relay.extensions.environments.inventory import INVENTORY_PROGRAM
+    context.services.update_policy(context.project, context.owner, {**context.policy.configuration, "auto_permit_builds": True})
+    build, attempt = executed(context)
+    metadata = finalization(build, attempt)
+    namespace = {}
+    exec(INVENTORY_PROGRAM, namespace)
+    runtime = namespace["inventory"]()
+    metadata["receipt"].update(runtime=runtime, python_version=runtime["version"])
+    if withdraw == "revoked":
+        context.key.revoked = True
+    elif withdraw == "scope":
+        context.key.scopes.remove("environments:build")
+    else:
+        context.key.allowed_connection_ids = []
+    context.key.save()
+    attempt.state, attempt.accounting_state = "succeeded", "settled"
+    attempt.save()
+    context.services.sync_attempt(attempt, metadata)
+    build.refresh_from_db();context.grant.refresh_from_db()
+    assert build.state == "ready" and build.error_code == "ENVIRONMENT_AUTO_PERMISSION_WITHDRAWN"
+    assert build.environment.revision_sha256 not in context.grant.policy["allowed_environment_revision_sha256"]
+
+
+def test_rejected_inventory_probe_does_not_block_a_new_request(context):
+    from compute_relay.extensions.environments import inspection
+    context.grant.policy["mode"] = "approval_required"
+    context.grant.save()
+    client = Client(HTTP_AUTHORIZATION="Bearer environment-agent")
+    path = f"/api/v1/environments/{context.base.id}/inspect"
+    response = client.post(path, "{}", content_type="application/json", HTTP_IDEMPOTENCY_KEY="probe-one")
+    assert response.status_code == 200, response.content
+    first = response.json()
+    job = Job.objects.get(id=first["job_id"])
+    with transaction.atomic():
+        core.decide(job, context.owner, {"execution_request_id": first["execution"]["id"], "manifest_sha256": job.manifest_sha256,
+            "approved": False, "comment": "Try another partition."})
+    previous = inspection.EnvironmentInspection.objects.get(id=first["id"])
+    assert inspection.serialize(previous)["state"] == "rejected"
+    response = client.post(path, "{}", content_type="application/json", HTTP_IDEMPOTENCY_KEY="probe-two")
+    assert response.status_code == 200 and response.json()["id"] != first["id"]
+    assert Attempt.objects.count() == 0
+
+
 def test_async_worker_environment_receipt_publishes_via_durable_core_report(context, tmp_path, django_capture_on_commit_callbacks):
     from compute_relay.worker.async_runner import AsyncWorker
     from compute_relay.worker.journal import Journal

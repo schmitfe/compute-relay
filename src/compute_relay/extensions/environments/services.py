@@ -89,6 +89,7 @@ def serialize(build, *, cache_hit=False):
     return {"id": str(build.id), "name": build.spec.document["name"], "spec_id": str(build.spec_id), "spec_sha256": build.spec.sha256,
             "project_id": str(build.spec.project_id), "connection_id": str(build.spec.connection_id),
             "state": build.state, "manager": build.spec.document["manager"], "cache_hit": cache_hit,
+            "parent_environment_id": str(build.parent_environment_id) if build.parent_environment_id else None,
             "job_id": str(build.job_id) if build.job_id else None,
             "attempt_id": str(build.attempt_id) if build.attempt_id else None,
             "environment": {"id": str(build.environment_id), "revision_sha256": build.environment.revision_sha256,
@@ -114,6 +115,14 @@ def create_build(credential, document):
     _bootstrap(base)
     if str(base.id) not in policy.configuration["allowed_base_environment_ids"]:
         raise BrokerError("ENVIRONMENT_BASE_DENIED", "Bootstrap environment is outside build policy.", 403)
+    parent = None
+    if normalized.get("parent_environment") is not None:
+        reference = normalized["parent_environment"]
+        if not isinstance(reference, dict) or set(reference) != {"id", "revision_sha256"}:
+            raise ValueError("Invalid parent environment")
+        parent = project.environments.get(id=reference["id"], connection=base.connection, revision_sha256=reference["revision_sha256"])
+        if not EnvironmentBuild.objects.filter(environment=parent, spec__project=project, state="ready").exists():
+            raise BrokerError("ENVIRONMENT_PARENT_DENIED", "Only a verified managed environment can be revised.", 403)
     connection = project.connections.get(id=normalized["connection_id"], enabled=True)
     normalized["connection_revision_sha256"] = connection.revision_sha256
     sources = {row["filename"]: resolve_input_blob(credential, row) for row in normalized["requirements"]}
@@ -133,7 +142,7 @@ def create_build(credential, document):
         if cached and project.environments.filter(id=cached.environment_id, connection=connection).exists():
             return serialize(cached, cache_hit=True), 200
         build = EnvironmentBuild.objects.create(spec=spec, policy=policy, policy_revision=policy.revision,
-            policy_sha256=core.digest(policy.configuration), credential=credential)
+            policy_sha256=core.digest(policy.configuration), credential=credential, parent_environment=parent)
         reserve_metadata(project, "environment_build", build.id, 4096)
         core.audit(project, credential.id, "environment.build.created", build.id, {"spec_sha256": digest})
     return serialize(build), 201
@@ -187,6 +196,12 @@ def prepare_build(build, credential):
 
 
 def validate_dispatch(job, credential, attempt=None):
+    from .models import EnvironmentInspection
+    inspection = EnvironmentInspection.objects.filter(job=job).first()
+    if inspection:
+        core.bound_environment(inspection.project, job.request)
+        require_connection(credential, inspection.environment.connection_id)
+        return
     build = EnvironmentBuild.objects.select_related("spec__project", "spec__connection").get(job=job)
     _credential(credential, build.spec.project, execute=True)
     _current_build_policy(build)
@@ -201,6 +216,9 @@ def validate_admission(job, credential):
 
 
 def note_build_attempt(attempt):
+    from .models import EnvironmentInspection
+    if EnvironmentInspection.objects.filter(job=attempt.job).update(attempt=attempt, state=attempt.state):
+        return
     build = EnvironmentBuild.objects.select_for_update().get(job=attempt.job)
     if build.attempt_id not in (None, attempt.id):
         raise BrokerError("ENVIRONMENT_ATTEMPT_CHANGED", "Build already has another attempt.", 409)
@@ -225,6 +243,10 @@ def request_build(build, credential):
 
 
 def worker_lease_context(attempt):
+    from .models import EnvironmentInspection
+    inspection = EnvironmentInspection.objects.filter(job=attempt.job).first()
+    if inspection:
+        return {"inspection_id": str(inspection.id), "attempt_id": str(attempt.id), "generation": attempt.generation}
     build = EnvironmentBuild.objects.filter(job=attempt.job).first()
     if build is None:
         return {}
@@ -262,6 +284,15 @@ def _verify_finalization(build, attempt, finalization):
             raise ValueError("Build receipt exceeds storage limits")
     if not isinstance(receipt.get("python_version"), str) or not receipt["python_version"].startswith(receipt["python_major_minor"] + "."):
         raise ValueError("Unexpected created interpreter version")
+    if "runtime" in receipt:
+        from .inventory import validate_runtime
+        runtime = validate_runtime(receipt["runtime"])
+        if runtime["version"] != receipt["python_version"] or runtime["platform"] != receipt["platform_tag"] or runtime["truncated"]:
+            raise ValueError("Managed inventory is incomplete or inconsistent")
+        import re
+        packages = {re.sub(r"[-_.]+", "-", row["name"]).lower(): row["version"] for row in runtime["packages"]}
+        if any(packages.get(row["name"]) != row["version"] for row in build.spec.document["requirements"]):
+            raise ValueError("Installed packages differ from the approved request")
     if not isinstance(receipt.get("measured_at"), str) or datetime.fromisoformat(receipt["measured_at"]).utcoffset() is None:
         raise ValueError("Build measurements require an explicit timestamp")
     return receipt
@@ -313,10 +344,21 @@ def sync_attempt(attempt, finalization=None):
                         build.receipt = {**finalization, "receipt": receipt}
                         build.state, build.error_code = "ready", ""
                         core.audit(build.spec.project, "control", "environment.build.ready", build.id, {"environment_id": str(build.environment_id)})
+                        if build.policy.configuration.get("auto_permit_builds", False) and receipt.get("runtime"):
+                            try:
+                                _credential(build.credential, build.spec.project, execute=True)
+                                require_connection(build.credential, build.spec.connection_id)
+                            except BrokerError:
+                                build.error_code = "ENVIRONMENT_AUTO_PERMISSION_WITHDRAWN"
+                            else:
+                                _permit(build, "control")
         build.save()
 
 
 def after_report(attempt, report):
+    from .inspection import sync
+    if sync(attempt):
+        return
     finalization = report.get("environment_finalization")
     if finalization is not None:
         finalization = {**finalization, "generation": report.get("generation")}
@@ -338,6 +380,11 @@ def promote(build, user):
     human_permission(user, project, "project_admin")
     if build.state != "ready" or not build.environment_id:
         raise BrokerError("ENVIRONMENT_NOT_READY", "Only a verified real build can be permitted for jobs.", 409)
+    return _permit(build, user.id)
+
+
+def _permit(build, actor):
+    project = build.spec.project
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
         grant = Grant.objects.select_for_update().get(project=project)
@@ -347,5 +394,22 @@ def promote(build, user):
                             "allowed_environment_revision_sha256": [*allowed, build.environment.revision_sha256]}
             validate("project-policy.schema.json", grant.policy)
             grant.save(update_fields=["policy"])
-            core.audit(project, user.id, "environment.build.promoted", build.id, {"revision_sha256": build.environment.revision_sha256})
+            core.audit(project, actor, "environment.build.promoted", build.id, {"revision_sha256": build.environment.revision_sha256})
     return serialize(build)
+
+
+def environment_summary(environment, project):
+    from .inspection import latest, pending
+    inspection = latest(environment, project)
+    build = EnvironmentBuild.objects.filter(environment=environment, spec__project=project).first()
+    runtime = inspection.observation.get("runtime") if inspection else build.receipt.get("receipt", {}).get("runtime") if build else None
+    expected = build.receipt.get("receipt", {}).get("runtime", {}).get("fingerprint") if build else None
+    active = pending().filter(environment=environment, project=project).order_by("-created_at").first()
+    return {"status": "observed" if runtime else "inspection_required", "language": "python",
+        "python_version": runtime.get("version") if runtime else None, "package_count": runtime.get("package_count") if runtime else None,
+        "fingerprint": runtime.get("fingerprint") if runtime else None,
+        "observed_at": inspection.observed_at.isoformat() if inspection else build.receipt.get("receipt", {}).get("measured_at") if build else None,
+        "matches_managed_receipt": runtime["fingerprint"] == expected if runtime and expected else None,
+        "pending_inspection": {"id": str(active.id), "job_id": str(active.job_id) if active.job_id else None,
+            "state": active.state} if active else None,
+        "inspection_tool": "inspect_environment", "managed": build is not None}

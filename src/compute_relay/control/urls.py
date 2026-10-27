@@ -11,6 +11,7 @@ from . import live_updates
 from . import object_lookup
 from . import local_connectors
 from . import transfers
+from . import recovery, availability
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -45,6 +46,11 @@ urlpatterns = [
     path("clusters/<uuid:connection_id>/environments/new/", management.environment_new),
     path("api/v1/connections", views.connections),
     path("api/v1/context", views.project_context),
+    path("api/v1/projects/<uuid:project_id>/jobs", recovery.jobs),
+    path("api/v1/jobs/<uuid:job_id>/cancel-prepared", recovery.cancel_prepared),
+    path("api/v1/attempts/<uuid:attempt_id>/acknowledge-results", recovery.acknowledge),
+    path("api/v1/projects/<uuid:project_id>/availability", availability.availability),
+    path("internal/v1/connections/<uuid:connection_id>/availability-report", availability.report),
     path("api/v1/capabilities", views.capabilities),
     path("api/v1/projects/<uuid:project_id>/allowance", views.allowance),
     path("api/v1/projects/<uuid:project_id>/objects", views.objects),

@@ -27,7 +27,7 @@ DISCOVERY_COMPONENTS = (
 ENTRYPOINT = "entrypoint.py"
 ENVIRONMENT_COMPONENTS = ("prelude.py", "probes.py", "environment_shell.py", "environment_probe.py", ENTRYPOINT)
 _ALLOWED_COMPONENTS = frozenset((*COMMON_COMPONENTS, *JOB_COMPONENTS, *DISCOVERY_COMPONENTS, *ENVIRONMENT_COMPONENTS,
-    ENTRYPOINT, "batch_status.py", "stream_entrypoint.py"))
+    ENTRYPOINT, "batch_status.py", "stream_entrypoint.py", "availability.py"))
 
 
 def _component(name: str) -> str:
@@ -38,6 +38,8 @@ def _component(name: str) -> str:
 
 
 def component_names(kind: str) -> tuple[str, ...]:
+    if kind == "availability":
+        return (*COMMON_COMPONENTS, "availability.py", ENTRYPOINT)
     if kind == "jobs":
         return (*COMMON_COMPONENTS, *JOB_COMPONENTS, ENTRYPOINT)
     if kind == "discovery":
@@ -126,6 +128,8 @@ def _assemble(names: tuple[str, ...], dispatch: str, protocol: str, *, entrypoin
 
 def bundle_source(kind: str) -> str:
     names = component_names(kind)
+    if kind == "availability":
+        return _assemble(names, "def execute(config, request):\n    return availability(config, request)\n", "slurm-availability/v1")
     if kind in {"batch_status", "stream_jobs"}:
         dispatch = ("def execute(config, request):\n"
                     "    if request.get('operation') == 'observe_many':\n"

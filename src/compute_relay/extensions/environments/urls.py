@@ -3,6 +3,9 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path("api/v1/environments/<uuid:environment_id>/inventory", views.inventory),
+    path("api/v1/environments/<uuid:environment_id>/inspect", views.inspect),
+    path("api/v1/environments/<uuid:environment_id>/packages", views.packages),
     path("api/v1/projects/<uuid:project_id>/environment-builds", views.builds),
     path("api/v1/projects/<uuid:project_id>/environment-build-policy", views.policy_api),
     path("api/v1/environment-builds/<uuid:build_id>", views.detail),

@@ -37,7 +37,8 @@ class FacadeTests(unittest.TestCase):
         names = {tool.name for tool in tools}
         self.assertEqual(names, {"get_project_context", "get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
                                  "prepare_job", "revise_job", "request_execution", "get_job", "get_job_logs",
-                                 "list_job_artifacts", "get_job_artifact", "retry_job_outputs", "cancel_job_attempt", "cancel_execution_request"})
+                                 "list_job_artifacts", "get_job_artifact", "retry_job_outputs", "cancel_job_attempt", "cancel_execution_request",
+                                 "list_project_jobs", "acknowledge_job_results", "get_compute_availability", "cancel_prepared_job"})
         self.assertTrue(next(t for t in tools if t.name == "get_job").annotations.readOnlyHint)
 
     def test_project_is_resolved_from_authenticated_context(self):

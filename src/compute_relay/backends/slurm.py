@@ -222,3 +222,7 @@ class SlurmBackend:
         """Read-only scheduler discovery; never allocates compute resources."""
         response = self._call("discover")
         return parse_discovery(response, self.connection)
+
+    def availability(self):
+        from .availability import parse_availability
+        return parse_availability(self._call("availability"))

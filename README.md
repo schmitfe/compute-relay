@@ -81,6 +81,7 @@ The former multi-user server, LDAP, and PostgreSQL implementation is retained on
 | [Modules](docs/extensions.md) | Storage, environment builds, and workflows |
 | [Testing](docs/testing.md) | SQLite, package, and optional Slurm acceptance |
 | [Files and live output](docs/data-transfer.md) | Large uploads/downloads, interruption recovery, output collection retries, and following job logs |
+| [Agent recovery and availability](docs/agent-recovery.md) | Recover project jobs/results after restart and compare current cluster queue/hardware observations |
 
 ## License
 
