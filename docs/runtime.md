@@ -91,10 +91,13 @@ hide later management of running jobs.
 ## Local storage and metadata bounds
 
 Object storage and durable metadata have separate admission accounting. Current
-object defaults are 64 MiB per project, 256 MiB per installation and 1000 objects
+object defaults are 64 GiB per project, 256 GiB per installation and 1000 objects
 per project, including pending capacity in quota checks. Ordinary byte uploads
-are bounded to 512 KiB each; terminal output reports have a separate 10 MiB total
-artifact limit. Eight pending upload reservations per project are allowed.
+are bounded to 512 KiB each; the resumable data path supports 8 GiB per file and
+64 GiB per job in either direction. The legacy inline terminal report retains
+its 10 MiB artifact bound. Eight pending upload reservations per project are
+allowed. See [files and live output](data-transfer.md) for limits, recovery and
+incremental log semantics.
 
 Logical metadata charges default to 32 MiB per project and 256 MiB across the
 installation. Job request/manifests, idempotency responses and extension

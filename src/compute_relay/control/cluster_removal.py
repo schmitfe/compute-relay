@@ -1,6 +1,7 @@
 """Owner-confirmed archival of configuration; no scheduler or filesystem calls."""
 
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
@@ -22,8 +23,8 @@ def _active_configuration(registration=None, connection=None):
 
 
 def _busy(connection):
-    return connection is not None and Attempt.objects.filter(connection=connection).exclude(
-        accounting_state__in=["settled", "released"]).exists()
+    return connection is not None and Attempt.objects.filter(connection=connection).filter(
+        ~Q(accounting_state__in=["settled", "released"]) | Q(collection_pending=True)).exists()
 
 
 def _confirmation(request, registration=None, connection=None):
@@ -54,7 +55,7 @@ def _lock_connection(connection_id, owner):
 def _archive(owner, registration=None, connection=None, worker=None):
     _active_configuration(registration, connection)
     if _busy(connection):
-        raise BrokerError("CONNECTION_BUSY", "Finish or reconcile executions and their accounting before removing this cluster.", 409)
+        raise BrokerError("CONNECTION_BUSY", "Finish or reconcile executions, output collection and accounting before removing this cluster.", 409)
     if connection is not None:
         connection.archived, connection.enabled, connection.setup_complete = True, False, False
         connection.discovery_state, connection.discovery_error, connection.auth_state = "not_started", "", "removed"

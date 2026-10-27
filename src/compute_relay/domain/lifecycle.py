@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, NotRequired, TypedDict
 from uuid import UUID
+from compute_relay.transfer import FileReference, INLINE_BYTES, MAX_FILE_BYTES
 
 
 Operation = Literal["submit", "reconcile", "observe", "cancel"]
@@ -53,7 +54,7 @@ class PreparedWork:
     connection_id: str
     manifest: dict
     manifest_sha256: str
-    files: dict[str, bytes]
+    files: dict[str, bytes | FileReference]
 
     @classmethod
     def decode(cls, lease):
@@ -67,7 +68,14 @@ class PreparedWork:
         if manifest["request"]["connection_id"] != connection_id:
             raise ValueError("Package connection mismatch")
         files, size = {}, 0
+        if not isinstance(package["files"], dict) or len(package["files"]) > 110:
+            raise ValueError("Package exceeds worker file limit")
         for path, encoded in package["files"].items():
+            if isinstance(encoded, dict):
+                if set(encoded) != {"sha256", "size_bytes"} or type(encoded["size_bytes"]) is not int or not INLINE_BYTES < encoded["size_bytes"] <= MAX_FILE_BYTES:
+                    raise ValueError("Invalid streamed input descriptor")
+                files[path] = FileReference(**encoded)
+                continue
             if not isinstance(encoded, str) or len(encoded) > 140 * 1024 * 1024:
                 raise ValueError("File exceeds worker limit")
             content = base64.b64decode(encoded, validate=True)
@@ -170,6 +178,8 @@ def replay_result(record, lease, manifest_sha256, native):
     if native and saved.get("native_identity") and saved["native_identity"] != native:
         raise ValueError("Native identity changed after the durable report")
     same_lease = saved["lease_id"] == lease["id"] and saved["generation"] == lease["generation"]
+    if lease.get("collection_only") and not same_lease:
+        return None
     result = {key: deepcopy(value) for key, value in saved.items() if key not in {"lease_id", "generation"}}
     if same_lease:
         validate_report_outcome(lease["operation"], result["outcome"])

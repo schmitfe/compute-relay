@@ -73,7 +73,7 @@ def validate(schema_name, document):
                 raise ValueError("Reserved broker namespace")
             if path.count("/") > 16:
                 raise ValueError("Logical path nesting exceeds limit")
-        if sum(f["size_bytes"] for f in files.values()) > 256 * 1024 * 1024:
+        if sum(f["size_bytes"] for f in files.values()) > 64 * 1024**3:
             raise ValueError("Package too large")
 
 

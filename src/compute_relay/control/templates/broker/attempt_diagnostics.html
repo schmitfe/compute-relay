@@ -13,6 +13,8 @@
 <dt>Exit status (exit code:signal)</dt><dd>{{ diagnostics.exit_code|default:"Not reported" }}</dd>
 <dt>Broker error code</dt><dd>{{ diagnostics.error_code|default:"No broker error code recorded" }}</dd>
 <dt>Accounting</dt><dd>{{ diagnostics.accounting_state }}{% if diagnostics.accounting_final == True %} · Final usage reported{% elif diagnostics.accounting_final == False %} · Final usage not reported{% endif %}</dd>
+<dt>Output collection</dt><dd>{{ diagnostics.collection_state }}</dd>
+<dt>Last output activity</dt><dd>{{ diagnostics.log_updated_at|default:"No output received yet" }}</dd>
 <dt>Observation source</dt><dd>{{ diagnostics.source|default:"Not reported" }}</dd>
 <dt>Reported allocation</dt><dd>{{ diagnostics.allocated_cpus|default_if_none:"Unknown" }} CPUs · {{ diagnostics.allocated_gpus|default_if_none:"Unknown" }} GPUs · {{ diagnostics.elapsed_seconds|default_if_none:"Unknown" }} seconds</dd>
 <dt>Reported usage</dt><dd>{{ diagnostics.cpu_core_seconds|default_if_none:"Unknown" }} CPU-core seconds · {{ diagnostics.gpu_device_seconds|default_if_none:"Unknown" }} GPU-device seconds</dd>

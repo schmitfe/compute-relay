@@ -175,13 +175,18 @@ class AsyncWorker(Worker):
                         result = cancellation_result(cancelled, native, observation)
                     else:
                         result = {"outcome": "observed", "native_identity": native,
-                            "observation": await backend.observe(native, manifest=manifest)}
+                            "observation": lease["observation"] if lease.get("collection_only") else await backend.observe(native, manifest=manifest)}
                 await self._finish_observation(lease, work, native, backend, result)
                 record = report_record(lease, digest, result)
                 self.journal.write_report(attempt_id, record)
             await self.deliver_report(attempt_id, record)
 
     async def _finish_observation(self, lease, work, native, backend, result):
+        if native and result.get("outcome") in {"observed", "cancel_requested", "cancel_unknown"} and getattr(backend, "supports_live_logs", False) is True:
+            try:
+                result["log_chunks"] = await backend.read_logs(native, manifest=work.manifest, cursors=lease.get("log_cursors", {}))
+            except Exception:
+                pass
         if result.get("outcome") != "observed" or not terminal_observation(result.get("observation")):
             return
         manifest = work.manifest
@@ -194,10 +199,14 @@ class AsyncWorker(Worker):
         except Exception:
             result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
         try:
-            collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
-            result.update(self._serialized_collection(collected, manifest))
+            if getattr(backend, "supports_file_transfer", False) is True:
+                from .transfers import collect_outputs_async
+                result.update(await collect_outputs_async(self.client, backend, lease, native, manifest))
+            else:
+                collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
+                result.update(self._serialized_collection(collected, manifest), collection_state="complete")
         except Exception:
-            result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED")
+            result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
 
     async def _execute_observations(self, leases):
         contexts = []
@@ -236,11 +245,12 @@ class AsyncWorker(Worker):
                 return
             backend = self.backend_factory(contexts[0][3])
             pending = [{"native_identity": native, "manifest": work.manifest}
-                for _, work, native, _, result, _, _ in contexts if result is None]
+                for lease, work, native, _, result, _, _ in contexts if result is None and not lease.get("collection_only")]
             observed = await backend.observe_many(pending) if pending else {}
             for lease, work, native, _, result, renewal, item_lock in contexts:
                 if result is None:
-                    result = {"outcome": "observed", "native_identity": native, "observation": observed[native["attempt_id"]]}
+                    result = {"outcome": "observed", "native_identity": native,
+                        "observation": lease["observation"] if lease.get("collection_only") else observed[native["attempt_id"]]}
                 await self._finish_observation(lease, work, native, backend, result)
                 record = report_record(lease, work.manifest_sha256, result)
                 self.journal.write_report(work.attempt_id, record)
@@ -284,6 +294,8 @@ class AsyncWorker(Worker):
         if action == "reconcile":
             result = await backend.reconcile(attempt_id, manifest)
         else:
+            from .transfers import stage_inputs_async
+            await stage_inputs_async(self.client, backend, lease, manifest, files)
             confirmed = await self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/dispatch", {
                 "lease_id": lease["id"], "generation": lease["generation"], "manifest_sha256": digest,
                 "connection_revision_sha256": manifest["connection_revision_sha256"]})

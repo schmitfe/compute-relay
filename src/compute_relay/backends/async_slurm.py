@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from typing import Mapping, Sequence
 from uuid import UUID
+from compute_relay.transfer import FileReference
 
 from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
 from compute_relay.transports.openssh import TransportError
@@ -21,13 +22,13 @@ class AsyncSlurmBackend(SlurmBackend):
     async def _call(self, operation: str, **arguments) -> dict:
         return await self.transport.call_helper(helper_source(operation), self._request(operation, **arguments))
 
-    async def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes]) -> dict:
+    async def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes | FileReference]) -> dict:
         UUID(attempt_id)
         self._verify_binding(manifest)
         verify_package(manifest, sha256(canonical_json_bytes(manifest)), files)
         try:
             response = await self._call("submit", attempt_id=attempt_id, manifest=manifest,
-                files={path: base64.b64encode(data).decode("ascii") for path, data in files.items()})
+                files={path: None if isinstance(data, FileReference) else base64.b64encode(data).decode("ascii") for path, data in files.items()})
             return self._submission_result(response)
         except TransportError:
             return {"outcome": "submission_uncertain", "detail": "Transport failed; reconcile the existing attempt"}
@@ -83,6 +84,20 @@ class AsyncSlurmBackend(SlurmBackend):
         response = await self._call("collect", native_identity=native_identity, outputs=list(outputs), **self._management(manifest))
         artifacts = {path: base64.b64decode(data, validate=True) for path, data in response.pop("artifacts_base64", {}).items()}
         return {**response, "artifacts": artifacts}
+
+    async def stage_input(self, attempt_id, manifest, path, **chunk):
+        self._verify_binding(manifest)
+        return await self._call("stage_input", attempt_id=attempt_id, manifest=manifest, path=path, **chunk)
+
+    async def read_logs(self, native_identity, *, manifest, cursors):
+        return await self._call("logs", native_identity=native_identity, cursors=cursors, **self._management(manifest))
+
+    async def output_manifest(self, native_identity, *, manifest):
+        return await self._call("output_manifest", native_identity=native_identity, **self._management(manifest))
+
+    async def output_chunk(self, native_identity, *, manifest, path, offset, version):
+        return await self._call("output_chunk", native_identity=native_identity, path=path, offset=offset,
+            version=version, **self._management(manifest))
 
     async def discover(self) -> dict:
         return parse_discovery(await self._call("discover"), self.connection)

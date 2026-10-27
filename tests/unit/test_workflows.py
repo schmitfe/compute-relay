@@ -335,3 +335,25 @@ def test_cancellation_completion_is_refreshed_by_worker_without_status_get(workf
     services.before_lease(context.worker)
     run.refresh_from_db()
     assert run.state == "cancelled"
+
+
+def test_producer_output_recovery_keeps_consumer_waiting(workflow_broker):
+    context = workflow_broker
+    budgeted(context)
+    run = start(context)
+    services.advance(run)
+    producer = run.nodes.get(key="simulate")
+    attempt = finish(context, producer, output=False)
+    Attempt.objects.filter(id=attempt.id).update(collection_pending=True, collection_state="retry_pending")
+    waiting = services.advance(run)
+    assert next(node for node in waiting["nodes"] if node["key"] == "simulate")["state"] == "awaiting_outputs"
+    consumer = run.nodes.get(key="analyze")
+    assert consumer.job_id is None and consumer.state != "blocked_artifact"
+    Attempt.objects.filter(id=attempt.id).update(collection_pending=False, collection_state="complete")
+    from compute_relay.control.models import Artifact
+    from compute_relay.control.storage import store_blob
+    blob = store_blob(context.project, b'{"mean": 0.25}\n')
+    Artifact.objects.create(attempt=attempt, path="summary.json", blob=blob)
+    services.advance(run)
+    consumer.refresh_from_db()
+    assert consumer.job_id is not None

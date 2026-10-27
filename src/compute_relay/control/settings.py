@@ -52,8 +52,11 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 16 * 1024 * 1024  # Public requests have a separat
 FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024
 ARTIFACT_ROOT = Path(os.environ.get("BROKER_ARTIFACT_ROOT", DATA_DIR / "objects")).resolve()
 MAX_UPLOAD_BYTES = 512 * 1024
-PROJECT_STORAGE_LIMIT = 64 * 1024 * 1024
-GLOBAL_STORAGE_LIMIT = 256 * 1024 * 1024
+MAX_TRANSFER_BYTES = int(os.environ.get("BROKER_MAX_TRANSFER_BYTES", 8 * 1024**3))
+PROJECT_STORAGE_LIMIT = int(os.environ.get("BROKER_PROJECT_STORAGE_LIMIT", 64 * 1024**3))
+GLOBAL_STORAGE_LIMIT = int(os.environ.get("BROKER_GLOBAL_STORAGE_LIMIT", 256 * 1024**3))
+if not 1 <= MAX_TRANSFER_BYTES <= 8 * 1024**3 or min(PROJECT_STORAGE_LIMIT, GLOBAL_STORAGE_LIMIT) < 1:
+    raise ImproperlyConfigured("Storage quotas must be positive and the per-file transfer limit must not exceed 8 GiB")
 MAX_OBJECTS = 1000
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Strict"

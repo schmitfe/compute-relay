@@ -21,6 +21,7 @@ from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Conn
                      JobFile, LedgerEntry, Project, ProjectCredential, WorkerReport, User,
                      WorkerIdentity)
 from .storage import read_blob, store_blob
+from compute_relay.transfer import FileReference, INLINE_BYTES
 
 TERMINAL = {"succeeded", "failed", "cancelled", "expired"}
 DEFAULT_MAX_TOTAL_JOBS = 1000
@@ -178,7 +179,9 @@ def prepare_job(job):
             descriptors = {f["path"]: f for f in result["manifest"]["files"]}
             for path, blob in generated.items():
                 JobFile.objects.create(job=current, path=path, blob=blob, executable=descriptors[path]["executable"], source_kind="generated")
-            files = {entry.path: read_blob(entry.blob) for entry in current.files.select_related("blob")}
+            files = {entry.path: FileReference(entry.blob.sha256, entry.blob.size_bytes)
+                if entry.blob.size_bytes > INLINE_BYTES else read_blob(entry.blob)
+                for entry in current.files.select_related("blob")}
             verify_package(result["manifest"], result["manifest_sha256"], files)
             validate("prepared-job.schema.json", result["manifest"])
             current.manifest = result["manifest"]
@@ -420,6 +423,7 @@ def serialize_attempt(attempt):
     return {"id": str(attempt.id), "execution_request_id": str(attempt.execution_request_id),
         "state": attempt.state, "accounting_state": attempt.accounting_state,
         "native_identity": attempt.native_identity, "error_code": attempt.error_code,
+        "collection_state": attempt.collection_state,
         "native_state": diagnostics["native_state"], "exit_code": diagnostics["exit_code"],
         "accounting": {"final": final, "cpu_core_seconds": cpu, "gpu_device_seconds": gpu,
             "elapsed_seconds": diagnostics["elapsed_seconds"],
@@ -465,7 +469,9 @@ def serialize_job(job, *, package=False):
     if package or job.manifest:
         result["manifest"] = job.manifest
     if package:
-        result["files"] = [{"path": entry.path, "sha256": entry.blob.sha256, "size_bytes": entry.blob.size_bytes, "text": read_blob(entry.blob).decode("utf-8", errors="replace")} for entry in job.files.select_related("blob").order_by("path")]
+        result["files"] = [{"path": entry.path, "sha256": entry.blob.sha256, "size_bytes": entry.blob.size_bytes,
+            "text": read_blob(entry.blob).decode("utf-8", errors="replace") if entry.blob.size_bytes <= 1024 * 1024 else None}
+            for entry in job.files.select_related("blob").order_by("path")]
     return result
 
 
@@ -480,7 +486,8 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observa
         & (Q(job__extension_name="") | Q(job__extension_name__in=enabled_extensions)))
     with transaction.atomic():
         candidates = (Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection")
-            .filter(connection__worker=worker, next_poll_at__lte=now).exclude(accounting_state__in=["settled", "released"])
+            .filter(connection__worker=worker, next_poll_at__lte=now)
+            .filter(~Q(accounting_state__in=["settled", "released"]) | Q(collection_pending=True))
             .exclude(id__in=exclude_attempt_ids)
             .filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now))
             .filter(management if management_only else management | submission)
@@ -527,7 +534,8 @@ def _lease_size_bound(attempt, entries):
     metadata = json.dumps({"manifest": attempt.job.manifest, "configuration": attempt.connection.configuration,
         "native_identity": attempt.native_identity}, ensure_ascii=True)
     context = 6 * 65536 if attempt.job.extension_name else 0
-    return len(metadata) + context + 4096 + sum(4 * ((item.blob.size_bytes + 2) // 3) + 6 * len(item.path) + 32 for item in entries)
+    return len(metadata) + context + 4096 + sum((128 if item.blob.size_bytes > INLINE_BYTES
+        else 4 * ((item.blob.size_bytes + 2) // 3)) + 6 * len(item.path) + 128 for item in entries)
 
 
 def _lease_attempt(attempt, entries, now):
@@ -544,10 +552,16 @@ def _lease_attempt(attempt, entries, now):
     attempt.lease_deadline_at = now + timedelta(seconds=MAX_LEASE_LIFETIME_SECONDS)
     attempt.operation = operation
     attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation"])
-    files = {item.path: base64.b64encode(read_blob(item.blob)).decode("ascii") for item in entries}
+    files = {item.path: {"sha256": item.blob.sha256, "size_bytes": item.blob.size_bytes}
+        if item.blob.size_bytes > INLINE_BYTES else base64.b64encode(read_blob(item.blob)).decode("ascii") for item in entries}
     lease = {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation,
         "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration,
         "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
+    lease["log_cursors"] = {stream: {"cursor": value.get("next_cursor", 0), "file_id": value.get("file_id")}
+        for stream, value in attempt.log_state.items() if stream in {"stdout", "stderr"}}
+    if attempt.collection_pending and attempt.accounting_state in {"settled", "released"}:
+        lease["collection_only"] = True
+        lease["observation"] = attempt.observation
     if attempt.job.extension_name in control_names():
         from compute_relay.extensions import job_hook
         context = job_hook(attempt.job, "worker_lease_context", attempt)
@@ -760,14 +774,37 @@ def report(worker, attempt_id, data):
                 if not isinstance(value, str) or len(value.encode("utf-8")) > 65536:
                     raise BrokerError("LOG_LIMIT", "Logs exceed the bounded report limit.", 413)
                 setattr(attempt, field, value)
+        if "log_chunks" in data:
+            from .progress import apply_logs
+            apply_logs(attempt, data["log_chunks"])
+        if "collection_state" in data:
+            if data["collection_state"] not in {"complete", "failed"} or not terminal_observation(attempt.observation):
+                raise BrokerError("INVALID_REPORT", "Collection status requires a terminal observation.", 409)
+            attempt.collection_state = data["collection_state"]
+            attempt.collection_pending = False
+            if attempt.collection_state == "complete":
+                if not storage_failed:
+                    attempt.collection_failures = 0
+            else:
+                attempt.collection_failures += 1
+                attempt.collection_pending = attempt.collection_failures < 3
+                if attempt.collection_pending:
+                    attempt.collection_state = "retry_pending"
+            if attempt.collection_state == "complete" and attempt.error_code in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_STORAGE_UNAVAILABLE", "OUTPUT_MISSING"}:
+                attempt.error_code = ""
         for path, blob in artifacts.items():
             existing, created = Artifact.objects.get_or_create(attempt=attempt, path=path, defaults={"blob": blob})
             if not created and existing.blob_id != blob.id:
                 raise BrokerError("ARTIFACT_CHANGED", "Final artifact bytes changed.", 409)
         if attempt.error_code != "OBSERVED_OVERAGE" and outcome not in {"cancel_unknown", "cancel_identity_mismatch"}:
             attempt.error_code = data.get("error_code", attempt.error_code)[:80]
-        if storage_failed and attempt.error_code != "OBSERVED_OVERAGE":
-            attempt.error_code = "OUTPUT_STORAGE_UNAVAILABLE"
+        if storage_failed:
+            if attempt.error_code != "OBSERVED_OVERAGE":
+                attempt.error_code = "OUTPUT_STORAGE_UNAVAILABLE"
+            if data.get("collection_state") != "failed":
+                attempt.collection_failures += 1
+            attempt.collection_pending = attempt.collection_failures < 3
+            attempt.collection_state = "retry_pending" if attempt.collection_pending else "failed"
         attempt.lease_expires_at = None
         delay = 10 if attempt.state == "submission_uncertain" or attempt.accounting_state == "settlement_pending" else 2
         if outcome == "observed" and attempt.state in {"queued", "running"}:
@@ -776,11 +813,15 @@ def report(worker, attempt_id, data):
             # post-submit check. Queue age still prevents dispatch starvation.
             live = Attempt.objects.filter(connection__worker=worker).exclude(accounting_state__in=["settled", "released"]).count()
             ceiling = min(60, max(5, live // 2))
+            if attempt.state == "running":
+                ceiling = min(ceiling, 5)
             delay = min(ceiling, 2 ** min(attempt.generation, 6))
         if outcome == "cancel_unknown":
             delay = 30 if previous_cancel_error == "CANCEL_UNCONFIRMED" else 5
         elif outcome == "cancel_identity_mismatch":
             delay = 60
+        if attempt.collection_pending and attempt.accounting_state in {"settled", "released"}:
+            delay = 15 * max(1, attempt.collection_failures)
         if (attempt.cancel_requested and attempt.native_identity and outcome in {"submitted", "observed"}
                 and attempt.error_code != "CANCEL_IDENTITY_MISMATCH"):
             delay = 0  # A cancellation arriving during observation must not inherit its backoff.

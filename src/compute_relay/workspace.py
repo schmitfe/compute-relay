@@ -16,12 +16,12 @@ from compute_relay.domain.validation import relative_path, strict_json, validate
 from compute_relay.mcp.setup import (_absolute_path, _broker_url, _check_path, _ensure_directory,
     _parent_descriptor, _read_regular, _validate_key)
 from compute_relay.worker.client import ControlError, JsonClient
+from compute_relay.transfer import CHUNK_BYTES, INLINE_BYTES, MAX_FILE_BYTES, MAX_BUNDLE_BYTES, fingerprint
 
 
 MAX_SOURCE_BYTES = 1024 * 1024
-MAX_BUNDLE_BYTES = 16 * 1024 * 1024
-MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
-MAX_RESULT_BYTES = 50 * 1024 * 1024
+MAX_ARTIFACT_BYTES = MAX_FILE_BYTES
+MAX_RESULT_BYTES = MAX_BUNDLE_BYTES
 PRIVATE_NAMES = {".compute-relay", ".compute-relay-receipt.json", ".git", ".codex", ".claude", ".ssh", ".aws", "_broker"}
 
 
@@ -149,17 +149,65 @@ class WorkspaceClient:
         from compute_relay.mcp.facade import ProjectFacade
         return ProjectFacade.from_credential(self.client)
 
+    @contextmanager
+    def _open_large_source(self, name):
+        path = self.root / _logical(name)
+        _check_path(path)
+        with _parent_descriptor(path) as parent:
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            with os.fdopen(descriptor, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_FILE_BYTES:
+                    raise ValueError("Select an ordinary file within the transfer limit.")
+                yield stream, before
+                after = os.fstat(stream.fileno())
+                selected = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+                def identity(info):
+                    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+                if identity(before) != identity(after) or identity(before) != identity(selected):
+                    raise ValueError("A source file changed during transfer.")
+
+    def _upload_large(self, project_id, entry):
+        endpoint = f"/api/v1/projects/{project_id}/transfers"
+        receipt = self.client.request("POST", endpoint, {field: entry[field] for field in ("sha256", "size_bytes")})
+        with self._open_large_source(entry["path"]) as (stream, info):
+            if info.st_size != entry["size_bytes"]:
+                raise ValueError("Source changed after staging.")
+            while not receipt.get("complete"):
+                offset = receipt["offset"]
+                if type(offset) is not int or not 0 <= offset <= entry["size_bytes"]:
+                    raise ValueError("Invalid upload resume offset.")
+                stream.seek(offset)
+                content = stream.read(min(CHUNK_BYTES, entry["size_bytes"] - offset))
+                if len(content) != min(CHUNK_BYTES, entry["size_bytes"] - offset):
+                    raise ValueError("Source changed during transfer.")
+                receipt = self.client.request("POST", endpoint + "/" + str(UUID(receipt["transfer_id"])),
+                    {"offset": offset, "content_base64": base64.b64encode(content).decode("ascii"),
+                     "finish": offset + len(content) == entry["size_bytes"]})
+                if receipt.get("offset") != offset + len(content):
+                    raise ValueError("Upload acknowledgement changed the offset.")
+        if receipt.get("sha256") != entry["sha256"] or receipt.get("size_bytes") != entry["size_bytes"]:
+            raise ValueError("Upload failed receipt verification.")
+
     def stage(self, paths):
         if (not isinstance(paths, list) or not 1 <= len(paths) <= 100
                 or any(not isinstance(path, str) for path in paths) or len(set(paths)) != len(paths)):
             raise ValueError("Choose between one and 100 distinct source files.")
         sources, total = [], 0
         for name in paths:
-            content, executable = self._source(name)
-            total += len(content)
+            _logical(name)
+            if (self.root / name).lstat().st_size <= INLINE_BYTES:
+                content, executable = self._source(name)
+                digest, size = _digest(content), len(content)
+            else:
+                with self._open_large_source(name) as (stream, info):
+                    digest, size = fingerprint(stream)
+                    executable = bool(info.st_mode & 0o111)
+                content = None
+            total += size
             if total > MAX_BUNDLE_BYTES:
-                raise ValueError("The source bundle exceeds 16 MiB.")
-            sources.append(({"path": name, "sha256": _digest(content), "size_bytes": len(content),
+                raise ValueError("The source bundle exceeds the transfer limit.")
+            sources.append(({"path": name, "sha256": digest, "size_bytes": size,
                              "executable": executable}, content))
         facade = self._facade()
         unique = {(entry["sha256"], entry["size_bytes"]) for entry, _ in sources}
@@ -180,6 +228,11 @@ class WorkspaceClient:
         for entry, content in sources:
             identity = (entry["sha256"], entry["size_bytes"])
             if identity in known:
+                continue
+            if content is None:
+                self._upload_large(facade.project_id, entry)
+                known.add(identity)
+                uploaded += 1
                 continue
             receipt = self.client.request("POST", f"/api/v1/projects/{facade.project_id}/objects",
                 {"path": entry["path"], "content_base64": base64.b64encode(content).decode("ascii")})
@@ -238,7 +291,7 @@ class WorkspaceClient:
         key = idempotency_key or "bundle-prepare:" + _digest(_encoded(facade.project_request(request)))
         return facade.prepare_job(request, idempotency_key=key)
 
-    def fetch(self, attempt_id, output):
+    def fetch(self, attempt_id, output, *, resume=False):
         attempt_id = str(UUID(attempt_id))
         output = _logical(output)
         response = self.client.request("GET", f"/api/v1/attempts/{attempt_id}/artifacts")
@@ -257,30 +310,84 @@ class WorkspaceClient:
             total += size
             selected.append({"id": identity, "path": path, "sha256": digest, "size_bytes": size})
         if total > MAX_RESULT_BYTES:
-            raise ValueError("The result bundle exceeds 50 MiB.")
+            raise ValueError("The result bundle exceeds the transfer limit.")
         paths = {entry["path"] for entry in selected}
         if any("/".join(path.split("/")[:index]) in paths for path in paths for index in range(1, len(path.split("/")))):
             raise ValueError("Artifact file and directory paths conflict.")
         destination = self.root / output
         _check_path(destination, directory=True)
-        if destination.exists():
+        if destination.exists() and not resume:
             raise ValueError("Choose a new result directory; existing paths are never overwritten.")
         _ensure_directory(destination.parent, [])
         with _parent_descriptor(destination) as parent:
-            os.mkdir(destination.name, 0o700, dir_fd=parent)
+            if not destination.exists():
+                os.mkdir(destination.name, 0o700, dir_fd=parent)
             os.fsync(parent)
             with _directory(parent, destination.name) as folder:
+                plan = _encoded({"attempt_id": attempt_id, "files": selected})
+                if resume:
+                    try:
+                        saved = _read_published(folder, ".compute-relay-fetch.json", 1024 * 1024)
+                    except FileNotFoundError:
+                        if os.listdir(folder):
+                            raise ValueError("Resume requires this attempt's matching transfer plan.") from None
+                    else:
+                        if saved != plan:
+                            raise ValueError("Result inventory changed; use a new destination.")
+                _write_relative(folder, ".compute-relay-fetch.json", plan, accept_identical=True)
                 for entry in selected:
+                    if entry["size_bytes"] > 10 * 1024 * 1024 or resume:
+                        self._fetch_chunks(folder, entry)
+                        continue
                     content, _ = self.client.get_bytes(f"/api/v1/artifacts/{entry['id']}/content", max(1, entry["size_bytes"]))
                     if len(content) != entry["size_bytes"] or _digest(content) != entry["sha256"]:
                         raise ValueError("An artifact failed checksum verification. No success receipt was written.")
                     _write_relative(folder, entry["path"], content)
                 receipt = {"schema_version": "1.0", "attempt_id": attempt_id, "integrity": "verified",
                     "scientific_validation": "not_checked", "files": selected}
-                _write_relative(folder, ".compute-relay-receipt.json", _encoded(receipt))
+                _write_relative(folder, ".compute-relay-receipt.json", _encoded(receipt), accept_identical=resume)
         return {"attempt_id": attempt_id, "directory": output, "integrity": "verified", "file_count": len(selected),
                 "size_bytes": total, "receipt": output + "/.compute-relay-receipt.json",
                 "scientific_validation": "not_checked"}
+
+    def _fetch_chunks(self, directory, entry):
+        parts = entry["path"].split("/")
+        if len(parts) > 1:
+            with _directory(directory, parts[0], create=True) as child:
+                return self._fetch_chunks(child, {**entry, "path": "/".join(parts[1:])})
+        name = parts[0]
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        except FileNotFoundError:
+            fd = None
+        if fd is not None:
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or fingerprint(stream) != (entry["sha256"], entry["size_bytes"]):
+                    raise ValueError("Existing result failed integrity verification.")
+            return
+        temporary = ".relay-part-" + entry["id"]
+        fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+        with os.fdopen(fd, "r+b") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > entry["size_bytes"]:
+                raise ValueError("Invalid partial result.")
+            offset = info.st_size
+            stream.seek(offset)
+            while offset < entry["size_bytes"]:
+                content, _ = self.client.get_bytes(f"/api/v1/artifacts/{entry['id']}/content?offset={offset}", CHUNK_BYTES)
+                if len(content) != min(CHUNK_BYTES, entry["size_bytes"] - offset):
+                    raise ValueError("Incomplete result chunk.")
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+                offset += len(content)
+            stream.seek(0)
+            if fingerprint(stream) != (entry["sha256"], entry["size_bytes"]):
+                raise ValueError("Result failed checksum verification; no success receipt was written.")
+        os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+        os.unlink(temporary, dir_fd=directory)
+        os.fsync(directory)
 
 
 def register_commands(subparsers):
@@ -296,7 +403,16 @@ def register_commands(subparsers):
     fetch = actions.add_parser("fetch", help="Download retained artifacts into a new workspace directory")
     fetch.add_argument("--attempt-id", required=True)
     fetch.add_argument("--output", required=True)
-    for parser in (stage, prepare, fetch):
+    fetch.add_argument("--resume", action="store_true", help="Resume this attempt's verified partial transfer")
+    retry = actions.add_parser("retry", help="Recover declared outputs without rerunning the workload")
+    retry.add_argument("--attempt-id", required=True)
+    logs = subparsers.add_parser("logs", help="Read or follow a job's live output")
+    logs.add_argument("--attempt-id", required=True)
+    logs.add_argument("--stream", choices=("stdout", "stderr", "both"), default="both")
+    logs.add_argument("--follow", action="store_true")
+    logs.add_argument("--cursor", type=int, default=0)
+    logs.set_defaults(file_action="logs")
+    for parser in (stage, prepare, fetch, retry, logs):
         parser.add_argument("--directory", default=".")
         parser.set_defaults(run=main)
 
@@ -316,8 +432,13 @@ def main(args):
             result = workspace.stage(paths)
         elif args.file_action == "prepare":
             result = workspace.prepare(args.bundle, args.request, idempotency_key=args.idempotency_key)
+        elif args.file_action == "retry":
+            result = workspace.client.request("POST", f"/api/v1/attempts/{UUID(args.attempt_id)}/collect", {})
+        elif args.file_action == "logs":
+            follow_logs(workspace, args)
+            return
         else:
-            result = workspace.fetch(args.attempt_id, args.output)
+            result = workspace.fetch(args.attempt_id, args.output, resume=args.resume)
     except ControlError as error:
         raise SystemExit(f"Workspace transfer failed: {error.code}" + (f" (HTTP {error.status})" if error.status else "")) from None
     except Exception:
@@ -325,3 +446,43 @@ def main(args):
         # or paths. Keep the CLI output independent of their exception strings.
         raise SystemExit("Workspace operation failed. Check the selected files, private setup, limits and destination. A failed download can leave verified partial output; choose a new destination when retrying.") from None
     print(json.dumps(result, sort_keys=True))
+
+
+def follow_logs(workspace, args):
+    import codecs
+    import sys
+    import time
+    facade = workspace._facade()
+    streams = ("stdout", "stderr") if args.stream == "both" else (args.stream,)
+    cursors = {stream: args.cursor for stream in streams}
+    decoders = {stream: codecs.getincrementaldecoder("utf-8")("replace") for stream in streams}
+    identities = {}
+    try:
+        while True:
+            finished = True
+            for stream in streams:
+                packet = facade.get_job_logs(args.attempt_id, stream, cursors[stream], 65536)
+                replaced = stream in identities and identities[stream] != packet.get("file_id")
+                if packet.get("reset") or replaced:
+                    decoders[stream].reset()
+                    print(f"[{stream}: log restarted]", file=sys.stderr)
+                    if replaced and not packet.get("reset"):
+                        packet = facade.get_job_logs(args.attempt_id, stream, 0, 65536)
+                identities[stream] = packet.get("file_id")
+                if packet.get("truncated"):
+                    print(f"[{stream}: earlier bytes are outside the retained log window]", file=sys.stderr)
+                content = base64.b64decode(packet["content_base64"], validate=True)
+                target = sys.stderr if stream == "stderr" else sys.stdout
+                target.write(decoders[stream].decode(content))
+                target.flush()
+                cursors[stream] = packet["next_cursor"]
+                finished = finished and packet.get("finished", False) and packet["eof"]
+            if not args.follow or finished:
+                for stream in streams:
+                    target = sys.stderr if stream == "stderr" else sys.stdout
+                    target.write(decoders[stream].decode(b"", final=True))
+                    target.flush()
+                return
+            time.sleep(2)
+    except KeyboardInterrupt:
+        return

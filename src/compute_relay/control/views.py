@@ -11,6 +11,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.http import HttpResponse, JsonResponse
+from django.http.response import HttpResponseBase
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt, csrf_protect, ensure_csrf_cookie
 from django.views.decorators.debug import sensitive_post_parameters
@@ -36,7 +37,7 @@ def boundary(*methods, exempt=True):
                 response = fn(request, *args, **kwargs)
                 if isinstance(response, tuple):
                     return JsonResponse(response[0], status=response[1])
-                return response if isinstance(response, HttpResponse) else JsonResponse(response)
+                return response if isinstance(response, HttpResponseBase) else JsonResponse(response)
             except BrokerError as exc:
                 return JsonResponse({"error": {"code": exc.code, "message": exc.message, "details": exc.details}}, status=exc.status)
             except ObjectDoesNotExist:
@@ -250,11 +251,8 @@ def logs(request, attempt_id):
         limit = int(request.GET.get("limit", "65536"))
         if stream not in {"stdout", "stderr"} or not 0 <= cursor <= 2**53 - 1 or not 1 <= limit <= 65536:
             raise BrokerError("INVALID_REQUEST", "Invalid log stream, cursor or limit.")
-        content = getattr(attempt, stream).encode("utf-8")
-        chunk = content[cursor:cursor + limit]
-        return {"stream": stream, "content_base64": base64.b64encode(chunk).decode("ascii"),
-                "text": chunk.decode("utf-8", errors="replace"), "cursor": cursor,
-                "next_cursor": min(len(content), cursor + len(chunk)), "eof": cursor + len(chunk) >= len(content)}
+        from .progress import log_window
+        return log_window(attempt, stream, cursor, limit)
     return {"stdout": attempt.stdout, "stderr": attempt.stderr}
 
 
@@ -270,6 +268,19 @@ def artifact_content(request, artifact_id):
     credential, _ = scope(request, "artifacts:read")
     artifact = Artifact.objects.select_related("blob").get(id=artifact_id, attempt__job__project=credential.project)
     require_connection(credential, artifact.attempt.connection_id)
+    if "offset" in request.GET:
+        from .storage import blob_chunk
+        response = HttpResponse(blob_chunk(artifact.blob, int(request.GET["offset"])), content_type="application/octet-stream")
+        response["X-Content-SHA256"] = artifact.blob.sha256
+        response["Cache-Control"] = "no-store, private"
+        return response
+    if artifact.blob.size_bytes > 10 * 1024 * 1024:
+        from django.http import FileResponse
+        from .storage import blob_path, verify_blob
+        verify_blob(artifact.blob)
+        import os
+        fd = os.open(blob_path(artifact.blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        return FileResponse(os.fdopen(fd, "rb"), as_attachment=True, filename="artifact.bin")
     response = HttpResponse(read_blob(artifact.blob), content_type="application/octet-stream")
     response["Content-Disposition"] = 'attachment; filename="artifact.bin"'
     return response
@@ -320,6 +331,9 @@ def capabilities(request):
     credential, _ = scope(request, "jobs:read")
     from compute_relay.extensions import control_names
     return {"api_version": "1.0", "mcp_transports": ["stdio"],
+            "file_transfer": {"protocol": "chunked-sha256/v1", "chunk_bytes": 1024 * 1024,
+                "max_file_bytes": settings.MAX_TRANSFER_BYTES, "resumable": True},
+            "live_logs": {"cursor_unit": "bytes", "retained_bytes_per_stream": 65536, "gaps_reported": True},
             "enabled_extensions": list(control_names()), "scopes": credential.scopes}
 
 

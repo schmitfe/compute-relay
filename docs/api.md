@@ -8,7 +8,7 @@ The initial application API is `/api/v1`. It uses JSON, strict unknown-field rej
 
 Project tokens authenticate machine clients. Human sessions authenticate approval and administration; all browser mutations require CSRF protection. Worker identities authenticate only the internal lease/report API. The server resolves actor and project from verified credentials, never from a caller-supplied actor field. A `project_id` in a body must match the credential's project, and every referenced object must be authorized. Object IDs, digests and native Slurm IDs are not bearer capabilities.
 
-Unknown fields fail validation rather than being silently ignored. Content types are allowlisted. Duplicate JSON keys, nonfinite numbers, invalid UTF-8 and unpaired surrogates fail before hashing/validation. Default request JSON cap: 1 MiB. Files upload individually with a 100 MiB per-file and 256 MiB per-package cap, at most 100 source files and 100 exact output paths. Installation administrators can narrow limits; expanding the protocol caps requires a versioned change and tests.
+Unknown fields fail validation rather than being silently ignored. Content types are allowlisted. Duplicate JSON keys, nonfinite numbers, invalid UTF-8 and unpaired surrogates fail before hashing/validation. Implemented public JSON boundaries are normally 2 MiB. The `chunked-sha256/v1` data path supports 8 GiB per file and 64 GiB per job, at most 100 source files and 100 exact output paths; individual decoded chunks are at most 1 MiB. The inline object endpoint remains limited to 512 KiB. Installation administrators can narrow limits. See [large files and live output](data-transfer.md).
 
 ## Application endpoints
 
@@ -21,6 +21,8 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `POST /api/v1/connections/{id}/refresh` | Human connection owner/admin | Queue bounded discovery; agents read cached snapshots rather than flood schedulers |
 | `POST /api/v1/projects/{id}/objects` | Upload scope | Stream one regular file; return immutable digest/size descriptor after verification |
 | `POST /api/v1/projects/{id}/objects/lookup` | `objects:write` | Implemented bounded content lookup; at most 100 SHA-256/size pairs, only this project's verified stored objects, no source bytes or foreign existence disclosure |
+| `POST /api/v1/projects/{id}/transfers` | `objects:write` | Reserve or resume a hash/size-bound upload; return transfer ID and received offset, or an already authorized complete receipt |
+| `POST /api/v1/projects/{id}/transfers/{transfer}` | `objects:write` | Receive one offset/base64 chunk; `finish=true` verifies full size/SHA-256 before publishing and granting independent input authority |
 | `POST /api/v1/jobs` | `jobs:submit` | Create immutable revision from the job-request schema; does not execute |
 | `POST /api/v1/jobs/{id}/prepare` | `jobs:submit` | Queue preparation; return `202` with operation ID and job link |
 | `GET /api/v1/jobs/{id}` | `jobs:read` | Preparation, decision, attempt and accounting states, safe explanation/actions |
@@ -31,6 +33,7 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `POST /api/v1/attempts/{id}/cancel` | `jobs:cancel` | Idempotent cancellation request; does not imply scheduler confirmation or refund |
 | `POST /api/v1/jobs/{job}/execution-requests/{request}/cancel` | `jobs:cancel` | Release an unapproved request's hold, or request safe cancellation of its admitted attempt |
 | `GET /api/v1/attempts/{id}/logs` | `jobs:read` | Bounded UTF-8-safe stdout/stderr slices, cursor and truncation flags |
+| `POST /api/v1/attempts/{id}/collect` | `jobs:write` | Retry declared output collection after native completion, preserving execution and settled accounting |
 | `GET /api/v1/attempts/{id}/artifacts` | `artifacts:read` | Authorized registered outputs, hashes, sizes, retention and download links |
 | `GET /api/v1/artifacts/{id}/content` | `artifacts:read` | Project-authorized download/range; no arbitrary filesystem path |
 | `POST /api/v1/projects/{id}/credentials` | Human project admin | Generate scoped token once; store only its hash, independent display identifier and metadata |
@@ -145,6 +148,7 @@ Local stdio MCP is a facade under the agent account calling the authenticated se
 | `request_execution` | `jobs:submit` | Request human review or deterministic budgeted admission |
 | `get_job` | `jobs:read` | States, rejection comment, attempt identity and next actions |
 | `get_job_logs` | `jobs:read` | Bounded log slices |
+| `retry_job_outputs` | `jobs:write` | Recover a finished attempt's declared outputs without rerunning compute |
 | `list_job_artifacts` | `artifacts:read` | Registered outputs only |
 | `get_job_artifact` | `artifacts:read` | Bounded text/structured data or authorized download reference |
 | `cancel_job_attempt` | `jobs:cancel` | Cancel one owned managed attempt |

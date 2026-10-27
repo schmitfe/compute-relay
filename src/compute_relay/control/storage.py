@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from .errors import BrokerError
 from .models import Blob, Project, StoragePool, UploadGrant, UploadReservation
+from compute_relay.transfer import CHUNK_BYTES, fingerprint
 
 
 def blob_path(blob):
@@ -35,6 +36,30 @@ def read_blob(blob):
     if len(data) != blob.size_bytes or hashlib.sha256(data).hexdigest() != blob.sha256:
         raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
     return data
+
+
+def verify_blob(blob):
+    """Verify arbitrarily large retained objects without buffering them."""
+    fd = os.open(blob_path(blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != blob.size_bytes:
+            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        digest, size = fingerprint(stream)
+        if digest != blob.sha256 or size != blob.size_bytes:
+            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+
+
+def blob_chunk(blob, offset, limit=CHUNK_BYTES):
+    if type(offset) is not int or not 0 <= offset <= blob.size_bytes or not 1 <= limit <= CHUNK_BYTES:
+        raise BrokerError("INVALID_RANGE", "Invalid object range.", 416)
+    fd = os.open(blob_path(blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != blob.size_bytes:
+            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        stream.seek(offset)
+        return stream.read(min(limit, blob.size_bytes - offset))
 
 
 @contextmanager
@@ -56,6 +81,22 @@ def _writer_lock(project_id):
 
 
 def _finish(reservation, *, abort_if_missing):
+    # All callers hold the project writer lock. Hashing a multi-GiB object must
+    # happen outside SQLite's write transaction so other projects can progress.
+    snapshot = UploadReservation.objects.get(id=reservation.id)
+    verified = False
+    if snapshot.state == "reserved":
+        (settings.ARTIFACT_ROOT / str(snapshot.project_id) / ("upload-" + str(snapshot.id))).unlink(missing_ok=True)
+        candidate = Blob(project_id=snapshot.project_id, sha256=snapshot.sha256, size_bytes=snapshot.size_bytes)
+        try:
+            if snapshot.binding and not snapshot.verified:
+                raise FileNotFoundError("Unverified resumable transfer")
+            verify_blob(candidate)
+        except FileNotFoundError:
+            if not abort_if_missing:
+                raise BrokerError("OBJECT_INTEGRITY", "Published object is missing.", 409) from None
+        else:
+            verified = True
     with transaction.atomic():
         current = Project.objects.select_for_update().get(id=reservation.project_id)
         StoragePool.objects.get_or_create(id=1)
@@ -63,20 +104,13 @@ def _finish(reservation, *, abort_if_missing):
         upload = UploadReservation.objects.select_for_update().get(id=reservation.id)
         if upload.state != "reserved":
             return Blob.objects.filter(project=current, sha256=upload.sha256).first()
-        # This exact temporary name belongs to this durable reservation. Remove
-        # its link first so publication interrupted before unlink is recoverable.
-        (settings.ARTIFACT_ROOT / str(upload.project_id) / ("upload-" + str(upload.id))).unlink(missing_ok=True)
-        candidate = Blob(project=current, sha256=upload.sha256, size_bytes=upload.size_bytes)
-        try:
-            read_blob(candidate)
-        except FileNotFoundError:
-            if not abort_if_missing:
-                raise BrokerError("OBJECT_INTEGRITY", "Published object is missing.", 409) from None
+        if not verified:
             blob, created = None, False
         else:
             blob, created = Blob.objects.get_or_create(project=current, sha256=upload.sha256,
                                                        defaults={"size_bytes": upload.size_bytes})
-            read_blob(blob)
+            if blob.size_bytes != upload.size_bytes:
+                raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
         current.storage_reserved -= upload.size_bytes
         pool.reserved -= upload.size_bytes
         if created:
@@ -196,3 +230,117 @@ def store_blob(project, data, *, maximum=None):
             # A failure after publication must account bytes, never discard them.
             _finish(reservation, abort_if_missing=True)
             raise
+
+
+def begin_transfer(project, digest, size, binding, *, uploaded=False):
+    """Reserve the complete object once; retries recover the same private partial."""
+    import re
+    if (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or type(size) is not int or not 0 <= size <= settings.MAX_TRANSFER_BYTES):
+        raise BrokerError("TRANSFER_LIMIT", "Invalid transfer hash or byte count.", 413)
+    reconcile_uploads(limit=8)
+    with _writer_lock(project.id):
+        existing = Blob.objects.filter(project=project, sha256=digest, size_bytes=size).first()
+        # A hash-only request must never turn a retained output into an upload grant.
+        if existing and (not uploaded or UploadGrant.objects.filter(blob=existing).exists()):
+            verify_blob(existing)
+            return {"complete": True, "sha256": digest, "size_bytes": size, "offset": size}
+        current = UploadReservation.objects.filter(project=project, sha256=digest, size_bytes=size,
+            binding=binding, state="reserved").first()
+        if current:
+            partial = settings.ARTIFACT_ROOT / str(project.id) / ("upload-" + str(current.id))
+            fd = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > size:
+                    raise BrokerError("OBJECT_INTEGRITY", "Transfer partial failed verification.", 409)
+                offset = info.st_size
+            finally:
+                os.close(fd)
+            return {"complete": False, "transfer_id": str(current.id), "offset": offset}
+        if shutil.disk_usage(settings.ARTIFACT_ROOT).free < size + 8 * 1024 * 1024:
+            raise BrokerError("STORAGE_UNAVAILABLE", "Storage headroom is exhausted.", 503)
+        with transaction.atomic():
+            current = Project.objects.select_for_update().get(id=project.id)
+            StoragePool.objects.get_or_create(id=1)
+            pool = StoragePool.objects.select_for_update().get(id=1)
+            pending = UploadReservation.objects.filter(project=project, state="reserved").count()
+            if (current.storage_used + current.storage_reserved + size > settings.PROJECT_STORAGE_LIMIT
+                    or pool.used + pool.reserved + size > settings.GLOBAL_STORAGE_LIMIT
+                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= 8):
+                raise BrokerError("STORAGE_QUOTA", "Transfer exceeds the storage quota.", 409)
+            current.storage_reserved += size
+            pool.reserved += size
+            current.save(update_fields=["storage_reserved"])
+            pool.save(update_fields=["reserved"])
+            reservation = UploadReservation.objects.create(project=project, size_bytes=size, sha256=digest,
+                binding=binding, expires_at=timezone.now() + timedelta(hours=24))
+        directory = settings.ARTIFACT_ROOT / str(project.id)
+        directory.mkdir(mode=0o700, exist_ok=True)
+        try:
+            fd = os.open(directory / ("upload-" + str(reservation.id)),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+        except Exception:
+            _finish(reservation, abort_if_missing=True)
+            raise
+        return {"complete": False, "transfer_id": str(reservation.id), "offset": 0}
+
+
+def transfer_chunk(project, transfer_id, binding, offset, content, *, finish=False, uploaded=False):
+    if type(offset) is not int or offset < 0 or not isinstance(content, bytes) or len(content) > CHUNK_BYTES:
+        raise BrokerError("INVALID_RANGE", "Invalid transfer chunk.")
+    with _writer_lock(project.id):
+        reservation = UploadReservation.objects.get(id=transfer_id, project=project, binding=binding)
+        if reservation.state == "finalized":
+            if uploaded:
+                if not reservation.verified:
+                    raise BrokerError("TRANSFER_UNVERIFIED", "Independent upload bytes were not verified.", 409)
+                blob = Blob.objects.get(project=project, sha256=reservation.sha256, size_bytes=reservation.size_bytes)
+                UploadGrant.objects.get_or_create(blob=blob)
+            return {"complete": True, "sha256": reservation.sha256, "size_bytes": reservation.size_bytes,
+                    "offset": reservation.size_bytes}
+        if reservation.state != "reserved" or reservation.expires_at <= timezone.now():
+            raise BrokerError("TRANSFER_EXPIRED", "Restart the expired transfer.", 409)
+        path = settings.ARTIFACT_ROOT / str(project.id) / ("upload-" + str(reservation.id))
+        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r+b") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise BrokerError("OBJECT_INTEGRITY", "Transfer partial failed verification.", 409)
+            if offset > info.st_size or offset + len(content) > reservation.size_bytes:
+                raise BrokerError("TRANSFER_OFFSET", "Resume from the acknowledged offset.", 409)
+            if offset < info.st_size:
+                stream.seek(offset)
+                if stream.read(len(content)) != content:
+                    raise BrokerError("TRANSFER_CONFLICT", "Retried chunk differs from received bytes.", 409)
+            else:
+                stream.seek(offset)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            size = os.fstat(stream.fileno()).st_size
+            if finish:
+                stream.seek(0)
+                digest, measured = fingerprint(stream)
+                if measured != reservation.size_bytes or digest != reservation.sha256:
+                    raise BrokerError("OBJECT_INTEGRITY", "Transferred object failed checksum verification.", 409)
+        UploadReservation.objects.filter(id=reservation.id).update(
+            expires_at=timezone.now() + timedelta(hours=24), verified=finish)
+        if not finish:
+            return {"complete": False, "transfer_id": str(reservation.id), "offset": size}
+        target = path.parent / reservation.sha256
+        try:
+            os.link(path, target, follow_symlinks=False)
+        except FileExistsError:
+            pass
+        path.unlink()
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        blob = _finish(reservation, abort_if_missing=False)
+        if uploaded:
+            UploadGrant.objects.get_or_create(blob=blob)
+        return {"complete": True, "sha256": blob.sha256, "size_bytes": blob.size_bytes, "offset": blob.size_bytes}

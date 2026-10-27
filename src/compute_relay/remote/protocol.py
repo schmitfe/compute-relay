@@ -9,8 +9,8 @@ import hashlib
 import json
 
 JOB_PROTOCOL = "slurm-jobs/v1"
-MANAGEMENT_OPERATIONS = frozenset({"observe", "cancel", "reconcile", "collect"})
-JOB_OPERATIONS = MANAGEMENT_OPERATIONS | {"submit"}
+MANAGEMENT_OPERATIONS = frozenset({"observe", "cancel", "reconcile", "collect", "logs", "output_manifest", "output_chunk"})
+JOB_OPERATIONS = MANAGEMENT_OPERATIONS | {"submit", "stage_input"}
 
 
 def is_digest(value):

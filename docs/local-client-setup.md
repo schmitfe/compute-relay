@@ -81,6 +81,14 @@ is shown below; the guide supplies the actual interpreter path:
 /absolute/path/to/python -m compute_relay.cli files fetch --directory /path/to/science-project --attempt-id ATTEMPT_UUID --output results/RUN
 ```
 
+Large inputs and results use resumable chunks, up to 8 GiB per file. Repeat
+`files stage` to resume uploads; add `--resume` to `files fetch` to continue a
+matching partial download. `compute-relay logs --attempt-id ATTEMPT_UUID --follow`
+follows incremental running-job output, and `compute-relay files retry
+--attempt-id ATTEMPT_UUID` retries collection of a finished job's declared
+outputs. See [files and live output](data-transfer.md) for retention, quotas and
+upgrade details.
+
 Stage only explicit relative paths; the source manifest contains
 `{"files":["main.py","src/util.py"]}`. Prepare uses a job request without `files`
 or `project_id` and does not execute it. Fetch selects a fresh project output

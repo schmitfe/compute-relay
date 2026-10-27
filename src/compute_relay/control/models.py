@@ -183,7 +183,9 @@ class StoragePool(models.Model):
 class UploadReservation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.PROTECT)
-    size_bytes = models.PositiveIntegerField()
+    size_bytes = models.PositiveBigIntegerField()
+    binding = models.CharField(max_length=512, blank=True)
+    verified = models.BooleanField(default=False)
     state = models.CharField(max_length=12, default="reserved")
     created_at = models.DateTimeField(default=timezone.now)
     sha256 = models.CharField(max_length=64, blank=True)
@@ -194,7 +196,7 @@ class Blob(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.PROTECT)
     sha256 = models.CharField(max_length=64)
-    size_bytes = models.PositiveIntegerField()
+    size_bytes = models.PositiveBigIntegerField()
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -345,6 +347,10 @@ class Attempt(models.Model):
     stdout = models.TextField(blank=True)
     stderr = models.TextField(blank=True)
     error_code = models.CharField(max_length=80, blank=True)
+    collection_pending = models.BooleanField(default=False)
+    collection_state = models.CharField(max_length=20, default="pending")
+    collection_failures = models.PositiveIntegerField(default=0)
+    log_state = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now)
 
 

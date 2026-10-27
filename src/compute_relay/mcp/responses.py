@@ -111,7 +111,7 @@ def compact_job(payload, *, broker_url=None):
         result["previous_attempt_count"] = previous_attempt_count
     if latest_attempt:
         result["latest_attempt"] = _fields(latest_attempt,
-            ("id", "execution_request_id", "state", "accounting_state", "error_code", "native_state", "exit_code"), text_limit=80)
+            ("id", "execution_request_id", "state", "accounting_state", "collection_state", "error_code", "native_state", "exit_code"), text_limit=80)
         if isinstance(latest_attempt.get("native_identity"), dict):
             result["latest_attempt"]["native_identity"] = _fields(latest_attempt["native_identity"],
                 ("job_id", "cluster"), text_limit=80)
@@ -127,12 +127,18 @@ def compact_job(payload, *, broker_url=None):
         result["result_availability"]["declared_output_count"] = len(outputs)
         if not outputs:
             result["result_availability"]["artifacts"] = "no_declared_outputs"
+    if latest_attempt.get("collection_state"):
+        result["result_availability"]["collection"] = latest_attempt["collection_state"]
     if latest_execution.get("state") == "awaiting_approval":
         result["next_action"] = {"action": "await_human_review"}
     elif latest_execution.get("state") == "rejected":
         result["next_action"] = {"action": "revise_request", "tool": "revise_job", "job_id": job_id}
     elif latest_execution.get("state") in {"cancelled", "expired"}:
         result["next_action"] = {"action": "none"}
+    elif latest_attempt and latest_attempt.get("state") in _TERMINAL and latest_attempt.get("collection_state") == "retry_pending":
+        result["next_action"] = {"action": "await_output_collection", "tool": "get_job", "job_id": job_id}
+    elif latest_attempt and latest_attempt.get("state") in _TERMINAL and latest_attempt.get("collection_state") == "failed":
+        result["next_action"] = {"action": "recover_outputs", "tool": "retry_job_outputs", "attempt_id": latest_attempt.get("id")}
     elif latest_attempt and latest_attempt.get("state") in _TERMINAL:
         result["next_action"] = {"action": "inspect_results", "tool": "list_job_artifacts" if outputs else "get_job_logs",
             "attempt_id": latest_attempt.get("id")}

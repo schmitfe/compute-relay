@@ -8,8 +8,8 @@ import os
 import pwd
 import re
 
-from .collection import collect
-from .jobs import own_record, reconcile, submission_time_matches, submit
+from .collection import collect, output_transfer, read_logs
+from .jobs import own_record, reconcile, submission_time_matches, submit, stage_input
 from .protocol import JOB_OPERATIONS, JOB_PROTOCOL
 from .scheduler import scheduler
 
@@ -21,10 +21,16 @@ def execute_jobs(config, request):
         return submit(config, request)
     if op == "reconcile":
         return reconcile(config, request)
+    if op == "stage_input":
+        return stage_input(config, request)
     identity = request["native_identity"]
     if not re.fullmatch(r"[0-9]{1,20}", identity.get("job_id", "")):
         raise ValueError("Invalid native job ID")
     record = own_record(config, identity, request.get("manifest_sha256"))
+    if op in {"output_manifest", "output_chunk"}:
+        return output_transfer(config, request, record)
+    if op == "logs":
+        return read_logs(config, request, record)
     job_id = identity["job_id"]
     if op == "observe":
         return {"queue": scheduler(config, "squeue", ["-h", "-j", job_id, "-o", "%i|%T|%k|%V"]),

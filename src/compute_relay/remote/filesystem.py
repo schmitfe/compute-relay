@@ -70,7 +70,7 @@ def open_regular(directory, path, flags=os.O_RDONLY, mode=0o600):
             next_fd = os.open(part, os.O_RDONLY | DIRECTORY | NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = next_fd
-        result = os.open(parts[-1], flags | NOFOLLOW, mode, dir_fd=fd)
+        result = os.open(parts[-1], flags | NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=fd)
         st = os.fstat(result)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             os.close(result)
@@ -102,6 +102,25 @@ def read_file(directory, path, cap, tail=False):
         return b"".join(chunks)
     finally:
         os.close(fd)
+
+
+def file_digest(fd):
+    """Hash a stable regular file in bounded memory."""
+    before = os.fstat(fd)
+    os.lseek(fd, 0, os.SEEK_SET)
+    hasher = hashlib.sha256()
+    while chunk := os.read(fd, 1024 * 1024):
+        hasher.update(chunk)
+    after = os.fstat(fd)
+    if file_version(before) != file_version(after):
+        raise ValueError("File changed during verification")
+    return hasher.hexdigest()
+
+
+def file_version(info):
+    # Nanosecond timestamps and some inode IDs exceed the exact JSON integer
+    # range used by persistent helper frames. Keep this opaque token lossless.
+    return [str(value) for value in (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)]
 
 
 def write_json(directory, name, data):

@@ -90,6 +90,8 @@ def _refresh(run):
                 node.state = attempt.state
                 if attempt.state in core.TERMINAL and attempt.accounting_state not in {"settled", "released"}:
                     node.state = "awaiting_accounting"
+                elif attempt.state == "succeeded" and attempt.collection_pending:
+                    node.state = "awaiting_outputs"
             else:
                 node.state = node.execution_request.state
             node.save(update_fields=["state"])

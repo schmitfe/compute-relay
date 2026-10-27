@@ -166,3 +166,48 @@ def test_stream_binds_configuration_before_accepting_another_submit(site):
 def test_stream_rejects_invalid_frames_before_any_operation(payload):
     result = subprocess.run([sys.executable, "-I", "-c", bundle_source("stream_jobs")], input=payload, capture_output=True, timeout=5)
     assert result.returncode != 0 and not result.stdout
+
+
+def test_persistent_helper_transfers_large_files_and_live_logs_without_restarting(site, local_transport):
+    from pathlib import Path
+    import hashlib
+    from compute_relay.backends import prepare
+    from compute_relay.transfer import CHUNK_BYTES, FileReference
+
+    async def scenario():
+        connection, request, script, *_ = site
+        data = b"input" * (CHUNK_BYTES // 2)
+        request = deepcopy(request)
+        request["files"].append({"path": "input.bin", "sha256": hashlib.sha256(data).hexdigest(),
+            "size_bytes": len(data), "executable": False})
+        package = prepare(request, {**request["environment"], "interpreter": "/usr/bin/python3"}, local_transport, str(uuid4()))
+        files = {"main.py": script, "input.bin": FileReference(hashlib.sha256(data).hexdigest(), len(data)),
+            **{path: text.encode() for path, text in package["generated_files"].items()}}
+        pool = PersistentHelperPool(1)
+        backend = AsyncSlurmBackend(local_transport, transport=PersistentOpenSSHTransport(local_transport, pool))
+        attempt = str(uuid4())
+        try:
+            for offset in range(0, len(data), CHUNK_BYTES):
+                chunk = data[offset:offset + CHUNK_BYTES]
+                await backend.stage_input(attempt, package["manifest"], "input.bin", offset=offset,
+                    content_base64=base64.b64encode(chunk).decode(), finish=offset + len(chunk) == len(data))
+            native = (await backend.submit(attempt, package["manifest"], files))["native_identity"]
+            directory = Path(native["work_dir"])
+            output = b"result" * (2 * CHUNK_BYTES)
+            (directory / "result.txt").write_bytes(output)
+            (directory / "stdout.log").write_text("realization 1 done\n")
+            logs = await backend.read_logs(native, manifest=package["manifest"], cursors={})
+            assert base64.b64decode(logs["stdout"]["content_base64"]) == b"realization 1 done\n"
+            inventory = await backend.output_manifest(native, manifest=package["manifest"])
+            entry = inventory["files"][0]
+            assert all(isinstance(part, str) for part in entry["version"])
+            digest = hashlib.sha256()
+            for offset in range(0, len(output), CHUNK_BYTES):
+                chunk = await backend.output_chunk(native, manifest=package["manifest"], path="result.txt",
+                    offset=offset, version=entry["version"])
+                digest.update(base64.b64decode(chunk["content_base64"]))
+            assert digest.hexdigest() == entry["sha256"] == hashlib.sha256(output).hexdigest()
+            assert pool.process_starts == 1 and site[4].read_text().splitlines().count("sbatch") == 1
+        finally:
+            await pool.close()
+    asyncio.run(scenario())

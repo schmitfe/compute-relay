@@ -76,6 +76,18 @@ Use descriptor/hash receipts in job requests; do not paste large base64 files or
 results into chat. Keep outputs under an explicit project destination and verify
 their returned hashes before analysis.
 
+Files up to 8 GiB use resumable chunks through the helper. Repeat staging to
+resume an interrupted upload; use `files fetch --resume` with the same attempt
+and destination to resume a download. Monitor running output with
+`get_job_logs`, retaining `next_cursor` between calls. `eof` drains the current
+snapshot; `finished` identifies terminal execution. Check `truncated`, `reset`
+and `file_id` for gaps or replacement in the retained 64 KiB window. Newly
+prepared Python jobs run with unbuffered output; other programs must flush.
+If a finished attempt reports collection failure, inspect `collection_state`:
+`retry_pending` means recovery is scheduled; `failed` permits
+`retry_job_outputs(attempt_id)`. This resumes declared output collection without
+starting another compute run or changing settled accounting.
+
 Prepare the concrete package with the approved environment and declared outputs,
 then request execution. Report the actual approval reasons: project, API key,
 cluster or a mixed-policy envelope can require human review independently.

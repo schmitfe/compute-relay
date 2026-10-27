@@ -46,7 +46,7 @@ compute-relay --data-directory /path/to/private/broker-data --port 8770
 
 Useful options include `--no-browser`, `--no-connectors`, `--verbose`, and `--non-interactive`. For unattended first setup, choose `--no-password` explicitly or supply a private password file with `--owner-password-file PATH`. Passwords are never printed or generated into a plaintext file. See [installation and recovery](docs/deployment.md) for backups and restart behavior.
 
-The bundled storage, environment, and workflow modules are enabled by the normal launcher. Their operations still require explicit project policy and scopes. Storage budgets are advisory; reusable environment builds consume ordinary reviewed or budgeted Slurm jobs; workflow nodes use the same ledger and job caps. Native Slurm arrays, other schedulers, packed environment migration, and direct artifact transfer remain planned.
+The bundled storage, environment, and workflow modules are enabled by the normal launcher. Their operations still require explicit project policy and scopes. Storage budgets are advisory; reusable environment builds consume ordinary reviewed or budgeted Slurm jobs; workflow nodes use the same ledger and job caps. [Resumable file transfers](docs/data-transfer.md) support inputs and outputs up to 8 GiB per file, and running jobs expose incremental stdout/stderr. Native Slurm arrays, other schedulers and packed environment migration remain planned.
 
 The package shares your operating-system account. Passwordless mode treats local access to the portal as your authority. A process that controls your account can also inspect its files and SSH sessions; this installation does not isolate secrets from such a process. Project API scopes and approval pages govern broker requests, while complete account-level security requires a separate operating-system boundary. See [security](docs/security.md).
 
@@ -80,6 +80,7 @@ The former multi-user server, LDAP, and PostgreSQL implementation is retained on
 | [Backends](docs/backends.md) | Slurm, SSH, remote helper, and reuse assessment |
 | [Modules](docs/extensions.md) | Storage, environment builds, and workflows |
 | [Testing](docs/testing.md) | SQLite, package, and optional Slurm acceptance |
+| [Files and live output](docs/data-transfer.md) | Large uploads/downloads, interruption recovery, output collection retries, and following job logs |
 
 ## License
 

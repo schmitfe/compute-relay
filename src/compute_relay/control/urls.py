@@ -10,6 +10,7 @@ from . import cluster_checks
 from . import live_updates
 from . import object_lookup
 from . import local_connectors
+from . import transfers
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -48,6 +49,11 @@ urlpatterns = [
     path("api/v1/projects/<uuid:project_id>/allowance", views.allowance),
     path("api/v1/projects/<uuid:project_id>/objects", views.objects),
     path("api/v1/projects/<uuid:project_id>/objects/lookup", object_lookup.lookup),
+    path("api/v1/projects/<uuid:project_id>/transfers", transfers.uploads),
+    path("api/v1/projects/<uuid:project_id>/transfers/<uuid:transfer_id>", transfers.upload_chunk),
+    path("api/v1/attempts/<uuid:attempt_id>/collect", transfers.retry_collection),
+    path("internal/v1/attempts/<uuid:attempt_id>/input-chunk", transfers.input_chunk),
+    path("internal/v1/attempts/<uuid:attempt_id>/output-chunk", transfers.output_chunk),
     path("api/v1/jobs", views.jobs), path("api/v1/jobs/<uuid:job_id>", views.job_detail),
     path("api/v1/jobs/<uuid:job_id>/package", views.package), path("api/v1/jobs/<uuid:job_id>/prepare", views.prepare),
     path("api/v1/jobs/<uuid:job_id>/revisions", views.revisions),

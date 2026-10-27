@@ -17,7 +17,7 @@
       "properties": {
         "path": {"$ref": "#/$defs/relativePath"},
         "sha256": {"$ref": "#/$defs/digest"},
-        "size_bytes": {"type": "integer", "minimum": 0, "maximum": 104857600},
+        "size_bytes": {"type": "integer", "minimum": 0, "maximum": 8589934592},
         "executable": {"type": "boolean"}
       }
     },

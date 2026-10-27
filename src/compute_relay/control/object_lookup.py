@@ -6,7 +6,7 @@ from django.conf import settings
 
 from .errors import BrokerError
 from .models import Blob
-from .storage import read_blob
+from .storage import verify_blob
 from .views import body, boundary, scope
 
 
@@ -21,11 +21,11 @@ def lookup(request, project_id):
     for entry in entries:
         if (not isinstance(entry, dict) or set(entry) != {"sha256", "size_bytes"}
                 or not isinstance(entry["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
-                or type(entry["size_bytes"]) is not int or not 0 <= entry["size_bytes"] <= settings.MAX_UPLOAD_BYTES):
+                or type(entry["size_bytes"]) is not int or not 0 <= entry["size_bytes"] <= settings.MAX_TRANSFER_BYTES):
             raise BrokerError("INVALID_REQUEST", "Use a SHA-256 digest and bounded byte count for each object.")
         descriptors.append((entry["sha256"], entry["size_bytes"]))
         size += entry["size_bytes"]
-    if size > 16 * 1024 * 1024 or len(set(descriptors)) != len(descriptors):
+    if size > settings.PROJECT_STORAGE_LIMIT or len(set(descriptors)) != len(descriptors):
         raise BrokerError("INVALID_REQUEST", "Content lookup exceeds its bounds or repeats an object.")
     blobs = {blob.sha256: blob for blob in Blob.objects.filter(project=project,
         sha256__in=[entry[0] for entry in descriptors])}
@@ -41,7 +41,7 @@ def lookup(request, project_id):
                     continue
                 raise
             try:
-                read_blob(blob)
+                verify_blob(blob)
             except OSError:
                 raise BrokerError("OBJECT_UNAVAILABLE", "Stored object is unavailable; retry after storage recovery.", 409) from None
             present.append({"sha256": digest, "size_bytes": size})

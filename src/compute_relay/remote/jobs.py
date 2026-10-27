@@ -14,7 +14,7 @@ import uuid
 
 from .filesystem import (
     canonical, components, digest, load_json, open_directory, open_regular,
-    read_file, uuid_value, write_json,
+    read_file, uuid_value, write_json, file_digest,
 )
 from .prelude import MAX_FILE_TOTAL
 from .protocol import require_journal_binding, require_management_protocol
@@ -30,6 +30,17 @@ def stage(attempt_dir, manifest, encoded_files):
         parts = components(path)
         if path.startswith("/") or len(path) > 240:
             raise ValueError("Invalid staged file path")
+        if encoded_files[path] is None:
+            fd = open_regular(attempt_dir, path)
+            try:
+                if os.fstat(fd).st_size != entry["size_bytes"] or file_digest(fd) != entry["sha256"]:
+                    raise ValueError("Transferred input differs from approved manifest")
+            finally:
+                os.close(fd)
+            total += entry["size_bytes"]
+            if total > MAX_FILE_TOTAL:
+                raise ValueError("Package exceeds total byte limit")
+            continue
         data = base64.b64decode(encoded_files[path], validate=True)
         total += len(data)
         if total > MAX_FILE_TOTAL or len(data) != entry["size_bytes"] or digest(data) != entry["sha256"]:
@@ -37,7 +48,7 @@ def stage(attempt_dir, manifest, encoded_files):
         parent_fd = open_directory("/".join(parts[:-1]), create=True, parent=attempt_dir) if len(parts) > 1 else os.dup(attempt_dir)
         try:
             try:
-                existing = read_file(parent_fd, parts[-1], MAX_FILE_TOTAL)
+                existing = read_file(parent_fd, parts[-1], len(data))
             except FileNotFoundError:
                 temporary = "_upload_" + uuid.uuid4().hex
                 mode = 0o500 if entry["executable"] else 0o400
@@ -62,6 +73,93 @@ def stage(attempt_dir, manifest, encoded_files):
         finally:
             os.close(parent_fd)
     os.fsync(attempt_dir)
+
+
+def stage_input(config, request):
+    """Resume a manifest-bound input under the same lock used by submission."""
+    manifest = request["manifest"]
+    require_management_protocol(manifest)
+    attempt_id = uuid_value(request["attempt_id"])
+    path = request["path"]
+    entries = [entry for entry in manifest["files"] if entry["path"] == path]
+    if len(entries) != 1:
+        raise ValueError("Undeclared staged input")
+    entry = entries[0]
+    if not 0 <= entry["size_bytes"] <= 8 * 1024**3 or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]):
+        raise ValueError("Invalid input descriptor")
+    parts = components(path)
+    if len(path) > 240:
+        raise ValueError("Invalid staged input path")
+    root = open_directory(config["remote_root"], create=True)
+    try:
+        journal = open_directory("_broker_journal", create=True, parent=root)
+        try:
+            lock = open_regular(journal, attempt_id + ".lock", os.O_RDWR | os.O_CREAT)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                record = load_json(journal, attempt_id + ".json")
+                if record:
+                    require_journal_binding(record, digest(canonical(manifest)))
+                    raise ValueError("Attempt already has submission intent; reconcile it")
+                relative = "/".join((uuid_value(manifest["request"]["project_id"]), uuid_value(manifest["job_revision_id"]), attempt_id))
+                directory = open_directory(relative, create=True, parent=root)
+                try:
+                    parent = open_directory("/".join(parts[:-1]), create=True, parent=directory) if len(parts) > 1 else os.dup(directory)
+                    try:
+                        try:
+                            final = open_regular(parent, parts[-1])
+                        except FileNotFoundError:
+                            final = None
+                        if final is not None:
+                            try:
+                                if os.fstat(final).st_size != entry["size_bytes"] or file_digest(final) != entry["sha256"]:
+                                    raise ValueError("Staged input changed")
+                            finally:
+                                os.close(final)
+                            return {"offset": entry["size_bytes"], "complete": True}
+                        temporary = "_relay-part-" + entry["sha256"]
+                        fd = open_regular(parent, temporary, os.O_RDWR | os.O_CREAT)
+                        try:
+                            size = os.fstat(fd).st_size
+                            if "content_base64" not in request:
+                                return {"offset": size, "complete": False}
+                            offset = request["offset"]
+                            data = base64.b64decode(request["content_base64"], validate=True)
+                            if type(offset) is not int or not 0 <= offset <= size or len(data) > 1024 * 1024 or offset + len(data) > entry["size_bytes"]:
+                                raise ValueError("Invalid input transfer range")
+                            if offset < size:
+                                if os.pread(fd, len(data), offset) != data:
+                                    raise ValueError("Input retry changed bytes")
+                            else:
+                                with os.fdopen(os.dup(fd), "r+b") as stream:
+                                    stream.seek(offset)
+                                    stream.write(data)
+                                    stream.flush()
+                                    os.fsync(stream.fileno())
+                            size = os.fstat(fd).st_size
+                            complete = request.get("finish", False)
+                            if type(complete) is not bool:
+                                raise ValueError("Invalid finish flag")
+                            if complete:
+                                if size != entry["size_bytes"] or file_digest(fd) != entry["sha256"]:
+                                    raise ValueError("Input checksum mismatch")
+                                os.fchmod(fd, 0o500 if entry["executable"] else 0o400)
+                                os.fsync(fd)
+                                os.rename(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent)
+                                os.fsync(parent)
+                            return {"offset": size, "complete": complete}
+                        finally:
+                            os.close(fd)
+                    finally:
+                        os.close(parent)
+                finally:
+                    os.close(directory)
+            finally:
+                os.close(lock)
+        finally:
+            os.close(journal)
+    finally:
+        os.close(root)
 
 
 def own_record(config, identity, expected_manifest_sha256):

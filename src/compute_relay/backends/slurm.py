@@ -7,6 +7,7 @@ import datetime as dt
 import re
 from typing import Mapping, Sequence
 from uuid import UUID
+from compute_relay.transfer import FileReference
 
 from compute_relay.transports import OpenSSHTransport, TransportError
 
@@ -125,6 +126,9 @@ def parse_observation(native_identity: dict, queue: dict, accounting: dict, expe
 
 
 class SlurmBackend:
+    supports_file_transfer = True
+    supports_live_logs = True
+
     def __init__(self, connection: dict, transport=None):
         self.connection = connection
         self.transport = transport or OpenSSHTransport(connection)
@@ -159,13 +163,13 @@ class SlurmBackend:
                 output[key] = result[key]
         return output
 
-    def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes]) -> dict:
+    def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes | FileReference]) -> dict:
         UUID(attempt_id)
         self._verify_binding(manifest)
         verify_package(manifest, sha256(canonical_json_bytes(manifest)), files)
         try:
             response = self._call("submit", attempt_id=attempt_id, manifest=manifest,
-                                  files={path: base64.b64encode(data).decode("ascii") for path, data in files.items()})
+                                  files={path: None if isinstance(data, FileReference) else base64.b64encode(data).decode("ascii") for path, data in files.items()})
             return self._submission_result(response)
         except TransportError:
             return {"outcome": "submission_uncertain", "detail": "Transport failed; reconcile the existing attempt"}
@@ -199,6 +203,20 @@ class SlurmBackend:
         response = self._call("collect", native_identity=native_identity, outputs=list(outputs), **self._management(manifest))
         artifacts = {path: base64.b64decode(data, validate=True) for path, data in response.pop("artifacts_base64", {}).items()}
         return {**response, "artifacts": artifacts}
+
+    def stage_input(self, attempt_id, manifest, path, **chunk):
+        self._verify_binding(manifest)
+        return self._call("stage_input", attempt_id=attempt_id, manifest=manifest, path=path, **chunk)
+
+    def read_logs(self, native_identity, *, manifest, cursors):
+        return self._call("logs", native_identity=native_identity, cursors=cursors, **self._management(manifest))
+
+    def output_manifest(self, native_identity, *, manifest):
+        return self._call("output_manifest", native_identity=native_identity, **self._management(manifest))
+
+    def output_chunk(self, native_identity, *, manifest, path, offset, version):
+        return self._call("output_chunk", native_identity=native_identity, path=path, offset=offset,
+            version=version, **self._management(manifest))
 
     def discover(self) -> dict:
         """Read-only scheduler discovery; never allocates compute resources."""

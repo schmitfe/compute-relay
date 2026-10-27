@@ -182,6 +182,14 @@ def build_attempt_diagnostics(attempt):
     raw_accounting = getattr(attempt, "accounting_state", None)
     accounting_state = raw_accounting if isinstance(raw_accounting, str) and raw_accounting in _ACCOUNTING else "unknown"
     notices = []
+    collection_state = getattr(attempt, "collection_state", None)
+    if collection_state not in {"pending", "complete", "retry_pending", "failed"}:
+        collection_state = "unknown"
+    log_state = getattr(attempt, "log_state", {})
+    log_updates = [value["updated_at"] for value in log_state.values()
+        if isinstance(value, dict) and isinstance(value.get("updated_at"), str)] if isinstance(log_state, dict) else []
+    if collection_state == "retry_pending":
+        notices.append("Output collection will retry automatically. Compute will not run again.")
     if accounting_state == "settled":
         notices.append("Accounting is settled. A failed allocation can still consume compute allowance." if state == "failed" else "Accounting is settled.")
     elif accounting_state in {"reserved", "settlement_pending"}:
@@ -206,4 +214,5 @@ def build_attempt_diagnostics(attempt):
         "accounting_final": accounting.get("final") if type(accounting.get("final")) is bool else None,
         "category": category, "severity": severity, "title": title, "message": message, "suggestion": suggestion,
         "notices": notices, "stdout": stdout, "stderr": stderr, "stdout_truncated": stdout_truncated,
+        "collection_state": collection_state, "log_updated_at": max(log_updates) if log_updates else None,
         "stderr_truncated": stderr_truncated, "log_limit_bytes": MAX_LOG_BYTES}

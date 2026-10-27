@@ -16,6 +16,7 @@ from uuid import UUID
 
 from .environments import EnvironmentProfileError, render_environment
 from compute_relay.domain.allocation import allocated_cpus
+from compute_relay.transfer import FileReference, MAX_FILE_BYTES, MAX_BUNDLE_BYTES
 from compute_relay.remote.bundles import bundle_source
 from compute_relay.remote.protocol import (
     JOB_PROTOCOL, JOB_OPERATIONS, MANAGEMENT_OPERATIONS, management_protocol_supported,
@@ -200,11 +201,13 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
                 raise BackendError("Conflicting package paths")
             paths.add(path)
             valid_digest(entry["sha256"])
-            total += positive_int(entry["size_bytes"], "file size", minimum=0, maximum=104857600)
+            total += positive_int(entry["size_bytes"], "file size", minimum=0, maximum=MAX_FILE_BYTES)
             if type(entry["executable"]) is not bool:
                 raise BackendError("Invalid file executable flag")
-        if total > 104857600 or script not in paths:
+        if total > MAX_BUNDLE_BYTES or script not in paths:
             raise BackendError("Package is too large or entrypoint is missing")
+        if next(entry["size_bytes"] for entry in entries if entry["path"] == script) > 1024 * 1024:
+            raise BackendError("The reviewed entrypoint must fit within 1 MiB")
         outputs = request["outputs"]
         if not isinstance(outputs, list) or len(outputs) > 100 or len(outputs) != len(set(outputs)):
             raise BackendError("Invalid output list")
@@ -230,7 +233,7 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         if module_environment:
             lines += ["# Use normal cluster login setup for its module command; restore cwd after site/user startup.",
                       'cd -- "${SLURM_SUBMIT_DIR:?Broker submission directory is unavailable}"']
-        lines += [". ./_broker/environment.sh",
+        lines += ["export PYTHONUNBUFFERED=1", ". ./_broker/environment.sh",
                   "exec " + shlex.join([*execution_prefix, "./" + script, *arguments]), ""]
         generated = {"_broker/batch.sh": "\n".join(lines), "_broker/environment.sh": wrapper}
         manifest = {"schema_version": "1.0", "job_revision_id": job_revision_id, "backend": "slurm",
@@ -247,7 +250,7 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         raise BackendError("Malformed preparation request or profile") from exc
 
 
-def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, bytes], *, operation: str = "submit") -> None:
+def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, bytes | FileReference], *, operation: str = "submit") -> None:
     if sha256(canonical_json_bytes(manifest)) != valid_digest(manifest_sha256):
         raise BackendError("Prepared manifest digest mismatch")
     if operation not in JOB_OPERATIONS or not management_protocol_supported(manifest):
@@ -262,6 +265,10 @@ def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, byt
             raise BackendError("Duplicate manifest path")
         paths.add(path)
         content = files.get(path)
+        if isinstance(content, FileReference):
+            if (content.size_bytes, content.sha256) != (entry["size_bytes"], entry["sha256"]):
+                raise BackendError("Transferred input descriptor differs from prepared manifest")
+            continue
         if not isinstance(content, bytes) or len(content) != entry["size_bytes"] or sha256(content) != entry["sha256"]:
             raise BackendError("Staged file does not match prepared manifest")
     if not paths or paths != set(files):

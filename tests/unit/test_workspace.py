@@ -237,7 +237,8 @@ def test_source_links_special_files_and_oversize_are_never_read_or_uploaded(tmp_
     elif kind == "fifo":
         os.mkfifo(target)
     else:
-        target.write_bytes(b"x" * (MAX_SOURCE_BYTES + 1))
+        with target.open("wb") as stream:
+            stream.truncate(workspace_module.MAX_FILE_BYTES + 1)
     client = TransferClient()
     with pytest.raises((ValueError, OSError)):
         WorkspaceClient(root, client=client).stage([name])
@@ -308,7 +309,7 @@ def test_fetch_inventory_rejected_before_creating_destination_or_downloading(tmp
     elif kind == "prefix_collision":
         artifact(client, path="results")
     elif kind == "oversize":
-        entry["size_bytes"] = 10 * 1024 * 1024 + 1
+        entry["size_bytes"] = workspace_module.MAX_ARTIFACT_BYTES + 1
     elif kind == "bool_size":
         entry["size_bytes"] = True
     else:
@@ -326,7 +327,7 @@ def test_checksum_failure_never_writes_bad_content_or_success_receipt(tmp_path):
     client.downloads[f"/api/v1/artifacts/{entry['id']}/content"] = b"tampered"
     with pytest.raises(ValueError, match="checksum"):
         WorkspaceClient(root, client=client).fetch(str(uuid4()), "results/run")
-    assert list((root / "results/run").iterdir()) == []
+    assert [item.name for item in (root / "results/run").iterdir()] == [".compute-relay-fetch.json"]
 
 
 def test_download_cannot_follow_destination_parent_symlink(tmp_path):
@@ -401,7 +402,7 @@ def test_content_lookup_checks_scope_project_size_and_stored_integrity(broker):
     assert post({"objects": entries}, f"/api/v1/projects/{foreign.id}/objects/lookup").status_code == 404
     assert post({"objects": [entries[0], entries[0]]}).status_code == 400
     assert post({"objects": [{**entries[0], "size_bytes": True}]}).status_code == 400
-    assert post({"objects": [{**entries[0], "size_bytes": MAX_SOURCE_BYTES + 1}]}).status_code == 400
+    assert post({"objects": [{**entries[0], "size_bytes": workspace_module.MAX_FILE_BYTES + 1}]}).status_code == 400
     assert post({"objects": []}).status_code == 400
     assert post({"objects": entries, "extra": True}).status_code == 400
     c.credential.scopes = ["jobs:read"]

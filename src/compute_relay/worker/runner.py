@@ -124,7 +124,12 @@ class Worker:
                         result = cancellation_result(cancelled, native, observation)
                     else:
                         result = {"outcome": "observed", "native_identity": native,
-                            "observation": backend.observe(native, manifest=manifest)}
+                            "observation": lease["observation"] if lease.get("collection_only") else backend.observe(native, manifest=manifest)}
+                if native and result.get("outcome") in {"observed", "cancel_requested", "cancel_unknown"} and getattr(backend, "supports_live_logs", False) is True:
+                    try:
+                        result["log_chunks"] = backend.read_logs(native, manifest=manifest, cursors=lease.get("log_cursors", {}))
+                    except Exception:
+                        pass  # Output visibility must never prevent accounting/cancellation.
                 if result.get("outcome") == "observed" and terminal_observation(result.get("observation")):
                     self.journal.write_report(attempt_id, report_record(lease, digest, result, phase="observed"))
                     check_lease()
@@ -138,9 +143,13 @@ class Worker:
                         result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
                     check_lease()
                     try:
-                        result.update(self._collect(backend, native, manifest))
+                        if getattr(backend, "supports_file_transfer", False) is True:
+                            from .transfers import collect_outputs
+                            result.update(collect_outputs(self.client, backend, lease, native, manifest))
+                        else:
+                            result.update(self._collect(backend, native, manifest), collection_state="complete")
                     except Exception:
-                        result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED")
+                        result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
                 record = report_record(lease, digest, result)
                 self.journal.write_report(attempt_id, record)
             self.deliver_report(attempt_id, record)
@@ -178,6 +187,8 @@ class Worker:
         if action == "reconcile":
             result = backend.reconcile(attempt_id, manifest)
         else:
+            from .transfers import stage_inputs
+            stage_inputs(self.client, backend, lease, manifest, files)
             confirmed = self.client.request(
                 "POST", f"/internal/v1/attempts/{attempt_id}/dispatch",
                 {"lease_id": lease["id"], "generation": lease["generation"],
