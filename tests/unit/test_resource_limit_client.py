@@ -174,3 +174,38 @@ def test_mcp_instructions_and_tools_explain_current_effective_limits():
     assert "active limits" in tools["get_project_context"].description
     assert "resource limits" in tools["get_project_allowance"].description
     assert "RESOURCE_LIMIT" in tools["prepare_job"].description
+
+
+@pytest.mark.parametrize("code,guidance", [
+    ("NOT_PREPARED", "inspect_environment"), ("INPUT_DENIED", "explicit upload"),
+    ("SCHEDULER_OPTIONS_REQUIRED", "partition, account and QOS"),
+    ("INSPECTION_ALREADY_REQUESTED", "cancel its job"),
+    ("IDEMPOTENCY_CONFLICT", "original arguments"), ("ACTIVE_JOB_LIMIT", "list_project_jobs"),
+    ("INVALID_REQUEST", "resource, scheduler and input fields"),
+])
+def test_known_error_codes_have_local_actionable_guidance_without_remote_content(code, guidance):
+    document = {"error": {"code": code, "message": PRIVATE + TOKEN, "details": {"private": PRIVATE + TOKEN}}}
+    with pytest.raises(ControlError) as caught:
+        failing_client(json.dumps(document).encode()).request("POST", "/api/v1/jobs", {})
+    error = caught.value
+    assert error.code == "CONTROL_HTTP_ERROR" and error.status == 400
+    assert error.broker_code == code and error.details == {}
+    assert code in str(error) and "HTTP 400" in str(error) and guidance in str(error)
+    assert_private_redacted(error)
+
+
+@pytest.mark.parametrize("code", [PRIVATE + TOKEN, [], {}, 13, None, "RESOURCE_LIMIT\nNOT_PREPARED"])
+def test_unrecognized_or_malformed_error_code_is_never_echoed(code):
+    with pytest.raises(ControlError) as caught:
+        failing_client(json.dumps({"error": {"code": code, "message": PRIVATE + TOKEN}}).encode()).request("GET", "/api/v1/context")
+    assert str(caught.value) == "CONTROL_HTTP_ERROR" and caught.value.broker_code is None
+    assert_private_redacted(caught.value)
+
+
+def test_official_probe_tool_reports_safe_scheduler_recovery_guidance():
+    client = failing_client(json.dumps({"error": {"code": "SCHEDULER_OPTIONS_REQUIRED", "message": PRIVATE + TOKEN}}).encode())
+    server = create_server(ProjectFacade(client, "608ef015-5813-4e8f-a6ab-7ec182f406d7", enabled_extensions=["environments"]))
+    with pytest.raises(ToolError) as caught:
+        asyncio.run(server.call_tool("inspect_environment", {"environment_id": "608ef015-5813-4e8f-a6ab-7ec182f406d7"}))
+    assert "SCHEDULER_OPTIONS_REQUIRED" in str(caught.value) and "list_compute_targets" in str(caught.value)
+    assert PRIVATE not in str(caught.value) and TOKEN not in str(caught.value)

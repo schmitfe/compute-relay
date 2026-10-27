@@ -1,6 +1,7 @@
 """Conservative aggregation: visible idle hardware is not a placement guarantee."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 import re
 
@@ -98,9 +99,11 @@ def parse_availability(response):
             if not gpu["allocation_known"]:
                 gpu["allocated"] = gpu["idle"] = None
         def ratio(jobs, capacity):
-            return round(jobs / capacity, 6) if pressure_known and capacity else None
+            # Control JSON deliberately permits only exact integer numbers.
+            return format(Decimal(jobs) / Decimal(capacity), ".6f").rstrip("0").rstrip(".") if pressure_known and capacity else None
         pending_types = row["queue"]["pending_by_gpu_type"]
         row["queue_pressure"] = {"status": "approximate" if pressure_known and row["schedulable_nodes"] else "unknown",
+            "ratio_encoding": "decimal_string",
             "pending_jobs_per_schedulable_node": ratio(row["queue"]["pending_jobs"], row["schedulable_nodes"]),
             "pending_gpu_jobs_per_schedulable_device": {kind: ratio(pending_types.get(kind, 0), row["gpus"].get(kind, {}).get("schedulable", 0))
                 for kind in sorted(set(row["gpus"]) | set(pending_types))},

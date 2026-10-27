@@ -30,6 +30,7 @@ from compute_relay.extensions.environments.remote import REMOTE_SOURCE
 from compute_relay.mcp.facade import ProjectFacade, create_server
 from compute_relay.remote import helper
 from compute_relay.worker.journal import Journal
+from compute_relay.worker.client import strict_json
 from compute_relay.worker.runner import Worker
 from test_environment_extension import context
 
@@ -57,7 +58,7 @@ class HTTP:
         response = self.client.generic(method, path, data=json.dumps(body or {}), content_type="application/json",
             HTTP_IDEMPOTENCY_KEY=kwargs.get("idempotency_key", ""))
         assert response.status_code < 400, (response.status_code, response.content[:500])
-        return response.json()
+        return strict_json(response.content)
 
 
 def wheel(version):

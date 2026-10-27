@@ -147,6 +147,15 @@ Resource rejections identify every exceeded dimension instead of requiring the a
 
 The four resources are `cpu_cores`, `gpu_devices`, `memory_mib` and `time_limit_seconds`; units are `cores`, `devices`, `MiB` and `seconds`. `effective` includes configured allocation rounding, and `source` identifies a project or cluster restriction. Limits are rechecked during preparation and admission, so previously read values may become stale. Refresh context, targets and allowance, then revise the resource request or choose another permitted target; do not repeatedly submit the same rejected package. The local client retains its stable `CONTROL_HTTP_ERROR` code/status and surfaces `broker_code: RESOURCE_LIMIT` with sanitized numeric `details`. It bounds error-body reads and discards remote prose and unrecognized fields before rendering the MCP tool error.
 
+Recognized request, scheduler, inspection, input-authority and admission errors
+also retain an allowlisted `broker_code`. The synchronous and asynchronous
+clients render HTTP status and fixed local recovery guidance; they never display
+the remote message or arbitrary details. Unknown codes or malformed/oversized
+error bodies remain generic. For example, `NOT_PREPARED` directs the caller to
+prepare first, `SCHEDULER_OPTIONS_REQUIRED` directs it to the permitted target
+options, and `INPUT_DENIED` preserves the requirement for uploaded or authorized
+artifact inputs. Failed generated probes are resumed through `inspect_environment`.
+
 ## MCP tools
 
 Local stdio MCP is a facade under the agent account calling the authenticated service API. It does not import Django models, read the control database, or inherit an unrestricted SSH agent. The application API remains the policy authority even if the facade is modified.

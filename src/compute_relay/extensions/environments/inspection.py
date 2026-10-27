@@ -7,7 +7,8 @@ from django.utils import timezone
 
 from compute_relay.control import services as core
 from compute_relay.control.auth import require_connection
-from compute_relay.control.models import Artifact, Job
+from compute_relay.control.errors import BrokerError
+from compute_relay.control.models import Artifact, Grant, Job, Project
 from compute_relay.control.storage import read_blob, store_blob
 
 from .inventory import INSPECTION_SCRIPT, validate_runtime
@@ -32,20 +33,21 @@ def serialize(inspection):
         execution = inspection.job.execution_requests.order_by("-created_at", "-id").first()
         if inspection.job.state in {"cancelled", "archived"}:
             state = inspection.job.state
-        elif execution and execution.state in {"rejected", "cancelled"}:
+        elif execution:
             state = execution.state
+        else:
+            state = "prepared" if inspection.job.manifest else "draft"
     return {"id": str(inspection.id), "environment_id": str(inspection.environment_id), "state": state,
         "job_id": str(inspection.job_id) if inspection.job_id else None,
         "attempt_id": str(inspection.attempt_id) if inspection.attempt_id else None,
         "observation": inspection.observation, "observed_at": inspection.observed_at.isoformat() if inspection.observed_at else None}
 
 
-def create(credential, environment, resources, slurm):
+def create(credential, environment):
     from compute_relay.control.metadata import reserve_metadata
     core.bound_environment(credential.project, {"connection_id": str(environment.connection_id),
         "environment": {"id": str(environment.id), "revision_sha256": environment.revision_sha256}})
     with transaction.atomic():
-        from compute_relay.control.models import Project
         Project.objects.select_for_update().get(id=credential.project_id)
         existing = pending().filter(credential=credential, environment=environment).order_by("-created_at").first()
         if existing:
@@ -55,10 +57,8 @@ def create(credential, environment, resources, slurm):
     return serialize(inspection), 201
 
 
-def prepare(inspection, resources, slurm):
-    if inspection.job_id:
-        core.prepare_job(inspection.job)
-        return
+def prepare(inspection, resources=None, slurm=None):
+    from .requests import defaults, require_scheduler_options
     environment = inspection.environment
     reference = {"id": str(environment.id), "revision_sha256": environment.revision_sha256}
     files = {"_environment/runtime_inventory.py": INSPECTION_SCRIPT.encode(),
@@ -67,20 +67,64 @@ def prepare(inspection, resources, slurm):
     request = {"schema_version": "1.0", "project_id": str(inspection.project_id), "connection_id": str(environment.connection_id),
         "name": "inspect-" + str(inspection.id)[:12], "environment": reference,
         "command": {"interpreter": "python3", "script": "_environment/runtime_inventory.py", "arguments": []},
-        "resources": resources, "slurm": slurm, "outputs": ["_environment/inventory.json"],
+        "outputs": ["_environment/inventory.json"],
         "files": [{"path": path, "sha256": blob.sha256, "size_bytes": blob.size_bytes, "executable": False} for path, blob in sources.items()]}
     with transaction.atomic():
+        # Revisions and admissions share the project lock. A concurrent retry
+        # cannot replace a probe once another caller has requested execution.
+        Project.objects.select_for_update().get(id=inspection.project_id)
         current = EnvironmentInspection.objects.select_for_update().get(id=inspection.id)
-        if not current.job_id:
-            result, _ = core.create_job(inspection.credential, request, trusted_files=sources)
+        previous = current.job if current.job_id else None
+        if previous and previous.state in {"cancelled", "archived"}:
+            raise BrokerError("INSPECTION_CLOSED", "Request a fresh probe with a new idempotency key.", 409)
+        saved = previous.request if previous else {}
+        options = saved.get("slurm", {}) if slurm is None else {**saved.get("slurm", {}), **slurm}
+        selected = saved.get("resources") if resources is None else resources
+        requested = bool(previous and previous.execution_requests.exists())
+        if requested:
+            if selected != saved["resources"] or options != saved["slurm"]:
+                raise BrokerError("INSPECTION_ALREADY_REQUESTED", "Cancel the existing probe before requesting different settings.", 409)
+        else:
+            selected, options = defaults(environment.connection, selected, options,
+                project_policy=Grant.objects.get(project_id=inspection.project_id).policy)
+            require_scheduler_options(environment.connection, options)
+        request.update(resources=selected, slurm=options)
+        if not previous or selected != saved["resources"] or options != saved["slurm"]:
+            result, _ = core.create_job(inspection.credential, request, previous=previous, trusted_files=sources)
             job = Job.objects.get(id=result["id"])
             job.extension_name = "environments"
             job.save(update_fields=["extension_name"])
             current.job = job
-            current.state = "prepared"
+            current.state = "draft"
             current.save(update_fields=["job", "state"])
     inspection.refresh_from_db()
-    core.prepare_job(inspection.job)
+    job = inspection.job
+    core.prepare_job(job)
+    EnvironmentInspection.objects.filter(id=inspection.id, job=job, state__in=["draft", "prepared"]).update(state="prepared")
+    inspection.refresh_from_db()
+    if inspection.job_id != job.id:
+        raise BrokerError("INSPECTION_CHANGED", "The probe was revised concurrently; read its inventory and retry.", 409)
+
+
+@transaction.atomic
+def request_execution(inspection, credential):
+    Project.objects.select_for_update().get(id=inspection.project_id)
+    current = EnvironmentInspection.objects.select_for_update().get(id=inspection.id)
+    if current.credential_id != credential.id:
+        raise BrokerError("NOT_FOUND", "Inspection not found.", 404)
+    if current.job_id != inspection.job_id:
+        raise BrokerError("INSPECTION_CHANGED", "The probe was revised concurrently; read its inventory and retry.", 409)
+    existing = current.job.execution_requests.order_by("-created_at", "-id").first()
+    if existing:
+        attempt = core.Attempt.objects.filter(execution_request=existing).first()
+        return {"id": str(existing.id), "state": existing.state, "attempt_id": str(attempt.id) if attempt else None}
+    # Fence execution by inspection identity, including resumptions that use a
+    # different client key. The current immutable job is pinned by this lock.
+    execution, _ = core.idempotent(current.project, "inspection:execute:" + str(current.id), "execution", {},
+        lambda: core.request_execution(current.job, credential))
+    if execution["state"] == "awaiting_approval":
+        EnvironmentInspection.objects.filter(id=current.id).update(state="awaiting_approval")
+    return execution
 
 
 def sync(attempt):

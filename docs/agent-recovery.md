@@ -55,7 +55,10 @@ do not allocate compute or modify cluster configuration.
 `queue_pressure.pending_jobs_per_schedulable_node` normalizes pending entries by
 the partition's schedulable node count. For example, 10 pending jobs on 5 nodes
 is 2 per node; 100 on 200 is 0.5. The larger absolute queue can have less relative
-pressure. `pending_gpu_jobs_per_schedulable_device` uses the capacity of each GPU
+pressure. Ratios use decimal strings (for example, `"2"`, `"0.5"`) with
+`ratio_encoding: "decimal_string"`, or `null` when unknown. Compare them
+numerically, not lexicographically; counts and capacities remain integers.
+`pending_gpu_jobs_per_schedulable_device` uses the capacity of each GPU
 type on schedulable nodes, excluding down/draining nodes. The raw counts and
 denominators remain visible. Zero/missing capacity or failed/truncated queries
 produce unknown ratios. Compare relevant partitions across clusters; their

@@ -399,7 +399,7 @@ def _permit(build, actor):
 
 
 def environment_summary(environment, project):
-    from .inspection import latest, pending
+    from .inspection import latest, pending, serialize
     inspection = latest(environment, project)
     build = EnvironmentBuild.objects.filter(environment=environment, spec__project=project).first()
     runtime = inspection.observation.get("runtime") if inspection else build.receipt.get("receipt", {}).get("runtime") if build else None
@@ -411,5 +411,5 @@ def environment_summary(environment, project):
         "observed_at": inspection.observed_at.isoformat() if inspection else build.receipt.get("receipt", {}).get("measured_at") if build else None,
         "matches_managed_receipt": runtime["fingerprint"] == expected if runtime and expected else None,
         "pending_inspection": {"id": str(active.id), "job_id": str(active.job_id) if active.job_id else None,
-            "state": active.state} if active else None,
+            "state": serialize(active)["state"]} if active else None,
         "inspection_tool": "inspect_environment", "managed": build is not None}

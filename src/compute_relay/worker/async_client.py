@@ -8,7 +8,7 @@ import re
 
 import httpx
 
-from .client import ControlError, JsonClient, strict_json
+from .client import ControlError, JsonClient, strict_json, _http_error, _MAX_ERROR_BYTES
 
 
 class AsyncJsonClient(JsonClient):
@@ -50,14 +50,16 @@ class AsyncJsonClient(JsonClient):
             async with asyncio.timeout(self.timeout):
                 async with self._http.stream(method, self.base_url + path, content=data, headers=headers,
                                              follow_redirects=False) as response:
-                    if not 200 <= response.status_code < 300:
-                        raise ControlError("CONTROL_HTTP_ERROR", response.status_code)
+                    error = not 200 <= response.status_code < 300
                     if response.headers.get("Content-Encoding", "identity").lower() != "identity":
-                        raise ControlError("INVALID_CONTROL_RESPONSE")
+                        raise ControlError("CONTROL_HTTP_ERROR", response.status_code) if error else ControlError("INVALID_CONTROL_RESPONSE")
+                    bound = min(maximum, _MAX_ERROR_BYTES) if error else maximum
                     async for chunk in response.aiter_raw(chunk_size=65536):
-                        if len(content) + len(chunk) > maximum:
-                            raise ControlError("RESPONSE_TOO_LARGE")
+                        if len(content) + len(chunk) > bound:
+                            raise ControlError("CONTROL_HTTP_ERROR", response.status_code) if error else ControlError("RESPONSE_TOO_LARGE")
                         content.extend(chunk)
+                    if error:
+                        raise _http_error(response.status_code, bytes(content))
                     return bytes(content), response.headers.get("Content-Type", "application/octet-stream")
         except (httpx.HTTPError, TimeoutError, OSError):
             raise ControlError("CONTROL_UNAVAILABLE") from None

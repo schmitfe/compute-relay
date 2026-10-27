@@ -1,6 +1,8 @@
 """Freshness-labelled scheduler observations, independent of admission limits."""
 
 from datetime import timedelta
+from copy import deepcopy
+import math
 from uuid import uuid4
 
 from django.db import transaction
@@ -15,7 +17,20 @@ from .views import body, boundary, scope
 
 
 def public_availability(connection):
-    snapshot = dict(connection.availability_snapshot)
+    snapshot = deepcopy(connection.availability_snapshot)
+    # Stored observations can outlive the reporting connector process. Normalize
+    # existing ratios at the public boundary as well as in new observations.
+    def ratio(value):
+        if isinstance(value, float):
+            return format(value, ".6f").rstrip("0").rstrip(".") if math.isfinite(value) and value >= 0 else None
+        return str(value) if type(value) is int else value
+    for row in snapshot.get("partitions", []):
+        pressure = row.get("queue_pressure")
+        if isinstance(pressure, dict):
+            pressure["ratio_encoding"] = "decimal_string"
+            pressure["pending_jobs_per_schedulable_node"] = ratio(pressure.get("pending_jobs_per_schedulable_node"))
+            pressure["pending_gpu_jobs_per_schedulable_device"] = {kind: ratio(value) for kind, value in
+                pressure.get("pending_gpu_jobs_per_schedulable_device", {}).items()}
     observed = parse_datetime(snapshot.get("observed_at", ""))
     age = max(0, int((timezone.now() - observed).total_seconds())) if observed and timezone.is_aware(observed) else None
     partitions = connection.configuration.get("site_profile", {}).get("partitions", [])

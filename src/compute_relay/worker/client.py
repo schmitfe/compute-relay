@@ -19,6 +19,32 @@ _RESOURCE_FIELDS = {
     "time_limit_seconds": ("Walltime", "seconds"),
 }
 _MAX_ERROR_BYTES = 64 * 1024
+_PUBLIC_ERRORS = {
+    "INVALID_REQUEST": "Check the tool's resource, scheduler and input fields against list_compute_targets before retrying.",
+    "NOT_PREPARED": "Prepare the job before requesting execution. For a runtime probe, resume inspect_environment.",
+    "INPUT_DENIED": "Inputs need an explicit upload or readable artifact. Resume extension-generated probes through inspect_environment instead of revise_job.",
+    "INPUT_SOURCE_CHANGED": "Refresh the input descriptors and prepare a new immutable revision.",
+    "IDEMPOTENCY_REQUIRED": "Supply a stable idempotency key and reuse it for an unchanged retry.",
+    "IDEMPOTENCY_CONFLICT": "This key was used with different arguments. Reuse the original arguments, or use a new key for a deliberate revision.",
+    "SCHEDULER_OPTIONS_REQUIRED": "Choose the partition, account and QOS from list_compute_targets and retry the environment tool. Only sole configured choices are filled automatically.",
+    "SCHEDULER_OPTIONS_DENIED": "Choose permitted scheduler options from list_compute_targets and retry the environment tool.",
+    "INSPECTION_ALREADY_REQUESTED": "The probe already has an execution request. Poll its inventory, or cancel its job before requesting different settings.",
+    "INSPECTION_CHANGED": "Another request revised the probe. Read get_environment_inventory and retry inspect_environment.",
+    "INSPECTION_CLOSED": "This probe was cancelled or archived. Use a new idempotency key to request a fresh probe.",
+    "CONNECTION_DENIED": "Select a cluster permitted by this project key using list_compute_targets.",
+    "REFERENCE_DENIED": "Select a current environment bound to a permitted cluster using list_compute_targets.",
+    "SCOPE_DENIED": "The key lacks a required scope. Inspect the project context and ask the project owner to grant that scope.",
+    "POLICY_DENIED": "Refresh get_project_context and get_project_allowance, then choose a permitted job configuration.",
+    "ACTIVE_JOB_LIMIT": "The active-job limit is reached. Check list_project_jobs and wait for completion or cancel unwanted jobs.",
+    "TOTAL_JOB_LIMIT": "The project's lifetime job limit is reached. Check get_project_allowance and contact the project owner.",
+    "BUDGET_UNAVAILABLE": "The project cannot reserve this execution. Check get_project_allowance before changing the request.",
+    "PROJECT_PAUSED": "New execution is paused. Check the project context and contact the project owner.",
+    "GRANT_EXPIRED": "The execution grant has expired. Check get_project_allowance and contact the project owner.",
+    "ENVIRONMENT_BUILDS_DISABLED": "The project owner must enable an environment-build policy before requesting packages.",
+    "ENVIRONMENT_BASE_UNSUPPORTED": "Choose a supported bootstrap Python environment from get_environment_build_policy.",
+    "ENVIRONMENT_POLICY_CHANGED": "Refresh get_environment_build_policy before preparing a fresh environment build.",
+    "ENVIRONMENT_NOT_READY": "Poll get_environment_build until the environment is verified and permitted for jobs.",
+}
 
 
 def _public_resource_limit_details(details):
@@ -72,16 +98,20 @@ class ControlError(RuntimeError):
                 )
             message += ": RESOURCE_LIMIT. " + "; ".join(violations)
             message += ". Refresh list_compute_targets and get_project_allowance, then revise the resources before retrying."
+        elif isinstance(broker_code, str) and broker_code in _PUBLIC_ERRORS:
+            self.broker_code = broker_code
+            http = f" (HTTP {status})" if status is not None else ""
+            message += f"{http}: {broker_code}. {_PUBLIC_ERRORS[broker_code]}"
         super().__init__(message)
 
 
 def _http_error(status, content):
-    """Error responses are private except for this narrow numeric contract."""
+    """Keep only known codes/local guidance and checked resource integers."""
     try:
         document = strict_json(content)
         error = document.get("error") if isinstance(document, dict) else None
-        if isinstance(error, dict) and error.get("code") == "RESOURCE_LIMIT":
-            return ControlError("CONTROL_HTTP_ERROR", status, broker_code="RESOURCE_LIMIT",
+        if isinstance(error, dict):
+            return ControlError("CONTROL_HTTP_ERROR", status, broker_code=error.get("code"),
                                 details=error.get("details"))
     except (ValueError, UnicodeError, RecursionError):
         pass

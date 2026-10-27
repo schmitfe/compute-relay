@@ -92,3 +92,33 @@ def test_async_http_total_stream_timeout_is_not_an_unbounded_per_chunk_timeout()
                 await client.request("GET", "/lease")
             assert error.value.code == "CONTROL_UNAVAILABLE" and stream.closed
     asyncio.run(scenario())
+
+
+def test_async_http_errors_preserve_only_safe_codes_and_bounded_numeric_diagnostics():
+    import json
+    from test_resource_limit_client import PRIVATE, TOKEN, assert_private_redacted, resource_error
+
+    async def scenario():
+        bodies = [resource_error(), {"error": {"code": "SCHEDULER_OPTIONS_REQUIRED", "message": PRIVATE + TOKEN}},
+                  {"error": {"code": PRIVATE + TOKEN, "message": PRIVATE + TOKEN}}]
+        for document in bodies:
+            stream = Stream([json.dumps(document).encode()])
+            async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(400, stream=stream))) as http:
+                client = AsyncJsonClient("https://control.invalid", TOKEN, http_client=http)
+                with pytest.raises(ControlError) as caught:
+                    await client.request("POST", "/probe", {})
+                error = caught.value
+                expected = document["error"]["code"] if document["error"]["code"] != PRIVATE + TOKEN else None
+                assert error.broker_code == expected and error.status == 400 and error.code == "CONTROL_HTTP_ERROR"
+                assert_private_redacted(error)
+                assert stream.closed
+        for maximum, compressed in ((32, False), (4 * 1024 * 1024, False), (4 * 1024 * 1024, True)):
+            stream = Stream([json.dumps(bodies[0]).encode() + b" " * 70000])
+            headers = {"Content-Encoding": "gzip"} if compressed else {}
+            async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(400, headers=headers, stream=stream))) as http:
+                client = AsyncJsonClient("https://control.invalid", TOKEN, http_client=http, max_response_bytes=maximum)
+                with pytest.raises(ControlError) as caught:
+                    await client.request("GET", "/probe")
+                assert str(caught.value) == "CONTROL_HTTP_ERROR" and caught.value.broker_code is None
+                assert stream.closed
+    asyncio.run(scenario())

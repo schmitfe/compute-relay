@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import timedelta
 import asyncio
 import json
+import io
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +20,7 @@ from compute_relay.backends.async_slurm import AsyncSlurmBackend
 from compute_relay.worker.runner import Worker
 from compute_relay.worker.async_runner import AsyncWorker
 from compute_relay.worker.journal import Journal
+from compute_relay.worker.client import JsonClient
 from test_control import broker, budgeted, dispatched, prepared_job
 from test_remote_bundles import LocalFixedTransport, AsyncLocalFixedTransport
 
@@ -42,8 +44,8 @@ def test_snapshot_groups_hardware_and_queue_pressure_and_excludes_down_capacity(
     assert gpu["cpus"]["idle"] == 16 and gpu["schedulable_nodes"] == 1
     assert gpu["queue"]["pending_by_gpu_type"] == {"h200": 2}
     assert gpu["queue"]["pending_reasons"] == {"Resources": 1, "Priority": 1}
-    assert gpu["queue_pressure"]["pending_jobs_per_schedulable_node"] == 2
-    assert gpu["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"] == {"h200": 0.5}
+    assert gpu["queue_pressure"]["pending_jobs_per_schedulable_node"] == "2"
+    assert gpu["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"] == {"h200": "0.5"}
     assert visual["gpus"]["a6000"]["idle"] == 2
     assert parsed["placement_guaranteed"] is False and parsed["queue_wait_seconds"] is None
 
@@ -77,10 +79,10 @@ def test_pressure_compares_cluster_size_and_gpu_type_instead_of_absolute_queue_l
             "queue": {"returncode": 0, "stdout": "gpu|PENDING||gres/gpu:h200:1|||Resources\n" * pending}})["partitions"][0]
     small, large = snapshot(5, 10), snapshot(200, 100)
     assert small["queue"]["pending_jobs"] < large["queue"]["pending_jobs"]
-    assert small["queue_pressure"]["pending_jobs_per_schedulable_node"] == 2
-    assert large["queue_pressure"]["pending_jobs_per_schedulable_node"] == 0.5
-    assert small["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"]["h200"] == 0.5
-    assert large["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"]["h200"] == 0.125
+    assert small["queue_pressure"]["pending_jobs_per_schedulable_node"] == "2"
+    assert large["queue_pressure"]["pending_jobs_per_schedulable_node"] == "0.5"
+    assert small["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"]["h200"] == "0.5"
+    assert large["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"]["h200"] == "0.125"
     missing_type = deepcopy(RAW)
     missing_type["queue"]["stdout"] += "gpu|PENDING||gres/gpu:a6000:1|||Resources\n"
     assert parse_availability(missing_type)["partitions"][0]["queue_pressure"]["pending_gpu_jobs_per_schedulable_device"]["a6000"] is None
@@ -221,3 +223,40 @@ sys.stdout.write(raw[name]['stdout'])
     commands = [json.loads(line) for line in calls.read_text().splitlines()]
     assert [Path(command[0]).name for command in commands] == ["sinfo", "sinfo", "squeue"]
     assert all(command[1] in {"-N", "-h"} and "-O" in command for command in commands)
+
+
+@pytest.mark.parametrize("cached_numbers", [False, True])
+def test_public_snapshots_round_trip_through_official_strict_client(broker, cached_numbers):
+    c = broker
+    snapshot = {**parse_availability(RAW), "connection_revision_sha256": c.connection.revision_sha256}
+    if cached_numbers:
+        # Existing observations and still-running connectors can contain the
+        # numeric ratios which caused INVALID_CONTROL_RESPONSE in production.
+        for row in snapshot["partitions"]:
+            pressure = row["queue_pressure"]
+            pressure.pop("ratio_encoding")
+            pressure["pending_jobs_per_schedulable_node"] = float(pressure["pending_jobs_per_schedulable_node"])
+            pressure["pending_gpu_jobs_per_schedulable_device"] = {
+                key: float(value) for key, value in pressure["pending_gpu_jobs_per_schedulable_device"].items()}
+    c.connection.availability_snapshot = snapshot
+    c.connection.save()
+    http = Client(HTTP_AUTHORIZATION="Bearer " + c.token)
+    client = JsonClient("http://127.0.0.1:8768", c.token)
+    class Opener:
+        def open(self, request, **kwargs):
+            response = http.generic(request.method, request.selector, data=request.data or b"", content_type="application/json")
+            assert response.status_code == 200, response.content
+            stream = io.BytesIO(response.content)
+            stream.headers = response.headers
+            return stream
+    client._opener = Opener()
+    for method in ("GET", "POST"):
+        result = client.request(method, f"/api/v1/projects/{c.project.id}/availability", {} if method == "POST" else None)
+        pressure = result["connections"][0]["availability"]["partitions"][0]["queue_pressure"]
+        assert pressure["ratio_encoding"] == "decimal_string"
+        assert pressure["pending_jobs_per_schedulable_node"] == "2"
+        assert pressure["pending_gpu_jobs_per_schedulable_device"] == {"h200": "0.5"}
+    client.request("GET", "/api/v1/context")
+    client.request("GET", "/api/v1/connections")
+    c.connection.refresh_from_db()
+    assert c.connection.availability_snapshot == snapshot  # Reading does not rewrite cached evidence.

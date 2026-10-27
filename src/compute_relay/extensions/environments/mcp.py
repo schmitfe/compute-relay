@@ -16,7 +16,7 @@ def register(server, facade):
     @server.tool(annotations=write)
     def inspect_environment(environment_id: str, resources: dict | None = None, slurm: dict | None = None,
                             idempotency_key: str | None = None) -> dict:
-        """Request a bounded compute-node Python/package inventory as an ordinary prepared and approved/budgeted job. Returns job/attempt or pending-review identity. Poll get_environment_inventory. No installer runs; requires normal job write/execute scopes."""
+        """Request a bounded compute-node Python/package inventory as an ordinary prepared and approved/budgeted job. Resumes this key's pending probe; omitted resources retain its saved request. Sole configured partition/account/QOS choices are filled even with partial slurm options; select ambiguous choices from list_compute_targets. Retry a failed preparation here, with a new idempotency key if arguments change: corrections create an immutable job revision before execution is requested. Use this tool instead of revise_job for generated probe inputs. After execution is requested, poll get_environment_inventory or cancel the job before changing settings. Returns job/attempt or pending-review identity. No installer runs; requires jobs:write and jobs:execute."""
         data = {key: value for key, value in (("resources", resources), ("slurm", slurm)) if value is not None}
         return facade._mutate(f"/api/v1/environments/{_uuid(environment_id)}/inspect", data, idempotency_key)
 

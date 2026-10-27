@@ -202,11 +202,13 @@ def create_server(facade: ProjectFacade):
         "assert scientific validity. Effective limits are admission ceilings, not idle hardware. "
         "For placement across clusters, use get_compute_availability(refresh=True), then read its "
         "timestamped snapshots with refresh=False; compare queue_pressure ratios per schedulable "
-        "node and matching GPU device rather than absolute pending counts. Respect unknown/stale data and "
+        "node and matching GPU device rather than absolute pending counts. Ratios are decimal strings; "
+        "compare them numerically. Respect unknown/stale data and "
         "partition overlap. Availability is no placement guarantee or cost estimate. "
         "Where the environments extension is enabled, check observed runtime metadata before "
         "relying on a registered environment label. inspect_environment schedules an ordinary "
-        "bounded Python/package probe; reuse its pending job. request_environment_packages builds "
+        "bounded Python/package probe; resume failed preparation through inspect_environment rather than "
+        "revise_job, preserving its pending identity. request_environment_packages builds "
         "a new immutable environment from uploaded pinned wheels and can update managed environments. "
         "Verified builds are usable automatically only when the human-owned build policy enables it. "
         "The separate target and allowance tools are optional focused refreshes; do not "
@@ -258,7 +260,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
     def get_compute_availability(connection_ids: list[str] | None = None, refresh: bool = False) -> dict:
-        """Compare timestamped scheduler-visible CPU/GPU availability and queue pressure across this key's clusters. Compare queue_pressure.pending_jobs_per_schedulable_node and pending_gpu_jobs_per_schedulable_device for the requested GPU type, together with raw counts, capacity and untyped requests; job size/duration remain unknown. refresh=True queues bounded read-only observations; poll with refresh=False. Check stale/status/query visibility; idle devices do not guarantee placement or wait times. This is independent of admission limits; costs and automatic placement are not configured."""
+        """Compare timestamped scheduler-visible CPU/GPU availability and queue pressure across this key's clusters. Compare queue_pressure.pending_jobs_per_schedulable_node and pending_gpu_jobs_per_schedulable_device for the requested GPU type numerically: ratios are decimal strings (ratio_encoding=decimal_string), or null when unknown. Use raw counts, capacity and untyped requests too; job size/duration remain unknown. refresh=True queues bounded read-only observations; poll with refresh=False. Check stale/status/query visibility; idle devices do not guarantee placement or wait times. This is independent of admission limits; costs and automatic placement are not configured."""
         return facade.get_compute_availability(connection_ids, refresh)
 
     @server.tool(annotations=readonly)

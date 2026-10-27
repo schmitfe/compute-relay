@@ -32,30 +32,17 @@ def inventory(request, environment_id):
 @boundary("POST")
 def inspect(request, environment_id):
     from . import inspection
-    from .requests import defaults
     credential, _ = scope(request, "jobs:write")
+    scope(request, "jobs:execute")
     environment = inspection.environment_for(credential, environment_id)
     data = body(request)
     if set(data) - {"resources", "slurm"}:
         raise ValueError("Invalid inspection options")
-    from compute_relay.control.models import Grant
-    resources, slurm = defaults(environment.connection, data.get("resources"), data.get("slurm"),
-        project_policy=Grant.objects.get(project=credential.project).policy)
     created, _ = idem(request, credential, "environment:inspect:" + str(environment.id), data,
-        lambda: inspection.create(credential, environment, resources, slurm))
-    current = inspection.EnvironmentInspection.objects.get(id=created["id"])
-    inspection.prepare(current, resources, slurm)
-    existing = current.job.execution_requests.order_by("-created_at", "-id").first()
-    if existing:
-        attempt = services.core.Attempt.objects.filter(execution_request=existing).first()
-        execution = {"id": str(existing.id), "state": existing.state, "attempt_id": str(attempt.id) if attempt else None}
-    else:
-        # A resumed probe may have a different client idempotency key. Fence
-        # execution by inspection identity so concurrent resumptions admit once.
-        execution, _ = services.core.idempotent(credential.project, "inspection:execute:" + str(current.id), "execution", {},
-            lambda: services.core.request_execution(current.job, credential))
-    if execution["state"] == "awaiting_approval":
-        inspection.EnvironmentInspection.objects.filter(id=current.id).update(state="awaiting_approval")
+        lambda: inspection.create(credential, environment))
+    current = inspection.EnvironmentInspection.objects.get(id=created["id"], credential=credential, project=credential.project)
+    inspection.prepare(current, data.get("resources"), data.get("slurm"))
+    execution = inspection.request_execution(current, credential)
     current.refresh_from_db()
     return {**inspection.serialize(current), "execution": execution}
 

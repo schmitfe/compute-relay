@@ -58,6 +58,16 @@ for this workflow, identically to compatible OpenAI and Claude MCP clients:
    package versions and observation time. `inspect_environment` schedules a
    bounded probe when this is missing or needs refreshing; it returns an existing
    pending probe when resumed. The registered environment name is descriptive.
+   Omitted resources retain a pending probe's saved request. Sole configured
+   partition, account and QOS choices are filled even when `slurm` supplies only
+   some fields; choose ambiguous options from `list_compute_targets`. A failed
+   preparation stays a draft. Resume it with `inspect_environment`, supplying
+   corrected resources or scheduler options and a new idempotency key when the
+   arguments change. Corrections create an immutable job revision before an
+   execution request exists, retaining the original job in its history. Generated
+   probe inputs cannot be revised through the ordinary `revise_job` upload path.
+   Once execution is requested, retries reuse it; poll inventory or cancel the
+   existing job before requesting different settings with a new key.
 4. The agent can call `request_environment_packages` with uploaded pinned wheel
    descriptors. This creates, prepares and requests a normal build. For a managed
    environment, the same tool creates an updated immutable revision, preserving

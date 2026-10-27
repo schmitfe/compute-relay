@@ -39,13 +39,21 @@ typed GPU queue pressure and pending reasons. Compare
 `pending_gpu_jobs_per_schedulable_device` for the requested GPU type together
 with their raw counts and capacity: 10 pending jobs on 5 schedulable nodes is
 2 per node, whereas 100 on 200 is 0.5. Compare relevant partitions; do not sum
-overlapping capacities. These are rough pressure indicators; resource request
+overlapping capacities. Ratios are decimal strings (`ratio_encoding: decimal_string`),
+or null when unknown; compare them numerically. These are rough pressure indicators; resource request
 sizes, job durations, priorities and untyped GPU requests still matter.
 Check status, age, truncation,
 unknown allocation and site visibility. Partition totals can overlap and idle
 resources can be fragmented or reserved; they do not guarantee a start time.
 Refreshes are bounded read-only scheduler queries, rate limited to 30 seconds.
 Costs and automatic placement are not configured; the workflow chooses the target.
+
+For a failed runtime probe, resume `inspect_environment` rather than `revise_job`.
+Omitted resources retain the saved request. Sole configured partition/account/QOS
+choices are filled with partial scheduler options; choose ambiguous fields from
+`list_compute_targets`. Use a new idempotency key when correcting arguments.
+Corrections create an immutable job revision only before execution is requested;
+afterwards, poll inventory or cancel the existing job before changing settings.
 
 With the environments extension, inspect each environment's `observations` and
 use `get_environment_inventory` for the actual observed Python/package list.

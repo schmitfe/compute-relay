@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 
+from compute_relay.control.errors import BrokerError
+
 from . import services
 from .models import EnvironmentBuild
 
@@ -13,10 +15,23 @@ def defaults(connection, resources=None, slurm=None, policy=None, project_policy
     selected = resources if resources is not None else {"nodes": 1, "cpus": 1, "gpus": 0,
         "memory_mib": min(512, limits.get("memory_mib", 512), project_limits.get("memory_mib", 512), site.get("maximum_memory_mib", 512)),
         "time_limit_seconds": min(300, limits.get("time_limit_seconds", 60), project_limits.get("time_limit_seconds", 300), site.get("maximum_time_limit_seconds", 300))}
-    if slurm is None:
-        profile = connection.configuration.get("site_profile", {})
-        slurm = {key: profile[field][0] for key, field in (("partition", "partitions"), ("account", "accounts")) if len(profile.get(field, [])) == 1}
-    return selected, slurm
+    if slurm is not None and not isinstance(slurm, dict):
+        raise ValueError("Invalid scheduler options")
+    options = {key: site[field][0] for key, field in (("partition", "partitions"), ("account", "accounts"), ("qos", "qos")) if len(site.get(field, [])) == 1}
+    options.update(slurm or {})
+    return selected, options
+
+
+def require_scheduler_options(connection, slurm):
+    if connection.backend != "slurm":
+        return
+    site = connection.configuration.get("site_profile", {})
+    for key, field in (("partition", "partitions"), ("account", "accounts"), ("qos", "qos")):
+        choices = site.get(field, [])
+        if (key == "partition" or choices) and not slurm.get(key):
+            raise BrokerError("SCHEDULER_OPTIONS_REQUIRED", "Select scheduler options from list_compute_targets and retry the environment tool.", 400)
+        if key in slurm and choices and slurm[key] not in choices:
+            raise BrokerError("SCHEDULER_OPTIONS_DENIED", "Select permitted scheduler options from list_compute_targets.", 400)
 
 
 def package_recipe(credential, environment, data):
@@ -53,5 +68,7 @@ def package_recipe(credential, environment, data):
     document["name"] = data.get("name") or environment.name[:60] + "-packages"
     for field in ("resources", "slurm"):
         if data.get(field) is not None:
-            document[field] = data[field]
+            document[field] = {**document[field], **data[field]} if field == "slurm" and isinstance(data[field], dict) else data[field]
+    document["resources"], document["slurm"] = defaults(environment.connection, document["resources"], document["slurm"])
+    require_scheduler_options(environment.connection, document["slurm"])
     return document
