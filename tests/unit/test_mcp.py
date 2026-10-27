@@ -35,7 +35,7 @@ class FacadeTests(unittest.TestCase):
         server = create_server(self.facade)
         tools = asyncio.run(server.list_tools())
         names = {tool.name for tool in tools}
-        self.assertEqual(names, {"get_project_context", "get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
+        self.assertEqual(names, {"get_compute_guide", "get_job_completion", "get_project_context", "get_broker_capabilities", "list_compute_targets", "get_project_allowance", "upload_job_file",
                                  "prepare_job", "revise_job", "request_execution", "get_job", "get_job_logs",
                                  "list_job_artifacts", "get_job_artifact", "retry_job_outputs", "cancel_job_attempt", "cancel_execution_request",
                                  "list_project_jobs", "acknowledge_job_results", "get_compute_availability", "cancel_prepared_job"})

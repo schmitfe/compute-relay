@@ -253,10 +253,41 @@ def test_sdk_tool_schema_and_normal_json_calls_support_codex_and_claude(job_requ
     asyncio.run(server.call_tool("prepare_job", {"request": deepcopy(job_request), "idempotency_key": "plain-json"}))
     assert client.calls[0][2] == {**job_request, "project_id": client.project_id}
     client.calls.clear()
-    # The official SDK also accepts clients that encode object parameters as
-    # JSON strings, without introducing a separate Claude server implementation.
+    # Both clients may also encode an object parameter as a JSON string.
     asyncio.run(server.call_tool("prepare_job", {"request": json.dumps(job_request), "idempotency_key": "encoded-json"}))
     assert client.calls[0][2] == {**job_request, "project_id": client.project_id}
+
+
+def test_sdk_resources_have_flat_types_units_constraints_and_valid_examples(job_request):
+    server = create_server(ProjectFacade(ClientSpy(), str(uuid4())))
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    for name in ("prepare_job", "revise_job"):
+        schema = tools[name].inputSchema
+        request = schema["properties"]["request"]
+        if "$ref" in request:
+            request = schema["$defs"][request["$ref"].split("/")[-1]]
+        resources = request["properties"]["resources"]
+        assert "allOf" not in resources and resources["type"] == "object"
+        assert all(item.get("type") in {"integer", "string"} for item in resources["properties"].values())
+        assert "host RAM" in resources["properties"]["memory_mib"]["description"]
+        assert "VRAM" in resources["properties"]["gpu_type"]["description"]
+        assert resources["properties"]["time_limit_seconds"]["multipleOf"] == 60
+        for example in resources["examples"]:
+            JobRequest.model_validate({**deepcopy(job_request), "resources": example})
+
+
+def test_guides_discoverable_by_resource_and_tool_without_broker_calls():
+    client = ClientSpy()
+    server = create_server(ProjectFacade(client, client.project_id))
+    resources = asyncio.run(server.list_resources())
+    assert {str(item.uri) for item in resources} == {
+        "compute-relay://guide/" + topic for topic in ("workflow", "placement", "completion", "job_request")}
+    for resource in resources:
+        result = asyncio.run(server.read_resource(resource.uri))
+        assert result
+    result = asyncio.run(server.call_tool("get_compute_guide", {"topic": "job_request"}))
+    assert "memory_mib" in str(result)
+    assert client.calls == []
 
 
 @pytest.mark.parametrize("bad_field", ["name", "script", "argument", "extra", "container"])

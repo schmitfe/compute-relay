@@ -59,6 +59,11 @@ def jobs(request, project_id):
     if state not in {"attention", "unfinished", "unread_results", "all"} or not 1 <= limit <= 100:
         raise ValueError("Invalid recovery filter")
     query = select_jobs(recovery_jobs(credential), state)
+    if "context" in request.GET:
+        if len(request.GET["context"]) > 512:
+            raise ValueError("Invalid context filter")
+        from compute_relay.extensions import filter_job_context
+        query = filter_job_context(query, credential, json.loads(request.GET["context"]))
     cursor = request.GET.get("cursor")
     if cursor:
         if len(cursor) > 512:

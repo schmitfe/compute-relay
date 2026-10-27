@@ -37,6 +37,6 @@ jobs:
           python tools/local_smoke.py
           python tools/local_smoke.py --mode budgeted
       - name: Check all bundled migrations
-        run: BROKER_EXTENSIONS=storage,environments,workflows python -m django makemigrations --check --dry-run --settings=compute_relay.control.settings
+        run: BROKER_EXTENSIONS=storage,environments,workflows,investigations python -m django makemigrations --check --dry-run --settings=compute_relay.control.settings
       - name: Build and verify a clean installed wheel
         run: python tools/package_smoke.py

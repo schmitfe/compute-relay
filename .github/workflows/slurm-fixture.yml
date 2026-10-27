@@ -28,3 +28,23 @@ jobs:
       - name: Remove fixture state
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  investigations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COMPOSE_FILE: deploy/compose.test.yml:deploy/compose.investigations-test.yml
+      COMPOSE_PROJECT_NAME: cb-investigation-ci
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build the disposable investigation fixture
+        run: docker compose build control slurm worker
+      - name: Start disposable services
+        run: docker compose up -d --wait control slurm worker
+      - name: Verify reviewed execution, grouped closeout and installed manifest export
+        run: docker compose exec -T control python /opt/investigation_smoke.py --demo-file /run/demo/demo.json --confirm-disposable-fixture
+      - name: Remove fixture state
+        if: always()
+        run: docker compose down --volumes --remove-orphans

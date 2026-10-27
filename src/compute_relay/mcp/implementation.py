@@ -17,7 +17,7 @@ def _source_fingerprint():
     directory = Path(__file__).parent
     digest = sha256()
     try:
-        for name in ("__init__.py", "__main__.py", "facade.py", "implementation.py", "requests.py", "responses.py"):
+        for name in ("__init__.py", "__main__.py", "facade.py", "guidance.py", "implementation.py", "requests.py", "responses.py"):
             content = (directory / name).read_bytes()
             digest.update(name.encode("ascii") + b"\0")
             digest.update(len(content).to_bytes(8, "big"))

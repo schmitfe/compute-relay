@@ -30,6 +30,27 @@ def client_job_schema():
     schema = expand(deepcopy(schemas["job-request.schema.json"]), "job-request.schema.json")
     schema["required"].remove("project_id")
     schema["properties"]["project_id"]["description"] = "Omit this internal identity; the API key selects the project."
+    resources = schema["properties"]["resources"]
+    # Conditional allOf branches are rendered as `unknown & unknown` by some
+    # MCP clients. Present flat typed fields; canonical validation below still
+    # enforces the GPU cross-field conditions before any HTTP mutation.
+    resources.pop("allOf", None)
+    resources["description"] = "Single-node allocation. memory_mib is host RAM, not GPU VRAM. GPU memory capacity comes from the selected GPU hardware."
+    descriptions = {
+        "nodes": "Number of nodes; exactly 1 is supported.",
+        "cpus": "Requested CPU cores. Account for both process workers and numerical-library threads.",
+        "gpus": "Requested GPU devices; 0 for a CPU job. A positive count requires gpu_type.",
+        "gpu_type": "Site GPU type from get_project_context. Required when gpus > 0; omit when gpus = 0. This selects hardware, not a VRAM reservation.",
+        "memory_mib": "Total host RAM for the allocation, in MiB (1 MiB = 1048576 bytes). This does not request GPU VRAM.",
+        "time_limit_seconds": "Requested walltime in seconds, in whole minutes (multiple of 60). This determines the maximum compute reservation.",
+    }
+    resources["properties"]["nodes"]["type"] = "integer"
+    for name, description in descriptions.items():
+        resources["properties"][name]["description"] = description
+    resources["examples"] = [
+        {"nodes": 1, "cpus": 2, "gpus": 0, "memory_mib": 1024, "time_limit_seconds": 60},
+        {"nodes": 1, "cpus": 4, "gpus": 1, "gpu_type": "a100", "memory_mib": 8192, "time_limit_seconds": 600},
+    ]
     return schema
 
 

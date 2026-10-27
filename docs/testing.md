@@ -23,6 +23,7 @@ python tools/package_smoke.py
 | SQLite transactions | Durable reservations/holds, lifetime caps, settlement uniqueness, process races and restart recovery |
 | Worker and SSH fixtures | Fixed arguments, no fallback login, time/output limits, journal replay, uncertain submission and native identity checks |
 | Module suites | Enabled/disabled boundaries, storage estimates, scheduled environment publication and workflow materialization |
+| Investigation completion | Finite typed plans, grouped accounting, scope closeout, revision waits, safe manifest export and verified local receipts |
 | Native local smoke | A real loopback HTTP service with synthetic jobs and an idle/fake worker |
 | Installed distribution | Wheel and sdist completeness, clean-venv plain install, runtime imports, HTML templates, launcher start, Ctrl-C and same-state restart |
 
@@ -61,6 +62,10 @@ then check native accounting, output hashes and zero residual reservation.
 Queue presence or cancellation acknowledgement alone is not settlement proof.
 Test SSH MFA with human participation; never place institutional credentials in
 public CI or run untrusted pull-request code with them.
+
+The separate [investigation acceptance](investigations.md#verification) runs one
+reviewed job on the disposable Slurm fixture, closes unused packages/reviews,
+and exercises the installed export CLI, resume, hashes and shared accounting.
 
 The prior PostgreSQL/LDAP fixtures and migration-transfer tests are available on
 `codex/archive-multi-user-server` at `520effc`, not supported by this local

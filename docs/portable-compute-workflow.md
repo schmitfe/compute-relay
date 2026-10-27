@@ -146,6 +146,22 @@ This is the bounded broker-retained artifact path. Direct cluster-to-workspace
 transfers, remote filesystem migration and large scientific datasets remain
 separate optional extension work.
 
+## Investigation planning and completion
+
+The skill now defines a deliverable, core experiments, required validation,
+resource/execution limits, diagnostic allowance and stopping rule before
+substantive compute. All delegates share the same plan and counters. Read the
+[planning comparison](references/investigation-planning.md) for the research and
+skill patterns behind these rules. Scope completion and budget exhaustion are
+separate decisions; reporting inconclusive is an explicit valid outcome.
+
+Shared guidance is discoverable through MCP resources and get_compute_guide.
+Core get_job_completion and the local files finish command consolidate evidence
+and verified delivery; get_job supports bounded revision-based waiting. The
+explicitly enabled investigations module adds metadata grouping, roles, filtered
+recovery, aggregate ledger accounting and scope closeout. See
+[investigations and completion](investigations.md) for enablement and limitations.
+
 ## Remaining efficiency work
 
 The feedback is separated into these follow-up units so it does not become a
@@ -156,17 +172,14 @@ client-specific rewrite or weaken admission controls:
    deterministic recommendation. Distinguish a sandbox, laptop and broker host.
    The initial skill already asks for local pilots and justified local/hybrid/
    cluster placement, but no enforced placement planner exists yet.
-2. **Workflow identity and optional sub-budgets.** Persist a parent workflow/run
-   identifier with each stage. Reserve workflow caps under the same project
-   transaction and never issue extra keys to evade the shared allowance. Current
-   core idempotency and project reservations already protect concurrent callers.
-3. **Bounded waiting and progress.** Add read-only multi-job waiting with bounded
-   timeout and status cursors. Keep client disconnection separate from scheduler
-   cancellation. Progress should be structured, rate-limited and allowlisted;
-   logs must not become an unbounded polling stream.
-4. **Server summaries and result lifecycle.** Serve a bounded job summary directly
-   from REST, with explicit execution, artifact retention, validation and
-   accounting states. Preserve explicit detail access and original evidence.
+2. **Enforced investigation sub-budgets.** Investigation plan limits currently
+   guide agents and flag exhaustion. Any future hard cap must reserve under the
+   same project transaction and preserve outstanding uncertain reservations.
+3. **Multi-job progress.** Job and investigation waits are implemented; richer
+   progress still needs structured, rate-limited, allowlisted observations.
+4. **Larger summary pagination.** Per-job completion paginates attempts and
+   bounded groups expose completion summaries. Further response-size optimization
+   must preserve explicit detail access and original evidence.
 5. **Optional large-data transport and packed environments.** Keep site-specific
    storage/migration mechanisms outside core submission, configurable for blocked
    ports and filesystem byte/inode quotas. Never infer a quota guarantee from

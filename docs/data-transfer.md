@@ -44,6 +44,13 @@ records transfer integrity separately from scientific validation. A failed
 checksum never produces a success receipt. If a partial file itself is damaged,
 choose a new destination. Ordinary fetches never overwrite existing paths.
 
+`files finish --job-id JOB_UUID --output results/RUN` consolidates provenance,
+completion state and verified downloads into `run-manifest.json`. With the
+explicitly enabled investigations module, `--investigation-id` exports the
+whole group. `--resume`, `--no-download` and explicit `--acknowledge` preserve
+the distinction between retained artifacts, local integrity and scientific
+acceptance. See [completion and its consistency limits](investigations.md).
+
 ## Output recovery without another compute run
 
 Execution state, accounting and `collection_state` are separate. A successful

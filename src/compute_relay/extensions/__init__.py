@@ -12,6 +12,7 @@ EXTENSIONS = {
     "storage": ("compute_relay.extensions.storage", "StorageConfig"),
     "environments": ("compute_relay.extensions.environments", "EnvironmentsConfig"),
     "workflows": ("compute_relay.extensions.workflows", "WorkflowsConfig"),
+    "investigations": ("compute_relay.extensions.investigations", "InvestigationsConfig"),
 }
 
 
@@ -75,6 +76,42 @@ def job_hook(job, event, *args, **kwargs):
         raise BrokerError("EXTENSION_UNAVAILABLE", "The assigned worker does not support this extension.", 409)
     handler = getattr(module, event, None)
     return handler(*args, **kwargs) if handler else None
+
+
+def bind_job_context(job, credential, context, *, previous=None):
+    """Fixed-registry metadata associations never select executable code."""
+    if not isinstance(context, dict) or set(context) - set(control_names()):
+        from compute_relay.control.errors import BrokerError
+        raise BrokerError("EXTENSION_DISABLED", "Job context requires an enabled metadata extension.", 409)
+    for name in control_names():
+        module = services_for(name)
+        if previous is not None:
+            handler = getattr(module, "after_revision", None)
+            if handler:
+                handler(job, previous, credential)
+        if name in context:
+            handler = getattr(module, "bind_job", None)
+            if handler is None:
+                raise ValueError("This extension does not accept job context")
+            handler(job, credential, context[name])
+
+
+def filter_job_context(query, credential, context):
+    if not isinstance(context, dict) or set(context) - set(control_names()):
+        raise ValueError("Invalid job context filter")
+    for name, value in context.items():
+        handler = getattr(services_for(name), "filter_jobs", None)
+        if handler is None:
+            raise ValueError("Unsupported job context filter")
+        query = handler(query, credential, value)
+    return query
+
+
+def validate_related_execution(job, credential):
+    for name in control_names():
+        handler = getattr(services_for(name), "validate_related_execution", None)
+        if handler:
+            handler(job, credential)
 
 
 def after_report(attempt, extension_data):

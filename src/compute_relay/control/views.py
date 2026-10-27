@@ -10,6 +10,7 @@ from uuid import UUID
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+from django.db import transaction
 from django.http import HttpResponse, JsonResponse
 from django.http.response import HttpResponseBase
 from django.shortcuts import redirect, render
@@ -143,7 +144,14 @@ def objects(request, project_id):
 def jobs(request):
     credential, _ = scope(request, "jobs:write")
     document = body(request)
-    result = idem(request, credential, "jobs:create", document, lambda: services.create_job(credential, document))
+    if "request" in document:
+        if set(document) != {"request", "context"}:
+            raise ValueError("Invalid job envelope")
+        request_document, context = document["request"], document["context"]
+    else:
+        request_document, context = document, None
+    result = idem(request, credential, "jobs:create", document,
+        lambda: services.create_job(credential, request_document, context=context))
     from .input_sources import authorize_job_inputs
     if result[1] < 400:
         authorize_job_inputs(Job.objects.get(id=result[0]["id"]), credential)
@@ -152,10 +160,25 @@ def jobs(request):
 
 @boundary("GET")
 def job_detail(request, job_id):
-    credential, job = scope(request, "jobs:read", job_id=job_id)
+    from .completion import job_snapshot, wait_for_snapshot
     from .input_sources import authorize_job_inputs
-    authorize_job_inputs(job, credential)
-    return services.serialize_job(job)
+    @transaction.atomic
+    def read():
+        credential, job = scope(request, "jobs:read", job_id=job_id)
+        authorize_job_inputs(job, credential)
+        detail = services.serialize_job(job)
+        completion = job_snapshot(credential, job)
+        detail["completion"] = completion["summary"]
+        detail["execution_progress"] = {"execution_request_exists": bool(completion["execution_requests"]),
+            "compute_submitted": True if completion["summary"]["confirmed_submissions"] else None if completion["summary"]["uncertain_submissions"] else False,
+            "submission_uncertain": completion["summary"]["uncertain_submissions"] > 0,
+            "dispatch_started": completion["summary"]["dispatch_started"] > 0,
+            "client_permission_review": "not_observed_by_broker"}
+        return detail
+    result = wait_for_snapshot(read, request.GET.get("after_revision"), int(request.GET.get("wait_seconds", 0)))
+    response = JsonResponse(result)
+    response["Cache-Control"] = "no-store, private"
+    return response
 
 
 @boundary("GET")

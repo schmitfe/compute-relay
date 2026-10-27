@@ -26,6 +26,11 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `POST /api/v1/jobs` | `jobs:submit` | Create immutable revision from the job-request schema; does not execute |
 | `POST /api/v1/jobs/{id}/prepare` | `jobs:submit` | Queue preparation; return `202` with operation ID and job link |
 | `GET /api/v1/jobs/{id}` | `jobs:read` | Preparation, decision, attempt and accounting states, safe explanation/actions |
+| `GET /api/v1/jobs/{id}/completion` | `jobs:read`; artifacts need `artifacts:read` | Implemented provenance, paginated attempts, collection, ledger accounting and per-key delivery state |
+| `GET/POST /api/v1/projects/{id}/investigations` | `jobs:read` / `investigations:write` | Optional implemented investigation list / finite plan creation |
+| `GET /api/v1/investigations/{id}` | `jobs:read` | Optional grouped status, abandoned drafts and aggregate accounting |
+| `POST /api/v1/investigations/{id}/jobs` | `investigations:write` | Attach explicit project jobs and roles |
+| `POST /api/v1/investigations/{id}/finish` | `investigations:write`; cancellation needs `jobs:cancel` | Close scope/report, optionally cancel unstarted packages and reviews |
 | `GET /api/v1/projects/{id}/jobs` | `jobs:read` | Implemented key-scoped recovery inbox, state filter and keyset pagination |
 | `POST /api/v1/jobs/{id}/cancel-prepared` | `jobs:cancel` | Dismiss a never-submitted draft without deleting its evidence |
 | `GET /api/v1/projects/{id}/availability` | `jobs:read` | Cached timestamped scheduler-visible CPU/GPU and queue observations |
@@ -56,6 +61,13 @@ Upload object references are project-owned. Reusing a digest from another projec
 A human decision binds an execution-request UUID as well as the immutable revision and digest. One approval permits one attempt in version one. Authorization atomically consumes it together with reservation/outbox creation. Repeating a completed idempotent execution request returns its existing result; a new execution request needs a fresh human approval or fresh budgeted admission. A previous decision is never a reusable unlimited permission for the package.
 
 ### Current authenticated project discovery
+
+Job and investigation status accept `after_revision` and `wait_seconds` (0–20)
+and return `revision` / `changed`. Investigation job creation can wrap the
+canonical request as `{request: ..., context: {investigations: {id: ..., role: ...}}}`;
+legacy canonical job bodies remain accepted. Group filtering uses the bounded
+JSON `context` query parameter. See [investigations and completion](investigations.md)
+for scopes, advisory plan limits, waiting capacity and manifest consistency.
 
 `GET /api/v1/context` returns `schema_version: "1.0"`, `project` (`id`, `name`) and `credential` (`id`, `scopes`, `execution_mode`). It requires a valid project bearer key and current issuing-user eligibility/project membership. Keys with `jobs:read` also receive `compute` (the current `/api/v1/connections` payload) and `allowance` (the project's current allowance response); other keys receive identity metadata only. Human browser sessions and worker keys do not authorize it. It returns only the key's own project and no token, token hash, SSH settings or private credential references; success responses use `Cache-Control: no-store` and vary on `Authorization`.
 

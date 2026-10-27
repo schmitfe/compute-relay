@@ -102,7 +102,7 @@ def bound_environment(project, request):
 
 
 @transaction.atomic
-def create_job(credential, document, previous=None, *, input_sources=None, trusted_files=None):
+def create_job(credential, document, previous=None, *, input_sources=None, trusted_files=None, context=None):
     from .input_sources import authorize_source, current_credential, resolve_input_blob
     from .metadata import json_size, reserve_metadata
     credential = current_credential(credential)
@@ -144,6 +144,9 @@ def create_job(credential, document, previous=None, *, input_sources=None, trust
     job = Job.objects.create(id=identifier, project=project, credential=credential, request=document, previous=previous)
     JobFile.objects.bulk_create([JobFile(job=job, path=item["path"], blob=blob, executable=item["executable"],
         source_kind=kind, source_artifact=artifact) for item, blob, kind, artifact in descriptors])
+    if context is not None or previous is not None:
+        from compute_relay.extensions import bind_job_context
+        bind_job_context(job, credential, {} if context is None else context, previous=previous)
     audit(project, credential.id, "job.created", job.id)
     return {"id": str(job.id), "state": job.state}, 201
 
@@ -343,6 +346,8 @@ def request_execution(job, credential):
     require_connection(credential, job.request["connection_id"])
     from .input_sources import authorize_job_inputs
     authorize_job_inputs(job, credential)
+    from compute_relay.extensions import validate_related_execution
+    validate_related_execution(job, credential)
     bound_environment(job.project, job.request)
     from compute_relay.extensions import job_hook
     job_hook(job, "validate_execution_request", job, credential)

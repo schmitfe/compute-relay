@@ -20,6 +20,11 @@ _RESOURCE_FIELDS = {
 }
 _MAX_ERROR_BYTES = 64 * 1024
 _PUBLIC_ERRORS = {
+    "INVALID_WAIT": "Use the returned revision and an integer wait_seconds from 0 through 20. Positive waits require after_revision.",
+    "WAIT_BUSY": "Bounded status wait capacity is busy. Retry shortly or use an immediate read.",
+    "INVALID_PLAN": "Follow the typed investigation plan: finite resource/execution limits, bounded diagnostics and a stopping rule.",
+    "INVESTIGATION_CLOSED": "Read get_investigation and reconcile existing work. This investigation accepts no new execution requests.",
+    "INVESTIGATION_CHANGED": "This job already belongs to another investigation or role. Recover its existing grouping.",
     "INVALID_REQUEST": "Check the tool's resource, scheduler and input fields against list_compute_targets before retrying.",
     "NOT_PREPARED": "Prepare the job before requesting execution. For a runtime probe, resume inspect_environment.",
     "INPUT_DENIED": "Inputs need an explicit upload or readable artifact. Resume extension-generated probes through inspect_environment instead of revise_job.",

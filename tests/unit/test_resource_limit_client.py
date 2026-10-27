@@ -166,14 +166,19 @@ def test_official_mcp_tool_error_surfaces_numeric_limits_without_remote_prose():
 def test_mcp_instructions_and_tools_explain_current_effective_limits():
     facade = ProjectFacade(None, "608ef015-5813-4e8f-a6ab-7ec182f406d7")
     server = create_server(facade)
-    assert "Do not repeatedly submit the same rejected request" in server.instructions
-    assert "requested walltime" in server.instructions
+    from compute_relay.mcp.guidance import guide
+    workflow = " ".join(guide("workflow")["text"].split())
+    placement = " ".join(guide("placement")["text"].split())
+    assert "get_compute_guide" in server.instructions
+    assert "Do not repeatedly submit an unchanged rejected request" in workflow
+    assert "requested walltime" in placement.lower()
     assert "margin" not in server.instructions
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
     assert "effective_limits" in tools["list_compute_targets"].description
-    assert "active limits" in tools["get_project_context"].description
-    assert "resource limits" in tools["get_project_allowance"].description
-    assert "RESOURCE_LIMIT" in tools["prepare_job"].description
+    assert "authority" in tools["get_project_context"].description
+    assert "reservations" in tools["get_project_allowance"].description
+    assert "RESOURCE_LIMIT" in workflow
+    assert "Prepare" in tools["prepare_job"].description
 
 
 @pytest.mark.parametrize("code,guidance", [

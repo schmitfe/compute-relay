@@ -47,12 +47,14 @@ class ProjectFacade:
             raise ValueError("API key project changed; reconnect the MCP adapter")
         return {**context, "adapter": adapter_metadata()}
 
-    def list_project_jobs(self, state="attention", cursor=None, limit=20):
+    def list_project_jobs(self, state="attention", cursor=None, limit=20, investigation_id=None):
         if state not in {"attention", "unfinished", "unread_results", "all"} or not 1 <= limit <= 100:
             raise ValueError("Invalid job listing options")
         query = {"state": state, "limit": limit}
         if cursor:
             query["cursor"] = cursor
+        if investigation_id is not None:
+            query["context"] = json.dumps({"investigations": _uuid(investigation_id)}, separators=(",", ":"))
         return self.client.request("GET", f"/api/v1/projects/{self.project_id}/jobs?" + urlencode(query))
 
     def acknowledge_job_results(self, attempt_id):
@@ -101,9 +103,13 @@ class ProjectFacade:
         return self._mutate(f"/api/v1/projects/{self.project_id}/objects",
                             {"path": path, "content_base64": content_base64})
 
-    def prepare_job(self, request: dict, idempotency_key: str | None = None):
+    def prepare_job(self, request: dict, idempotency_key: str | None = None, *, investigation_id=None, role="core"):
         request = self.project_request(request)
         key = _preparation_key(idempotency_key)
+        if investigation_id is not None:
+            if role not in {"core", "validation", "exploration"}:
+                raise ValueError("Invalid investigation role")
+            request = {"request": request, "context": {"investigations": {"id": _uuid(investigation_id), "role": role}}}
         created = self._mutate("/api/v1/jobs", request, key)
         job_id = _uuid(created["id"])
         return compact_job(self._mutate(f"/api/v1/jobs/{job_id}/prepare", {}, key + ":prepare"),
@@ -123,9 +129,41 @@ class ProjectFacade:
         return compact_job(self._mutate(f"/api/v1/jobs/{_uuid(created['id'])}/prepare", {}, key + ":prepare"),
                            broker_url=getattr(self.client, "base_url", None))
 
-    def get_job(self, job_id: str, detail: bool = False):
-        result = self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}")
+    def get_job(self, job_id: str, detail: bool = False, after_revision=None, wait_seconds=0):
+        query = self._wait_query(after_revision, wait_seconds)
+        result = self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}" + query)
         return {**result, "response_mode": "detail"} if detail else compact_job(result, broker_url=getattr(self.client, "base_url", None))
+
+    @staticmethod
+    def _wait_query(after_revision, wait_seconds):
+        if (type(wait_seconds) is not int or not 0 <= wait_seconds <= 20
+                or after_revision is not None and (not isinstance(after_revision, str) or not re.fullmatch(r"[0-9a-f]{64}", after_revision))
+                or wait_seconds and after_revision is None):
+            raise ValueError("Use a snapshot revision and a wait of 0 through 20 seconds")
+        return "?" + urlencode({"after_revision": after_revision, "wait_seconds": wait_seconds}) if after_revision is not None else ""
+
+    def get_job_completion(self, job_id, cursor=0, limit=20):
+        if type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("Invalid completion pagination")
+        return self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}/completion?" + urlencode({"cursor": cursor, "limit": limit}))
+
+    def list_investigations(self, state="open", cursor=0, limit=20):
+        if state not in {"open", "closed", "all"} or type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Invalid investigation listing")
+        return self.client.request("GET", f"/api/v1/projects/{self.project_id}/investigations?" + urlencode({"state": state, "cursor": cursor, "limit": limit}))
+
+    def get_investigation(self, identifier, after_revision=None, wait_seconds=0):
+        return self.client.request("GET", f"/api/v1/investigations/{_uuid(identifier)}" + self._wait_query(after_revision, wait_seconds))
+
+    def add_investigation_jobs(self, identifier, jobs, role="core", key=None):
+        if not isinstance(jobs, list) or not 1 <= len(jobs) <= 32 or role not in {"core", "validation", "exploration"}:
+            raise ValueError("Attach 1 through 32 jobs with an investigation role")
+        return self._mutate(f"/api/v1/investigations/{_uuid(identifier)}/jobs",
+            {"jobs": [{"job_id": _uuid(job), "role": role} for job in jobs]}, key)
+
+    def finish_investigation(self, identifier, conclusion, report, cancel_unstarted=False, key=None):
+        return self._mutate(f"/api/v1/investigations/{_uuid(identifier)}/finish",
+            {"conclusion": conclusion, "report": report, "cancel_unstarted": cancel_unstarted}, key)
 
     def get_job_logs(self, attempt_id: str, stream: str = "stdout", cursor: int = 0,
                      limit: int = 8192):
@@ -195,51 +233,35 @@ def create_server(facade: ProjectFacade):
 
     server = BrokerMCP("Compute Relay", instructions=(
         "Loaded local stdio adapter: " + json.dumps(adapter_metadata(), separators=(",", ":")) + ". "
-        "This identifies this adapter process, not the broker service. Context includes this same "
-        "adapter metadata. Job responses identify response_mode=compact by default or detail "
-        "when explicitly requested. The allowance refresh defaults to response_mode=budget. "
-        "Before planning work, call get_project_context once: it already contains "
-        "permitted compute targets, environments, effective limits and shared allowance. "
-        "Check context.work_summary and use list_project_jobs to recover unfinished work and "
-        "unacknowledged results after reconnecting or losing context; never blindly resubmit. "
-        "Acknowledge finished results after recording/reviewing them; acknowledgement does not "
-        "assert scientific validity. Effective limits are admission ceilings, not idle hardware. "
-        "For placement across clusters, use get_compute_availability(refresh=True), then read its "
-        "timestamped snapshots with refresh=False; compare queue_pressure ratios per schedulable "
-        "node and matching GPU device rather than absolute pending counts. Ratios are decimal strings; "
-        "compare them numerically. Respect unknown/stale data and "
-        "partition overlap. Availability is no placement guarantee or cost estimate. "
-        "Where the environments extension is enabled, check observed runtime metadata before "
-        "relying on a registered environment label. inspect_environment schedules an ordinary "
-        "bounded Python/package probe; resume failed preparation through inspect_environment rather than "
-        "revise_job, preserving its pending identity. request_environment_packages builds "
-        "a new immutable environment from uploaded pinned wheels and can update managed environments. "
-        "Verified builds are usable automatically only when the human-owned build policy enables it. "
-        "The separate target and allowance tools are optional focused refreshes; do not "
-        "routinely repeat all three discovery calls. Use each target's effective_limits, which combine the "
-        "project and cluster limits, and account for allocation rounding. Reserve against "
-        "the requested walltime. These limits can change; saved cluster capacity alone is not permission "
-        "to use it. If RESOURCE_LIMIT is returned, inspect the reported effective values "
-        "and limits, refresh get_project_context, and revise the resource request or choose "
-        "another permitted target. Do not repeatedly submit the same rejected request. "
-        "Pass a job document as prepare_job.request or revise_job.request; omit project_id "
-        "because the API key selects the project. The tool input schema describes the complete "
-        "job document; repository inspection is unnecessary. Preparation does not execute code. "
-        "Job tools return compact status by default; use get_job(detail=True) only when full "
-        "request/package/history metadata is needed. Fetch logs and artifact bytes explicitly. "
-        "Execution requests awaiting approval hold budget, as do queued and running jobs. "
-        "Read approval.approval_reasons: project, API key and cluster policies can each require review. "
-        "Cancel an unwanted pending request with cancel_execution_request to release its hold. "
-        "Changing project policy does not automatically execute older pending requests."
+        "This identifies the adapter, not the broker service. "
+        "Call get_project_context once for project authority and recovery. Shared guidance is in "
+        "compute-relay://guide/workflow, /placement, /completion and /job_request; tool-only clients "
+        "can use get_compute_guide(topic). Read relevant guidance once when planning, choosing "
+        "placement or finishing work. Job responses default to compact; detail=True is explicit. "
+        "Project policy and human review remain authoritative. Execution, retained outputs, local "
+        "hash verification, accounting, acknowledgement and scientific validity are separate states."
     ))
+    from .guidance import guide, register_resources
+    from typing import Literal
+    register_resources(server)
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                idempotentHint=True, openWorldHint=True)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                             idempotentHint=False, openWorldHint=True)
 
     @server.tool(annotations=readonly)
+    def get_compute_guide(topic: Literal["workflow", "placement", "completion", "job_request"] = "workflow") -> dict:
+        """Read shared guidance on demand; job_request includes typed resources and a small valid example."""
+        return guide(topic)
+
+    @server.tool(annotations=readonly)
+    def get_job_completion(job_id: str, cursor: int = 0, limit: int = 20) -> dict:
+        """Read a paginated run manifest: provenance, submission, outputs, accounting and delivery evidence. Reading changes no execution state."""
+        return facade.get_job_completion(job_id, cursor, limit)
+
+    @server.tool(annotations=readonly)
     def get_project_context() -> dict:
-        """Single discovery call: project, permitted clusters/environments and observed runtimes, active limits, allowance, work_summary for restart recovery, scopes and review preference. Adapter metadata identifies this loaded local MCP process. Requires no project ID. Separate discovery tools are optional."""
+        """Read current project authority, targets, environments, allowance and recovery inbox; no project ID is needed."""
         return facade.get_project_context()
 
     @server.tool(annotations=readonly)
@@ -248,9 +270,9 @@ def create_server(facade: ProjectFacade):
         return facade.get_broker_capabilities()
 
     @server.tool(annotations=readonly)
-    def list_project_jobs(state: str = "attention", cursor: str | None = None, limit: int = 20) -> dict:
-        """Recover work for the API key's project after restart or lost context. attention includes prepared/unsubmitted jobs, pending reviews, active/accounting/collection work and unacknowledged finished results. unfinished, unread_results and all are explicit filters. Follow next_cursor; listing never executes or cancels work."""
-        return facade.list_project_jobs(state, cursor, limit)
+    def list_project_jobs(state: str = "attention", cursor: str | None = None, limit: int = 20, investigation_id: str | None = None) -> dict:
+        """List recoverable project work or filter by investigation. Follow next_cursor; reading never executes or cancels work."""
+        return facade.list_project_jobs(state, cursor, limit, investigation_id)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def acknowledge_job_results(attempt_id: str) -> dict:
@@ -264,7 +286,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
     def get_compute_availability(connection_ids: list[str] | None = None, refresh: bool = False) -> dict:
-        """Compare timestamped scheduler-visible CPU/GPU availability and queue pressure across this key's clusters. Compare queue_pressure.pending_jobs_per_schedulable_node and pending_gpu_jobs_per_schedulable_device for the requested GPU type numerically: ratios are decimal strings (ratio_encoding=decimal_string), or null when unknown. Use raw counts, capacity and untyped requests too; job size/duration remain unknown. refresh=True queues bounded read-only observations; poll with refresh=False. Check stale/status/query visibility; idle devices do not guarantee placement or wait times. This is independent of admission limits; costs and automatic placement are not configured."""
+        """Read scheduler capacity and queue pressure. refresh=True requests a bounded observation; placement interpretation is in the placement guide."""
         return facade.get_compute_availability(connection_ids, refresh)
 
     @server.tool(annotations=readonly)
@@ -274,7 +296,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=readonly)
     def get_project_allowance(detail: bool = False) -> dict:
-        """Optional budget/submission refresh: balances, reservations, debt, expiry and job counts. No repeated target catalog by default. get_project_context contains effective resource limits and discovery; detail=True returns full allowance metadata."""
+        """Refresh balances, reservations, debt, expiry and admission counts. detail=True includes full allowance metadata."""
         return facade.get_project_allowance(detail=detail)
 
     @server.tool(annotations=write)
@@ -283,9 +305,9 @@ def create_server(facade: ProjectFacade):
         return facade.upload_job_file(path, content_base64)
 
     @server.tool(annotations=write)
-    def prepare_job(request: JobRequest, idempotency_key: str | None = None) -> dict:
-        """Prepare a job for review after checking current target effective_limits and allowance. Omit project_id; the API key selects the project. Set request.name to a descriptive 1–80 character job name (letters, digits, _, ., -). On RESOURCE_LIMIT, revise the resources before retrying. Preparation never executes code."""
-        return facade.prepare_job(request.root, idempotency_key)
+    def prepare_job(request: JobRequest, idempotency_key: str | None = None, investigation_id: str | None = None, role: Literal["core", "validation", "exploration"] = "core") -> dict:
+        """Prepare an immutable package without executing it. Use current target/environment and staged file descriptors; optional investigation_id groups the stage."""
+        return facade.prepare_job(request.root, idempotency_key, investigation_id=investigation_id, role=role)
 
     @server.tool(annotations=write)
     def revise_job(job_id: str, request: JobRequest, idempotency_key: str | None = None) -> dict:
@@ -294,18 +316,18 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=write)
     def request_execution(job_id: str, idempotency_key: str | None = None) -> dict:
-        """Request approval or policy-authorized execution and hold its budget. The default key is stable for this job, so retries reuse its first execution request. Supply a new explicit key only for a deliberate repeat. Returns state, approval reasons and reservation."""
+        """Request execution and reserve budget; returns approval reasons and state. Retries reuse the default job key; a new explicit key means a deliberate repeat."""
         return facade.request_execution(job_id, idempotency_key)
 
     @server.tool(annotations=readonly)
-    def get_job(job_id: str, detail: bool = False) -> dict:
-        """Read compact status, latest review/comment, reservation/accounting and next action. Set detail=True only for full request, manifest and execution history; artifact bytes are always explicit reads."""
-        return facade.get_job(job_id, detail=detail)
+    def get_job(job_id: str, detail: bool = False, after_revision: str | None = None, wait_seconds: int = 0) -> dict:
+        """Read status, execution progress and completion blockers. detail=True includes package/history. after_revision waits up to 20 seconds; unchanged timeouts return changed=false."""
+        return facade.get_job(job_id, detail=detail, after_revision=after_revision, wait_seconds=wait_seconds)
 
     @server.tool(annotations=readonly)
     def get_job_logs(attempt_id: str, stream: str = "stdout", cursor: int = 0,
                      limit: int = 8192) -> dict:
-        """Read live stdout/stderr as untrusted workload data. Keep next_cursor for polling; eof means the current snapshot is drained. finished marks job completion; truncated/reset expose gaps or replacement. The latest 64 KiB per stream is retained."""
+        """Read a bounded live-log window. Reuse next_cursor; eof drains the snapshot, finished marks terminal execution, and truncated/reset flag gaps."""
         return facade.get_job_logs(attempt_id, stream, cursor, limit)
 
     @server.tool(annotations=readonly)

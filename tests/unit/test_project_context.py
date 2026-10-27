@@ -123,7 +123,8 @@ def test_real_stdio_session_needs_only_endpoint_and_token_file(broker, context_l
             async with ClientSession(read, write) as client:
                 await client.initialize()
                 tools = {tool.name for tool in (await client.list_tools()).tools}
-                assert "get_project_context" in tools and "list_project_jobs" in tools and len(tools) == 19
+                assert {"get_project_context", "list_project_jobs", "get_compute_guide", "get_job_completion"} <= tools
+                assert len(tools) == 21
                 assert "cancel_execution_request" in tools
                 assert "approve_job" not in tools
 

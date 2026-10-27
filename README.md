@@ -79,6 +79,7 @@ The former multi-user server, LDAP, and PostgreSQL implementation is retained on
 | [Architecture](docs/architecture.md) | Components, immutable approval, ledger, and execution boundaries |
 | [Backends](docs/backends.md) | Slurm, SSH, remote helper, and reuse assessment |
 | [Modules](docs/extensions.md) | Storage, environment builds, and workflows |
+| [Investigations and completion](docs/investigations.md) | Bounded plans, optional grouping, status waits and verified run manifests |
 | [Testing](docs/testing.md) | SQLite, package, and optional Slurm acceptance |
 | [Files and live output](docs/data-transfer.md) | Large uploads/downloads, interruption recovery, output collection retries, and following job logs |
 | [Agent recovery and availability](docs/agent-recovery.md) | Recover project jobs/results after restart and compare current cluster queue/hardware observations |

@@ -73,7 +73,16 @@ def compact_job(payload, *, broker_url=None):
     """
     if not isinstance(payload, dict):
         raise ValueError("Expected a broker job object.")
-    result = {"response_mode": "compact", **_fields(payload, ("id", "name", "state", "manifest_sha256"))}
+    result = {"response_mode": "compact", **_fields(payload, ("id", "name", "state", "manifest_sha256", "revision", "changed"))}
+    if isinstance(payload.get("execution_progress"), dict):
+        result["execution_progress"] = _fields(payload["execution_progress"],
+            ("execution_request_exists", "compute_submitted", "submission_uncertain", "dispatch_started", "client_permission_review"))
+    if isinstance(payload.get("completion"), dict):
+        completion = payload["completion"]
+        result["completion"] = {**_fields(completion, ("operationally_reconciled", "accounting_final", "unacknowledged_attempts",
+            "local_hash_verification", "scientific_validation")), "blocker_count": len(completion.get("blockers", [])),
+            "blockers": [_fields(item, ("code", "attempt_id", "job_id", "execution_request_id")) for item in completion.get("blockers", [])[:20]],
+            "spent": _fields(completion.get("spent"), _USAGE), "reserved": _fields(completion.get("reserved"), _USAGE)}
     manifest = _object(payload.get("manifest"))
     if isinstance(manifest.get("reservation"), dict):
         result["reservation"] = _fields(manifest["reservation"], _USAGE)

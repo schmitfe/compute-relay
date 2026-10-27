@@ -33,6 +33,9 @@ capabilities, bounded lease/report metadata, and these optional service hooks:
 | `after_report(attempt, extension_data)` | Idempotent post-commit processing; failures cannot undo compute settlement |
 | `before_lease(worker)` | Perform bounded durable extension dispatch without preventing core observation |
 | `lease_work(worker)` | Return no work or `{id, generation, configuration, context}` for bounded maintenance; core binds extension and operation names |
+| `bind_job(job, credential, context)` / `after_revision(job, previous, credential)` | Atomic metadata association from a fixed enabled registry; cannot select an execution adapter |
+| `filter_jobs(query, credential, identifier)` | Authorized project-local filtering by metadata context |
+| `validate_related_execution(job, credential)` | Check related metadata before a new execution request under the core project lock |
 
 Workers independently opt in using their private `extensions` list or the
 `BROKER_EXTENSIONS` process setting. They advertise supported modules to control.
@@ -50,7 +53,8 @@ payloads are limited to 64 KiB, cannot replace ordinary attempt fields, and must
 be scheduled with bounded frequency so normal accounting remains responsive.
 
 Bundled additions are [storage planning](extensions-storage.md),
-[environment builds](environment-builds.md), and [artifact workflows](workflows.md).
+[environment builds](environment-builds.md), [artifact workflows](workflows.md),
+and explicitly enabled [investigation records](investigations.md).
 They are independent apps. Neither storage planning nor workflows implicitly
 enables environment creation, remote migration, or software downloads.
 

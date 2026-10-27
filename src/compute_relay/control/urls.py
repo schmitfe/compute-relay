@@ -11,7 +11,7 @@ from . import live_updates
 from . import object_lookup
 from . import local_connectors
 from . import transfers
-from . import recovery, availability
+from . import recovery, availability, completion
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
@@ -61,6 +61,7 @@ urlpatterns = [
     path("internal/v1/attempts/<uuid:attempt_id>/input-chunk", transfers.input_chunk),
     path("internal/v1/attempts/<uuid:attempt_id>/output-chunk", transfers.output_chunk),
     path("api/v1/jobs", views.jobs), path("api/v1/jobs/<uuid:job_id>", views.job_detail),
+    path("api/v1/jobs/<uuid:job_id>/completion", views.boundary("GET")(completion.completion_view)),
     path("api/v1/jobs/<uuid:job_id>/package", views.package), path("api/v1/jobs/<uuid:job_id>/prepare", views.prepare),
     path("api/v1/jobs/<uuid:job_id>/revisions", views.revisions),
     path("api/v1/jobs/<uuid:job_id>/execution-requests", views.execution_requests),

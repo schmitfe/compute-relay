@@ -1,0 +1,9 @@
+{
+  "services": {
+    "control": {
+      "environment": {"BROKER_EXTENSIONS": "investigations"},
+      "volumes": [{"type": "bind", "source": "../tools/investigation_smoke.py", "target": "/opt/investigation_smoke.py", "read_only": true}]
+    },
+    "worker": {"environment": {"BROKER_EXTENSIONS": "investigations"}}
+  }
+}

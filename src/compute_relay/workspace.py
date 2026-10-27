@@ -264,7 +264,7 @@ class WorkspaceClient:
                 "uploaded_objects": uploaded, "reused_objects": reused,
                 "receipt": str(destination.relative_to(self.root))}
 
-    def prepare(self, bundle_id, request_path, *, idempotency_key=None):
+    def prepare(self, bundle_id, request_path, *, idempotency_key=None, investigation_id=None, role="core"):
         if not isinstance(bundle_id, str) or not re.fullmatch(r"[0-9a-f]{64}", bundle_id):
             raise ValueError("Choose a valid saved bundle identifier.")
         bundle_path = self.root / ".compute-relay/bundles" / (bundle_id + ".json")
@@ -289,7 +289,10 @@ class WorkspaceClient:
         request["files"] = bundle["files"]
         validate("job-request.schema.json", facade.project_request(request))
         key = idempotency_key or "bundle-prepare:" + _digest(_encoded(facade.project_request(request)))
-        return facade.prepare_job(request, idempotency_key=key)
+        if investigation_id is not None and idempotency_key is None:
+            key = "investigation-prepare:" + _digest(_encoded({"request": facade.project_request(request),
+                "investigation_id": str(UUID(investigation_id)), "role": role}))
+        return facade.prepare_job(request, idempotency_key=key, investigation_id=investigation_id, role=role)
 
     def fetch(self, attempt_id, output, *, resume=False):
         attempt_id = str(UUID(attempt_id))
@@ -400,19 +403,29 @@ def register_commands(subparsers):
     prepare.add_argument("--bundle", required=True)
     prepare.add_argument("--request", required=True, help="Workspace job JSON without files or project_id")
     prepare.add_argument("--idempotency-key")
+    prepare.add_argument("--investigation-id", help="Group this stage under a recorded investigation")
+    prepare.add_argument("--role", choices=("core", "validation", "exploration"), default="core")
     fetch = actions.add_parser("fetch", help="Download retained artifacts into a new workspace directory")
     fetch.add_argument("--attempt-id", required=True)
     fetch.add_argument("--output", required=True)
     fetch.add_argument("--resume", action="store_true", help="Resume this attempt's verified partial transfer")
     retry = actions.add_parser("retry", help="Recover declared outputs without rerunning the workload")
     retry.add_argument("--attempt-id", required=True)
+    finish = actions.add_parser("finish", help="Export completion/provenance and fetch hash-verified results without starting compute")
+    subject = finish.add_mutually_exclusive_group(required=True)
+    subject.add_argument("--job-id")
+    subject.add_argument("--investigation-id")
+    finish.add_argument("--output", required=True)
+    finish.add_argument("--resume", action="store_true")
+    finish.add_argument("--no-download", action="store_true", help="Export broker evidence only; local delivery stays unverified")
+    finish.add_argument("--acknowledge", action="store_true", help="Acknowledge reconciled results after local verification")
     logs = subparsers.add_parser("logs", help="Read or follow a job's live output")
     logs.add_argument("--attempt-id", required=True)
     logs.add_argument("--stream", choices=("stdout", "stderr", "both"), default="both")
     logs.add_argument("--follow", action="store_true")
     logs.add_argument("--cursor", type=int, default=0)
     logs.set_defaults(file_action="logs")
-    for parser in (stage, prepare, fetch, retry, logs):
+    for parser in (stage, prepare, fetch, retry, finish, logs):
         parser.add_argument("--directory", default=".")
         parser.set_defaults(run=main)
 
@@ -431,7 +444,12 @@ def main(args):
                 paths = document["files"]
             result = workspace.stage(paths)
         elif args.file_action == "prepare":
-            result = workspace.prepare(args.bundle, args.request, idempotency_key=args.idempotency_key)
+            result = workspace.prepare(args.bundle, args.request, idempotency_key=args.idempotency_key,
+                investigation_id=args.investigation_id, role=args.role)
+        elif args.file_action == "finish":
+            from .workspace_completion import finish
+            result = finish(workspace, job_id=args.job_id, investigation_id=args.investigation_id, output=args.output,
+                resume=args.resume, download=not args.no_download, acknowledge=args.acknowledge)
         elif args.file_action == "retry":
             result = workspace.client.request("POST", f"/api/v1/attempts/{UUID(args.attempt_id)}/collect", {})
         elif args.file_action == "logs":
