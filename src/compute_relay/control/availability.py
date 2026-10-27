@@ -18,6 +18,10 @@ from .views import body, boundary, scope
 
 def public_availability(connection):
     snapshot = deepcopy(connection.availability_snapshot)
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    rows = snapshot.get("partitions", [])
+    snapshot["partitions"] = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     # Stored observations can outlive the reporting connector process. Normalize
     # existing ratios at the public boundary as well as in new observations.
     def ratio(value):
@@ -29,9 +33,14 @@ def public_availability(connection):
         if isinstance(pressure, dict):
             pressure["ratio_encoding"] = "decimal_string"
             pressure["pending_jobs_per_schedulable_node"] = ratio(pressure.get("pending_jobs_per_schedulable_node"))
+            devices = pressure.get("pending_gpu_jobs_per_schedulable_device", {})
             pressure["pending_gpu_jobs_per_schedulable_device"] = {kind: ratio(value) for kind, value in
-                pressure.get("pending_gpu_jobs_per_schedulable_device", {}).items()}
-    observed = parse_datetime(snapshot.get("observed_at", ""))
+                (devices.items() if isinstance(devices, dict) else [])}
+    try:
+        value = snapshot.get("observed_at", "")
+        observed = parse_datetime(value) if isinstance(value, str) else None
+    except ValueError:
+        observed = None
     age = max(0, int((timezone.now() - observed).total_seconds())) if observed and timezone.is_aware(observed) else None
     partitions = connection.configuration.get("site_profile", {}).get("partitions", [])
     if partitions:
@@ -117,7 +126,9 @@ def report(request, connection_id):
                 or data.get("connection_revision_sha256") != connection.revision_sha256):
             raise BrokerError("STALE_LEASE", "Availability observation lease is stale.", 409)
         snapshot = data.get("snapshot")
-        if not isinstance(snapshot, dict) or len(json.dumps(snapshot)) > 65536 or not isinstance(snapshot.get("partitions"), list):
+        if (not isinstance(snapshot, dict) or len(json.dumps(snapshot)) > 65536
+                or not isinstance(snapshot.get("partitions"), list)
+                or any(not isinstance(row, dict) for row in snapshot["partitions"])):
             raise ValueError("Invalid availability snapshot")
         connection.availability_snapshot = {**snapshot, "observed_at": timezone.now().isoformat(),
             "connection_revision_sha256": connection.revision_sha256}

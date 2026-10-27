@@ -143,6 +143,27 @@ def test_missing_output_blocks_downstream_even_if_scheduler_succeeded(workflow_b
     assert Attempt.objects.count() == 1
 
 
+def test_recovered_outputs_reopen_failed_workflow(workflow_broker, django_capture_on_commit_callbacks):
+    context = workflow_broker
+    budgeted(context)
+    run = start(context)
+    services.advance(run)
+    attempt = finish(context, run.nodes.get(key="simulate"), output=False)
+    Attempt.objects.filter(id=attempt.id).update(collection_state="failed", collection_failures=3)
+    assert services.advance(run)["state"] == "failed"
+    Attempt.objects.filter(id=attempt.id).update(collection_pending=True, next_poll_at=timezone.now())
+    lease = core.lease_work(context.worker)["lease"]
+    with django_capture_on_commit_callbacks(execute=True):
+        core.report(context.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
+            "outcome": "observed", "native_identity": attempt.native_identity, "observation": attempt.observation,
+            "collection_state": "complete", "artifacts": {"summary.json": base64.b64encode(b"{}").decode()}})
+    run.refresh_from_db()
+    assert run.state == "running"
+    services.before_lease(context.worker)
+    assert run.nodes.get(key="analyze").execution_request_id
+    assert Attempt.objects.count() == 2
+
+
 def test_unsettled_terminal_producer_never_releases_consumer(workflow_broker):
     context = workflow_broker
     budgeted(context)

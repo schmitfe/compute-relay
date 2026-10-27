@@ -192,9 +192,15 @@ def _run_locked(state, args):
             "installation_id": installation["installation_id"], "instance_id": instance_id, "pid": os.getpid()})
         print(f"Compute Relay is ready: {origin}/", flush=True)
         print(f"State: {state.directory}", flush=True)
-        print("Portal: password-free local access." if installation["portal_auth"] == "none" else "Portal account: local (your saved password).", flush=True)
+        portal_url = origin
+        if installation["portal_auth"] == "none":
+            from .portal_tokens import issue
+            portal_url = issue(state, origin, instance_id)
+            print(f"Portal access (one use, valid for 5 minutes): {portal_url}", flush=True)
+        else:
+            print("Portal account: local (your saved password).", flush=True)
         print("Press Ctrl+C to stop the local application; submitted cluster jobs keep their recorded state.", flush=True)
-        _open_browser(origin, args)
+        _open_browser(portal_url, args)
         if args.no_connectors:
             while not stop.wait(0.25):
                 if process.poll() is not None:
@@ -235,7 +241,12 @@ def run(args):
                         installation["installation_id"], running.get("instance_id"))):
                     raise LocalStateError("This installation is already starting or stopping in another terminal. Wait for it to finish.") from None
                 print(f"Compute Relay is already running: {expected_origin}/", flush=True)
-                _open_browser(expected_origin, args)
+                portal_url = expected_origin
+                if installation["portal_auth"] == "none":
+                    from .portal_tokens import issue
+                    portal_url = issue(state, expected_origin, running["instance_id"])
+                    print(f"Portal access (one use, valid for 5 minutes): {portal_url}", flush=True)
+                _open_browser(portal_url, args)
     except KeyboardInterrupt:
         print("Local startup cancelled.", flush=True)
     except (LocalStateError, OSError) as error:

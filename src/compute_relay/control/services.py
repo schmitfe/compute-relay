@@ -262,6 +262,8 @@ def authorize(execution_request, *, decision=None):
     grant = Grant.objects.select_for_update().get(project=project)
     policy = grant.policy
     validate("project-policy.schema.json", policy)
+    if policy["mode"] == "approval_required" and decision is None:
+        raise BrokerError("APPROVAL_REQUIRED", "Project policy requires human confirmation for each execution.", 409)
     if project.paused:
         raise BrokerError("PROJECT_PAUSED", "New execution is paused.", 409)
     if datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")) <= timezone.now():
@@ -269,15 +271,14 @@ def authorize(execution_request, *, decision=None):
     credential = ProjectCredential.objects.get(id=execution_request.credential_id) if execution_request.credential_id else None
     if credential is None:
         raise BrokerError("HPC_IDENTITY_REQUIRED", "Execution needs a key bound to its requesting user.", 403)
-    if credential and (credential.revoked or credential.expires_at <= timezone.now()):
+    if credential.revoked or credential.expires_at <= timezone.now():
         raise BrokerError("AUTH_REQUIRED", "The requesting credential is no longer valid.", 403)
-    if credential:
-        require_credential_actor(credential)
-        require_connection(credential, job.request["connection_id"])
-        from .input_sources import authorize_job_inputs
-        authorize_job_inputs(job, credential)
-        if credential.execution_mode == "approval_required" and decision is None:
-            raise BrokerError("APPROVAL_REQUIRED", "This API key requires human confirmation for each execution.", 409)
+    require_credential_actor(credential)
+    require_connection(credential, job.request["connection_id"])
+    from .input_sources import authorize_job_inputs
+    authorize_job_inputs(job, credential)
+    if credential.execution_mode == "approval_required" and decision is None:
+        raise BrokerError("APPROVAL_REQUIRED", "This API key requires human confirmation for each execution.", 409)
     bound_environment(project, job.request)
     connection = project.connections.filter(id=job.request["connection_id"], enabled=True, setup_complete=True).first()
     if connection is None or connection.worker.revoked or connection.revision_sha256 != job.manifest["connection_revision_sha256"]:
@@ -501,7 +502,12 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observa
             .order_by("next_poll_at", "lifecycle_priority", "created_at", "id"))
         for attempt in candidates[:30]:
             entries = list(attempt.job.files.select_related("blob"))
-            lease = _lease_attempt(attempt, entries, now)
+            try:
+                with transaction.atomic():
+                    lease = _lease_attempt(attempt, entries, now)
+            except Exception:
+                _defer_lease(attempt, now)
+                continue
             result = {"lease": lease}
             if observation_batch > 1 and lease["operation"] == "observe":
                 used = _lease_size_bound(attempt, entries)
@@ -519,8 +525,8 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observa
                         with transaction.atomic():
                             additional = _lease_attempt(extra, files, now)
                     except Exception:
-                        logging.getLogger(__name__).warning("Additional status lease deferred; completed batch items remain available")
-                        break
+                        _defer_lease(extra, now)
+                        continue
                     observations.append(additional)
                     used += size
                 if observations:
@@ -529,11 +535,21 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observa
     return {"lease": None}
 
 
+def _defer_lease(attempt, now):
+    # The candidate savepoint has rolled back its generation and lease. Keep
+    # funds reserved, isolate its error, and let other jobs make progress.
+    Attempt.objects.filter(id=attempt.id).update(error_code="LEASE_PREPARATION_FAILED",
+        next_poll_at=now + timedelta(seconds=30))
+    logging.getLogger(__name__).warning("Attempt lease preparation deferred")
+
+
 def _lease_size_bound(attempt, entries):
     # Includes the maximum extension context plus structural JSON overhead.
     metadata = json.dumps({"manifest": attempt.job.manifest, "configuration": attempt.connection.configuration,
         "native_identity": attempt.native_identity}, ensure_ascii=True)
     context = 6 * 65536 if attempt.job.extension_name else 0
+    if attempt.native_identity or attempt.dispatch_started:
+        entries = []
     return len(metadata) + context + 4096 + sum((128 if item.blob.size_bytes > INLINE_BYTES
         else 4 * ((item.blob.size_bytes + 2) // 3)) + 6 * len(item.path) + 128 for item in entries)
 
@@ -551,10 +567,14 @@ def _lease_attempt(attempt, entries, now):
     attempt.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
     attempt.lease_deadline_at = now + timedelta(seconds=MAX_LEASE_LIFETIME_SECONDS)
     attempt.operation = operation
-    attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation"])
+    if attempt.error_code == "LEASE_PREPARATION_FAILED":
+        attempt.error_code = ""
+    attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation", "error_code"])
     files = {item.path: {"sha256": item.blob.sha256, "size_bytes": item.blob.size_bytes}
-        if item.blob.size_bytes > INLINE_BYTES else base64.b64encode(read_blob(item.blob)).decode("ascii") for item in entries}
+        if item.blob.size_bytes > INLINE_BYTES else base64.b64encode(read_blob(item.blob)).decode("ascii")
+        for item in entries} if operation == "submit" else {}
     lease = {"id": str(attempt.lease_id), "operation": operation, "attempt_id": str(attempt.id), "generation": attempt.generation,
+        "lease_expires_at": attempt.lease_expires_at.isoformat(), "lease_deadline_at": attempt.lease_deadline_at.isoformat(),
         "connection_id": str(attempt.connection_id), "configuration": attempt.connection.configuration,
         "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
     lease["log_cursors"] = {stream: {"cursor": value.get("next_cursor", 0), "file_id": value.get("file_id")}
@@ -624,13 +644,12 @@ def dispatch(worker, attempt_id, data):
         credential = attempt.execution_request.credential
         if credential is None:
             raise BrokerError("HPC_IDENTITY_REQUIRED", "Execution needs a verified requesting user.", 403)
-        if credential:
-            require_credential_actor(credential)
-            from .input_sources import authorize_job_inputs
-            authorize_job_inputs(attempt.job, credential)
-        if attempt.job.project.paused or not attempt.connection.enabled or (credential and (credential.revoked or credential.expires_at <= timezone.now())):
+        require_credential_actor(credential)
+        from .input_sources import authorize_job_inputs
+        authorize_job_inputs(attempt.job, credential)
+        if attempt.job.project.paused or not attempt.connection.enabled or credential.revoked or credential.expires_at <= timezone.now():
             raise BrokerError("DISPATCH_REVOKED", "Dispatch authority is no longer active.", 403)
-        if credential and ("jobs:execute" not in credential.scopes or not connection_allowed(credential, attempt.connection_id)):
+        if "jobs:execute" not in credential.scopes or not connection_allowed(credential, attempt.connection_id):
             raise BrokerError("DISPATCH_REVOKED", "The key no longer has execution access to this cluster.", 403)
         if not attempt.job.project.connections.filter(id=attempt.connection_id).exists():
             raise BrokerError("DISPATCH_REVOKED", "The project no longer has access to this cluster.", 403)
@@ -655,7 +674,7 @@ def dispatch(worker, attempt_id, data):
                 or (not _within_envelope(job, policy) and not (policy["mode"] == "mixed" and decision))
                 or (policy["mode"] == "approval_required" and not decision)
                 or (attempt.connection.configuration.get("site_profile", {}).get("automatic_execution_allowed") is not True and not decision)
-                or (credential and credential.execution_mode == "approval_required" and not decision)):
+                or (credential.execution_mode == "approval_required" and not decision)):
             raise BrokerError("DISPATCH_REVOKED", "Current project policy no longer authorizes dispatch.", 403)
         if job.manifest["connection_revision_sha256"] != attempt.connection.revision_sha256:
             raise BrokerError("REVISION_CHANGED", "Connection changed after admission.", 409)
@@ -683,18 +702,44 @@ def _settle(attempt, cpu, gpu, evidence, *, release=False):
         attempt.error_code = "OBSERVED_OVERAGE"
 
 
+def _validate_report_fields(data):
+    if (not isinstance(data, dict) or not isinstance(data.get("error_code", ""), str)
+            or not isinstance(data.get("artifacts", {}), dict)
+            or not isinstance(data.get("native_identity", {}), (dict, type(None)))):
+        raise BrokerError("INVALID_REPORT", "Invalid worker report fields.")
+    observation = data.get("observation", {})
+    if not isinstance(observation, dict) or not isinstance(observation.get("accounting", {}), dict):
+        raise BrokerError("INVALID_REPORT", "Observation and accounting must be objects.")
+    if not isinstance(observation.get("state", ""), str):
+        raise BrokerError("INVALID_REPORT", "Invalid observation state.")
+    accounting = observation.get("accounting", {})
+    if accounting.get("final") is True and any(type(accounting.get(key)) is not int or accounting[key] < 0
+            or accounting[key] > 2**63 - 1 for key in ("cpu_core_seconds", "gpu_device_seconds")):
+        raise BrokerError("INVALID_REPORT", "Final accounting requires nonnegative integer resource usage.")
+
+
+def _report_replay(worker, attempt_id, data, payload_hash):
+    # Serialize receipt lookup with report commits and lease replacement.
+    if not WorkerIdentity.objects.select_for_update().filter(id=worker.id, revoked=False).exists():
+        raise BrokerError("AUTH_REQUIRED", "Worker access is revoked.", 403)
+    receipt = WorkerReport.objects.filter(lease_id=data.get("lease_id"), attempt_id=attempt_id,
+        attempt__connection__worker=worker).first()
+    if receipt and receipt.payload_sha256 != payload_hash:
+        raise BrokerError("REPORT_CONFLICT", "Lease result was already recorded differently.", 409)
+    return receipt.response if receipt else None
+
+
 def report(worker, attempt_id, data):
+    _validate_report_fields(data)
     extension_data = data.get("extension_data", {})
     if not isinstance(extension_data, dict) or len(rfc8785.dumps(extension_data)) > 65536:
         raise BrokerError("EXTENSION_CONTEXT_LIMIT", "Extension report metadata exceeds its limit.")
     payload_hash = digest(data)
-    receipt = WorkerReport.objects.filter(lease_id=data.get("lease_id"), attempt_id=attempt_id, attempt__connection__worker=worker).first()
-    if receipt:
-        if receipt.payload_sha256 != payload_hash:
-            raise BrokerError("REPORT_CONFLICT", "Lease result was already recorded differently.", 409)
-        return receipt.response
     # Check scope before storing any result bytes. Artifact writes have separate quota transactions.
     with transaction.atomic():
+        replay = _report_replay(worker, attempt_id, data, payload_hash)
+        if replay is not None:
+            return replay
         attempt = checked_lease(worker, attempt_id, data)
         permitted = set(attempt.job.request["outputs"])
         project = attempt.job.project
@@ -718,6 +763,9 @@ def report(worker, attempt_id, data):
         except OSError:
             storage_failed = True
     with transaction.atomic():
+        replay = _report_replay(worker, attempt_id, data, payload_hash)
+        if replay is not None:
+            return replay
         attempt = checked_lease(worker, attempt_id, data)
         outcome = data.get("outcome")
         try:

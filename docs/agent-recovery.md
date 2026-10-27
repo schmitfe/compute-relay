@@ -26,6 +26,11 @@ uncertain operation. `cancel_prepared_job(job_id)` dismisses an abandoned draft
 that has no execution requests and retains its package/history. Submitted work
 uses the existing execution-request/attempt cancellation tools.
 
+`request_execution(job_id)` derives its default idempotency key from the immutable
+job ID. Repeating it, including after an MCP restart, returns the original
+execution request without another reservation or submission. Use a new explicit
+`idempotency_key` only when you intend to execute that same package again.
+
 | API | Purpose |
 | --- | --- |
 | `GET /api/v1/projects/{id}/jobs?state=attention&limit=20&cursor=...` | Key-scoped recovery inbox |

@@ -53,6 +53,30 @@ def test_repeated_calls_reuse_one_process_and_keep_package_submission_once(site,
     asyncio.run(scenario())
 
 
+def test_persistent_startup_streams_bundle_before_framed_requests(site, tmp_path):
+    # Emulate only ssh's final exec; retain the real command/bootstrap builder.
+    ssh = tmp_path / "fixture-ssh"
+    ssh.write_text(f"#!{sys.executable}\nimport os,shlex,sys\n"
+        "command=shlex.split(sys.argv[-1])\nos.execv(command[0],command)\n")
+    ssh.chmod(0o700)
+    connection = {**deepcopy(site[0]), "ssh_path": str(ssh), "python_path": sys.executable,
+        "command_timeout_seconds": 2, "ssh": {"mode": "mfa", "host": "fixture.invalid", "user": "fixture",
+            "known_hosts": "/synthetic/known_hosts", "control_path": "/synthetic/master"}}
+    async def scenario():
+        pool = PersistentHelperPool(1)
+        backend = AsyncSlurmBackend(connection, transport=PersistentOpenSSHTransport(connection, pool))
+        package, files = prepared(site)
+        try:
+            result = await backend.submit(str(uuid4()), package["manifest"], files)
+            assert result["outcome"] == "submitted"
+            for _ in range(2):
+                assert (await backend.observe(result["native_identity"], manifest=package["manifest"]))["state"] == "running"
+            assert pool.process_starts == 1 and pool.requests == 3
+        finally:
+            await pool.close()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("reply", ["oversized", "wrong_id", "truncated"])
 def test_invalid_frame_closes_channel_without_replaying_request(site, local_transport, reply):
     async def scenario():

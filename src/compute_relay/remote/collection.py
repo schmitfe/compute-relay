@@ -103,6 +103,8 @@ def collect(config, request, identity, record):
                 pass
         total = 0
         for path in outputs:
+            if total >= 10 * 1024 * 1024:
+                break
             try:
                 content = read_file(directory, path, 10 * 1024 * 1024 - total)
             except FileNotFoundError:

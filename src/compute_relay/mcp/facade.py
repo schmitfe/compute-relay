@@ -110,7 +110,11 @@ class ProjectFacade:
                            broker_url=getattr(self.client, "base_url", None))
 
     def request_execution(self, job_id: str, idempotency_key: str | None = None):
-        return self._mutate(f"/api/v1/jobs/{_uuid(job_id)}/execution-requests", {}, idempotency_key)
+        job_id = _uuid(job_id)
+        # An omitted key denotes the first execution of this immutable job.
+        # Deliberate repeats remain available with an explicit new key.
+        return self._mutate(f"/api/v1/jobs/{job_id}/execution-requests", {},
+            idempotency_key if idempotency_key is not None else "execute:" + job_id)
 
     def revise_job(self, job_id: str, request: dict, idempotency_key: str | None = None):
         request = self.project_request(request)
@@ -290,7 +294,7 @@ def create_server(facade: ProjectFacade):
 
     @server.tool(annotations=write)
     def request_execution(job_id: str, idempotency_key: str | None = None) -> dict:
-        """Request approval or policy-authorized execution and hold its budget. Returns state, approval reasons and reservation. Reuse the idempotency key on retries."""
+        """Request approval or policy-authorized execution and hold its budget. The default key is stable for this job, so retries reuse its first execution request. Supply a new explicit key only for a deliberate repeat. Returns state, approval reasons and reservation."""
         return facade.request_execution(job_id, idempotency_key)
 
     @server.tool(annotations=readonly)

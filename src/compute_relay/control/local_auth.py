@@ -39,15 +39,15 @@ class LocalOwnerBackend(ModelBackend):
 
 
 class LocalOwnerSessionMiddleware:
-    """Enter the explicitly password-free portal without granting API authority."""
+    """Exchange a private launch token for an ordinary owner session."""
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
         if (getattr(settings, "BROKER_LOCAL_AUTH_MODE", "password") == "none"
-                and not request.user.is_authenticated and request.method in {"GET", "HEAD"}
-                and not request.path.startswith(("/api/", "/internal/", "/ui/", "/health"))
+                and request.method == "GET" and request.path == "/login/"
+                and "launch_token" in request.GET
                 and "Authorization" not in request.headers and request.accepts("text/html")):
             import ipaddress
             from urllib.parse import urlsplit
@@ -63,8 +63,15 @@ class LocalOwnerSessionMiddleware:
             except ValueError:
                 loopback = False
             if loopback and request.get_host() == urlsplit(origin).netloc:
+                from compute_relay.portal_tokens import consume
+                from django.http import HttpResponseRedirect
                 from .models import User
                 user = User.objects.filter(id=owner_id, is_active=True).first()
-                if user is not None:
+                if user is not None and consume(settings.DATA_DIR, request.GET["launch_token"],
+                        getattr(settings, "BROKER_INSTANCE_ID", None)):
                     login(request, user, backend=BACKEND_PATH)
+                    response = HttpResponseRedirect("/")
+                    response["Cache-Control"] = "no-store, private"
+                    response["Referrer-Policy"] = "no-referrer"
+                    return response
         return self.get_response(request)

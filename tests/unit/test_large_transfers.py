@@ -236,6 +236,35 @@ def test_remote_large_input_resume_before_single_submission(sample, tmp_path, mo
     assert (Path(submitted["native_identity"]["work_dir"]) / "data/input.bin").read_bytes() == data
 
 
+def test_same_content_inputs_keep_independent_partial_offsets(sample, tmp_path, monkeypatch):
+    from copy import deepcopy
+    sample = deepcopy(sample)
+    data = b"streamed input" * 100000
+    for path in ("data/one.bin", "data/two.bin"):
+        sample[0]["files"].append({"path": path, "sha256": sha256(data), "size_bytes": len(data), "executable": False})
+    backend, prepared, _, _, _ = remote_package(sample, tmp_path, monkeypatch)
+    manifest = prepared["manifest"]
+    first = backend.stage_input(ATTEMPT, manifest, "data/one.bin", offset=0,
+        content_base64=base64.b64encode(data[:10]).decode())
+    assert first["offset"] == 10
+    assert backend.stage_input(ATTEMPT, manifest, "data/two.bin")["offset"] == 0
+    backend.stage_input(ATTEMPT, manifest, "data/two.bin", offset=0,
+        content_base64=base64.b64encode(data[:20]).decode())
+    assert backend.stage_input(ATTEMPT, manifest, "data/one.bin")["offset"] == 10
+
+
+def test_legacy_collection_stops_after_aggregate_cap(sample, tmp_path, monkeypatch):
+    sample = deepcopy(sample)
+    sample[0]["outputs"] = ["first.bin", "second.bin"]
+    backend, prepared, files, _, _ = remote_package(sample, tmp_path, monkeypatch)
+    native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
+    directory = Path(native["work_dir"])
+    (directory / "first.bin").write_bytes(b"x" * (10 * 1024 * 1024))
+    (directory / "second.bin").write_bytes(b"more")
+    result = backend.collect(native, sample[0]["outputs"], manifest=prepared["manifest"])
+    assert set(result["artifacts"]) == {"first.bin"}
+
+
 def test_remote_output_manifest_and_ranges_reject_changes_and_symlinks(sample, tmp_path, monkeypatch):
     backend, prepared, files, _, _ = remote_package(sample, tmp_path, monkeypatch)
     native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]

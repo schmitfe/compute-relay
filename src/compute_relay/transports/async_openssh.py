@@ -36,7 +36,7 @@ class AsyncOpenSSHTransport(OpenSSHTransport):
         return self._helper_response(await self._run(argv, payload))
 
     async def _run(self, argv: list[str], payload: bytes) -> bytes:
-        if len(payload) > self.PAYLOAD_LIMIT:
+        if len(payload) > self.PAYLOAD_LIMIT + self.HELPER_LIMIT:
             raise TransportError("Remote operation payload exceeds limit")
         process = None
         tasks = []

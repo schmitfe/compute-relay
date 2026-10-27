@@ -64,9 +64,11 @@ def test_compaction_retains_key_tombstone_and_cannot_reexecute(broker, settings)
     assert retired[1] == 409 and retired[0]["error"]["code"] == "IDEMPOTENCY_RETIRED"
     assert calls == [True] and original[1] == 201
     assert metadata_usage(broker.project)["logical_bytes"] < before
+    assert services.idempotent(broker.project, "operation", "new", {}, action)[1] == 201
+    assert calls == [True, True]
     with pytest.raises(BrokerError) as exc:
-        services.idempotent(broker.project, "operation", "new", {}, action)
-    assert exc.value.code == "METADATA_QUOTA" and calls == [True]
+        services.idempotent(broker.project, "operation", "another", {}, action)
+    assert exc.value.code == "METADATA_QUOTA"
     with pytest.raises(BrokerError) as exc:
         services.idempotent(broker.project, "operation", "once", {"changed": True}, action)
     assert exc.value.code == "IDEMPOTENCY_CONFLICT"

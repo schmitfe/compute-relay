@@ -11,9 +11,15 @@ owner, an agent acting as that owner, or an administrator.
 
 The portal listens on loopback. The local owner can choose a password or
 passwordless access during setup. Password mode stores a Django password hash;
-plaintext passwords are not retained by the service. Passwordless mode treats
-access to the local portal as the owner's authority. Browser sessions, CSRF
-checks, exact loopback-origin checks and host restrictions still apply. A
+plaintext passwords are not retained by the service. Passwordless mode requires
+a random, single-use launch token from the owner's terminal. The launcher opens
+that link, and the service exchanges it for an ordinary session and redirects
+to a URL without the token. Only a hash is stored in private local state, tied
+to the running instance and a five-minute expiry. Launching again issues a new
+link without restarting the application. Reaching loopback alone grants no
+owner access, including from another account on a shared host. Treat the launch
+link as a password. Browser sessions, CSRF checks, exact loopback-origin checks
+and host restrictions still apply. A
 project API key is never a substitute for the human session used to approve
 jobs or change configuration.
 
@@ -38,6 +44,13 @@ worker reuses its authenticated session; a dead session cannot silently fall
 back to new unattended authentication. Starting two clusters serializes their
 terminal prompts. Local shutdown closes managed sessions; it does not imply
 that Slurm jobs have stopped.
+
+For a first connection without a trusted entry in the selected `known_hosts`
+file, OpenSSH asks the owner to verify the host-key fingerprint through an
+independent cluster channel. This is trust on first use; the setup download
+does not establish a trusted host key. Prepopulate the selected `known_hosts`
+file from your administrator to pin it before the first pairing. Never approve
+an unfamiliar fingerprint solely because it appeared in the SSH prompt.
 
 The launcher and connector share the local account. A stronger separation
 between an untrusted agent and cluster credentials requires a separate account,
@@ -93,6 +106,12 @@ directory. Stored manifests and journals never supply executable helper source.
 Only declared compatible protocols are accepted; use the stopped-installation
 [upgrade check](deployment.md#check-an-upgrade-before-starting-it) before migration.
 
+Management leases carry the sealed manifest without rereading local inputs, so
+lost input objects cannot prevent cancellation or final accounting. A failed
+lease preparation backs off that attempt while other candidates continue.
+Review pages show invisible Unicode formatting characters as explicit code
+points and clearly label files above the text preview limit.
+
 ## Input provenance and object publication
 
 A hash is an identifier, not read authority. Each input is sealed to an explicit
@@ -120,6 +139,11 @@ unpublished upload, and leaves corrupt or unidentifiable state charged for
 inspection. It never converts an upload-recovery receipt into input authority.
 Busy or failed recoveries are deferred for 30 seconds and ordered by recovery
 eligibility, so a failing batch cannot indefinitely hide later crashed uploads.
+Resumable transfers have a 24-hour window. A failed final checksum immediately
+aborts the reservation and deletes its partial, permitting a fresh transfer.
+Successful verification is cached in a bounded process-local cache using file
+identity, size, modification time and change time. Changed or replaced objects
+and objects accessed after a restart are verified again.
 
 ## Local storage capacity
 

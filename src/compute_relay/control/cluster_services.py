@@ -10,7 +10,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .errors import BrokerError
-from .models import Attempt, Connection, ConnectorTask, Project, WorkerIdentity
+from .models import Attempt, ClusterRegistration, Connection, ConnectorTask, Project, WorkerIdentity
 from .services import audit, digest
 
 PUBLIC_CONFIG_FIELDS = {"backend", "credential_profile", "ssh", "remote_root", "profile_revision", "site_profile", "credential_profile_revision_sha256"}
@@ -97,6 +97,9 @@ def report_discovery(worker, connection_id, document):
                     or config["credential_profile_revision_sha256"] != profile["revision_sha256"]
                     or reported_site != profile["site_profile"]):
                 raise BrokerError("REVISION_CHANGED", "Protected profile changed during discovery.", 409)
+            if (connection.configuration_confirmed and ClusterRegistration.objects.filter(connection=connection).exists()
+                    and reported_site != connection.configuration.get("site_profile", {})):
+                raise BrokerError("REVISION_CHANGED", "Confirm cluster policy changes in the portal before discovery.", 409)
             revision = digest(config)
             if revision != document.get("connection_revision_sha256"):
                 raise BrokerError("INVALID_DISCOVERY", "Discovery binding does not match.")

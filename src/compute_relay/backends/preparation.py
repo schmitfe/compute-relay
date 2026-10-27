@@ -266,6 +266,10 @@ def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, byt
         if path in paths:
             raise BackendError("Duplicate manifest path")
         paths.add(path)
+        # Management authenticates the sealed manifest and remote journal. It
+        # must remain possible after local input bytes are lost or corrupted.
+        if operation != "submit" and not files:
+            continue
         content = files.get(path)
         if isinstance(content, FileReference):
             if (content.size_bytes, content.sha256) != (entry["size_bytes"], entry["sha256"]):
@@ -273,5 +277,5 @@ def verify_package(manifest: dict, manifest_sha256: str, files: Mapping[str, byt
             continue
         if not isinstance(content, bytes) or len(content) != entry["size_bytes"] or sha256(content) != entry["sha256"]:
             raise BackendError("Staged file does not match prepared manifest")
-    if not paths or paths != set(files):
+    if not paths or ((files or operation == "submit") and paths != set(files)):
         raise BackendError("Package file set differs from prepared manifest")

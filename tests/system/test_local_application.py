@@ -3,6 +3,7 @@
 import http.cookiejar
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
@@ -77,8 +78,17 @@ def test_default_command_password_free_supervisor_and_same_state_restart(tmp_pat
     process, log = start(tmp_path, argv)
     try:
         client, first = ready(process, origin, log)
+        # A different local OS user can reach loopback but has no launch token.
         with client.open(origin + "/", timeout=3) as response:
+            assert "/login/" in response.url
+        deadline = time.monotonic() + 5
+        while "Portal access" not in log.read_text() and time.monotonic() < deadline:
+            time.sleep(.05)
+        launch_url = re.search(r"http://[^\s]+/login/\?launch_token=[^\s]+", log.read_text()).group()
+        with client.open(launch_url, timeout=3) as response:
             assert response.url == origin + "/" and b"Compute Relay" in response.read()
+        with opener().open(launch_url, timeout=3) as response:
+            assert "/login/" in response.url
         with pytest.raises(urllib.error.HTTPError) as denied:
             client.open(origin + "/api/v1/context", timeout=3)
         assert denied.value.code == 401

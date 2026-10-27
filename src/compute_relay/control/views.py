@@ -287,11 +287,8 @@ def artifact_content(request, artifact_id):
         return response
     if artifact.blob.size_bytes > 10 * 1024 * 1024:
         from django.http import FileResponse
-        from .storage import blob_path, verify_blob
-        verify_blob(artifact.blob)
-        import os
-        fd = os.open(blob_path(artifact.blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        response = FileResponse(os.fdopen(fd, "rb"), as_attachment=True, filename="artifact.bin")
+        from .storage import open_verified_blob
+        response = FileResponse(open_verified_blob(artifact.blob), as_attachment=True, filename="artifact.bin")
         record_access(credential, artifact.attempt, "bytes_requested_at")
         return response
     response = HttpResponse(read_blob(artifact.blob), content_type="application/octet-stream")
@@ -447,6 +444,8 @@ def review(request, job_id):
         import uuid
         from .job_diagnostics import build_attempt_diagnostics
         detail = services.serialize_job(job, package=True)
+        from .review_text import prepare_review_files
+        prepare_review_files(detail["files"])
         response = render(request, "broker/review.html", {"job": job, "detail": detail, "manifest_text": json.dumps(job.manifest, indent=2),
                                                       "attempt_diagnostics": [build_attempt_diagnostics(a) for a in job.attempts.select_related("connection").order_by("-created_at")],
                                                       "allowance": services.allowance(job.project), "error": error, "idempotency_key": str(uuid.uuid4())})

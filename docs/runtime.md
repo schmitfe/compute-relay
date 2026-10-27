@@ -115,7 +115,7 @@ deduplicate. Additional record limits apply:
 | Metadata family | Per project | Per installation |
 | --- | ---: | ---: |
 | Charged job records | 1000 | 10,000 |
-| Idempotency identities, including compacted ones | 10,000 | 100,000 |
+| Active idempotency responses | 10,000 | 100,000 |
 | Combined extension definitions/runs | 1000 | 10,000 |
 | Archived job identities | 10,000 | 100,000 |
 | Rolling audit events | 2000 | 20,000 |
@@ -126,6 +126,9 @@ generations fail the ordinary stale-lease fence. Attempts, accounting entries
 and execution identities remain durable. Metadata exhaustion rejects new
 metadata admissions with `METADATA_QUOTA`; it does not block valid worker
 accounting reports. See [maintenance](deployment.md#inspect-and-compact-local-metadata).
+Compacting old idempotency responses frees active key slots. Their small
+identity tombstones still consume logical byte quota and prevent an old key
+from executing again.
 
 These are logical JSON/record charges and bounded retention rules, not a byte
 ceiling on SQLite, its indexes/WAL, journals, backups or filesystem allocation.

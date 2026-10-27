@@ -38,7 +38,7 @@ class _Channel:
                 pass
 
     async def _start(self):
-        argv, _ = self.transport._helper_command(self.source, {})
+        argv, bootstrap = self.transport._helper_command(self.source, None)
         self.spawn = asyncio.create_task(asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=65536, start_new_session=True,
             env={"PATH": "/usr/bin:/bin", "LANG": "C"}))
@@ -51,6 +51,10 @@ class _Channel:
                     raise TransportError("Persistent helper exceeded diagnostic bound")
         self.stderr = asyncio.create_task(drain())
         self.stderr.add_done_callback(self._stderr_done)
+        view = memoryview(bootstrap)
+        for offset in range(0, len(view), 65536):
+            self.process.stdin.write(view[offset:offset + 65536])
+            await self.process.stdin.drain()
 
     async def exchange(self, request):
         if self.process is None:

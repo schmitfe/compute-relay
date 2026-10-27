@@ -2,11 +2,54 @@
 
 import asyncio
 from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime, timezone
 import threading
+import time
 
 from .client import ControlError
 
 RENEWAL_INTERVAL_SECONDS = 20
+RENEWAL_RETRY_SECONDS = 2
+RENEWAL_SAFETY_SECONDS = 10
+
+
+def _expiry(value, fallback):
+    if value:
+        try:
+            remaining = (datetime.fromisoformat(value) - datetime.now(timezone.utc)).total_seconds()
+            return time.monotonic() + max(0, remaining)
+        except (ValueError, TypeError):
+            pass
+    return fallback
+
+
+class RenewalWindow:
+    def __init__(self, lease):
+        now = time.monotonic()
+        self.deadline = _expiry(lease.get("lease_deadline_at"), now + 40 * 60)
+        self.expires = min(_expiry(lease.get("lease_expires_at"), now + 120), self.deadline)
+        self.interval = RENEWAL_INTERVAL_SECONDS
+
+    def wait(self):
+        return max(0, min(self.interval, self.remaining()))
+
+    def remaining(self):
+        return self.expires - time.monotonic() - RENEWAL_SAFETY_SECONDS
+
+    def expired(self):
+        return self.remaining() <= 0
+
+    def renewed(self, response):
+        _checked_response(response)
+        self.deadline = min(self.deadline, _expiry(response.get("lease_deadline_at"), self.deadline))
+        self.expires = min(_expiry(response.get("lease_expires_at"), time.monotonic() + 120), self.deadline)
+        self.interval = RENEWAL_INTERVAL_SECONDS
+
+    def retry(self, exc):
+        self.interval = RENEWAL_RETRY_SECONDS
+        # An explicit loss of authority is final. Transport failures can recover
+        # while this exact lease remains valid.
+        return not (isinstance(exc, ControlError) and exc.status in {400, 401, 403, 404, 409}) and not self.expired()
 
 
 def _renew_document(lease):
@@ -22,17 +65,22 @@ def _checked_response(response):
 def renewing(client, lease):
     """The sync adapter's background thread performs HTTP only, never SSH."""
     stopped, failed = threading.Event(), []
+    window = RenewalWindow(lease)
     def renew():
-        while not stopped.wait(RENEWAL_INTERVAL_SECONDS):
-            try:
-                _checked_response(client.request("POST", f"/internal/v1/attempts/{lease['attempt_id']}/renew", _renew_document(lease)))
-            except Exception:
+        while not stopped.wait(window.wait()):
+            if window.expired():
                 failed.append(True)
                 return
+            try:
+                window.renewed(client.request("POST", f"/internal/v1/attempts/{lease['attempt_id']}/renew", _renew_document(lease)))
+            except Exception as exc:
+                if not window.retry(exc):
+                    failed.append(True)
+                    return
     thread = threading.Thread(target=renew, name="compute-relay-lease-renewal", daemon=True)
     thread.start()
     def check():
-        if failed:
+        if failed or window.expired():
             raise ControlError("LEASE_RENEWAL_FAILED")
     try:
         yield check
@@ -46,24 +94,39 @@ def renewing(client, lease):
 async def renewing_async(client, lease):
     owner = asyncio.current_task()
     failed = False
+    window = RenewalWindow(lease)
+    cancelled_before = owner.cancelling()
     async def renew():
         nonlocal failed
         while True:
-            await asyncio.sleep(RENEWAL_INTERVAL_SECONDS)
-            try:
-                _checked_response(await client.request("POST", f"/internal/v1/attempts/{lease['attempt_id']}/renew", _renew_document(lease)))
-            except Exception:
+            await asyncio.sleep(window.wait())
+            if window.expired():
                 failed = True
                 owner.cancel()
                 return
+            try:
+                response = await asyncio.wait_for(client.request("POST", f"/internal/v1/attempts/{lease['attempt_id']}/renew",
+                    _renew_document(lease)), timeout=max(.001, window.remaining()))
+                window.renewed(response)
+            except Exception as exc:
+                if not window.retry(exc):
+                    failed = True
+                    owner.cancel()
+                    return
     heartbeat = asyncio.create_task(renew())
+    def check():
+        if failed or window.expired():
+            raise ControlError("LEASE_RENEWAL_FAILED")
     try:
         try:
-            yield lambda: None
+            yield check
+            check()
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
     except asyncio.CancelledError:
         if failed:
-            raise ControlError("LEASE_RENEWAL_FAILED") from None
+            owner.uncancel()
+            if owner.cancelling() <= cancelled_before:
+                raise ControlError("LEASE_RENEWAL_FAILED") from None
         raise

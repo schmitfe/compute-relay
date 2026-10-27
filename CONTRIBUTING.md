@@ -16,7 +16,7 @@ material or acceptance artifacts containing private host details.
 Use Python 3.12 or 3.13 in a virtual environment, then install the locked test
 dependencies with `python -m pip install -c requirements.lock '.[test]'`.
 Run `python -m pytest -q`, `python tools/check_contracts.py`, and
-`python tools/local_smoke.py --management`. The ordinary suite uses temporary
+`python tools/local_smoke.py`. The ordinary suite uses temporary
 databases and tiny synthetic workloads. It does not contact a real cluster.
 The NumPy science calibration is optional and separate from core dependencies.
 

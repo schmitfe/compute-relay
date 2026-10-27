@@ -48,6 +48,10 @@ def reserve_metadata(project, kind, object_id, size_bytes):
         # Every extension definition/run shares a cap, regardless of its subtype.
         group = ["job"] if kind == "job" else ["idempotency"] if kind == "idempotency" else ["retired_job"] if kind == "retired_job" else None
         group_rows = MetadataUsage.objects.filter(kind__in=group) if group else MetadataUsage.objects.exclude(kind__in=["job", "idempotency", "retired_job"])
+        if kind == "idempotency":
+            # Retained tombstones still prevent replay and consume byte quota,
+            # but response compaction frees active key slots for future work.
+            group_rows = IdempotencyRecord.objects.filter(compacted=False)
         if ((current is None and (group_rows.filter(project=project).count() >= _limit(names[0], names[1])
                     or group_rows.count() >= _limit(names[2], names[3])))
                 or project_size - prior + size_bytes > _limit("PROJECT_METADATA_LIMIT", 32 * 1024 * 1024)

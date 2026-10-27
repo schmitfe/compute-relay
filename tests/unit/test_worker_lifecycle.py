@@ -264,10 +264,14 @@ def test_slow_collection_renews_exact_generation_without_losing_accounting(lifec
 
 def test_failed_renewal_preserves_terminal_evidence_for_next_valid_lease(lifecycle, monkeypatch):
     monkeypatch.setattr("compute_relay.worker.lease.RENEWAL_INTERVAL_SECONDS", 0.005)
+    monkeypatch.setattr("compute_relay.worker.lease.RENEWAL_RETRY_SECONDS", 0.005)
+    monkeypatch.setattr("compute_relay.worker.lease.RENEWAL_SAFETY_SECONDS", 0.005)
     c = lifecycle
     management(c, "observe")
     final_observation(c)
     c.backend.delay = 0.04
+    from datetime import datetime, timedelta, timezone
+    c.lease["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=.02)).isoformat()
     c.control.renewal_fails = True
     with pytest.raises(ControlError, match="LEASE_RENEWAL_FAILED"):
         invoke(c.worker, "execute", c.lease)

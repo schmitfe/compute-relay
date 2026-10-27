@@ -18,6 +18,7 @@ class TransportError(RuntimeError):
 
 class OpenSSHTransport:
     PAYLOAD_LIMIT = 150 * 1024 * 1024
+    HELPER_LIMIT = 1024 * 1024
     STDOUT_LIMIT = 20 * 1024 * 1024
     STDERR_LIMIT = 65536
 
@@ -70,15 +71,22 @@ class OpenSSHTransport:
             argv += ["-o", option]
         return [*argv, "--", s["user"] + "@" + s["host"]]
 
-    def _helper_command(self, source: str, request: dict) -> tuple[list[str], bytes]:
+    def _helper_command(self, source: str, request: dict | None) -> tuple[list[str], bytes]:
         python = self.connection.get("python_path", "/usr/bin/python3")
         if not isinstance(python, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", python):
             raise TransportError("Invalid protected remote interpreter")
-        payload = json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode()
+        # Persistent channels send framed requests after the bootstrap bytes.
+        payload = b"" if request is None else json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode()
         if len(payload) > self.PAYLOAD_LIMIT:
             raise TransportError("Remote operation payload exceeds limit")
-        command = shlex.join([python, "-I", "-c", source])
-        return [*self.argv(), command], payload
+        bundle = source.encode("utf-8")
+        if len(bundle) > self.HELPER_LIMIT:
+            raise TransportError("Remote helper exceeds limit")
+        # Login shells parse only this small ASCII command. The exact byte count
+        # leaves the JSON request on the same buffered stdin for the helper.
+        bootstrap = f'import sys;exec(compile(sys.stdin.buffer.read({len(bundle)}),"<compute-relay-helper>","exec"))'
+        command = shlex.join([python, "-I", "-c", bootstrap])
+        return [*self.argv(), command], bundle + payload
 
     @staticmethod
     def _helper_response(stdout: bytes) -> dict:

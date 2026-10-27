@@ -22,11 +22,17 @@ def owner(db, settings):
 
 
 @pytest.fixture
-def password_free(owner, settings):
+def password_free(owner, settings, tmp_path):
     settings.BROKER_LOCAL_AUTH_MODE = "none"
     settings.BROKER_LOCAL_RUNTIME = "1"
     settings.BROKER_LOCAL_ORIGIN = "http://127.0.0.1:8765"
     settings.ALLOWED_HOSTS = ["127.0.0.1", "localhost", "testserver"]
+    settings.DATA_DIR = tmp_path / "state"
+    settings.BROKER_INSTANCE_ID = uuid4()
+    from compute_relay.local_state import LocalState
+    from compute_relay.portal_tokens import issue
+    with LocalState(settings.DATA_DIR) as state:
+        owner.launch_path = issue(state, settings.BROKER_LOCAL_ORIGIN, settings.BROKER_INSTANCE_ID).removeprefix(settings.BROKER_LOCAL_ORIGIN)
     owner.set_unusable_password()
     owner.save(update_fields=["password"])
     return owner
@@ -64,11 +70,11 @@ def test_login_has_no_provider_or_account_provisioning(owner):
     assert client.session["_auth_user_id"] == str(owner.id)
 
 
-@pytest.mark.parametrize("method", ["get", "head"])
-def test_password_free_html_establishes_ordinary_owner_session(password_free, method):
+def test_password_free_token_establishes_ordinary_owner_session(password_free):
     client = Client()
-    response = getattr(client, method)("/", HTTP_HOST="127.0.0.1:8765", REMOTE_ADDR="127.0.0.1", HTTP_ACCEPT="text/html")
-    assert response.status_code == 200
+    response = client.get(password_free.launch_path, HTTP_HOST="127.0.0.1:8765", REMOTE_ADDR="127.0.0.1", HTTP_ACCEPT="text/html")
+    assert response.status_code == 302 and response.url == "/"
+    assert response["Referrer-Policy"] == "no-referrer" and "no-store" in response["Cache-Control"]
     assert client.session["_auth_user_id"] == str(password_free.id)
     login_page = client.get("/login/", HTTP_HOST="127.0.0.1:8765")
     assert login_page.status_code == 302 and login_page.url == "/"
@@ -85,7 +91,7 @@ def test_password_free_html_establishes_ordinary_owner_session(password_free, me
 def test_password_free_never_bootstraps_api_bearer_remote_or_wrong_origin(password_free, path, headers):
     client = Client()
     options = {"HTTP_HOST": "127.0.0.1:8765", "REMOTE_ADDR": "127.0.0.1", "HTTP_ACCEPT": "text/html", **headers}
-    client.get(path, **options)
+    client.get(password_free.launch_path if path == "/" else path, **options)
     assert "_auth_user_id" not in client.session
 
 
@@ -94,7 +100,8 @@ def test_password_free_does_not_bootstrap_post_or_bypass_csrf(password_free):
     headers = {"HTTP_HOST": "127.0.0.1:8765", "REMOTE_ADDR": "127.0.0.1"}
     assert client.post("/projects/new/", {}, **headers).status_code == 403
     assert "_auth_user_id" not in client.session
-    assert client.get("/projects/new/", **headers).status_code == 200
+    assert client.get("/projects/new/", **headers).status_code == 302
+    assert client.get(password_free.launch_path, **headers).status_code == 302
     assert client.session["_auth_user_id"] == str(password_free.id)
     assert client.post("/projects/new/", {}, **headers).status_code == 403
 
@@ -103,6 +110,34 @@ def test_password_free_does_not_enter_disabled_owner(password_free):
     User.objects.filter(id=password_free.id).update(is_active=False)
     client = Client()
     assert client.get("/", HTTP_HOST="127.0.0.1:8765").status_code == 302
+    assert "_auth_user_id" not in client.session
+
+
+def test_launch_token_is_single_use_and_head_does_not_consume(password_free):
+    headers = {"HTTP_HOST": "127.0.0.1:8765"}
+    first, second = Client(), Client()
+    first.head(password_free.launch_path, **headers)
+    assert "_auth_user_id" not in first.session
+    first.get(password_free.launch_path, **headers)
+    second.get(password_free.launch_path, **headers)
+    assert first.session["_auth_user_id"] == str(password_free.id)
+    assert "_auth_user_id" not in second.session
+
+
+@pytest.mark.parametrize("invalid", ["expired", "other_instance", "wrong_token"])
+def test_invalid_launch_token_does_not_log_in(password_free, settings, invalid):
+    from compute_relay.local_state import LocalState
+    with LocalState(settings.DATA_DIR) as state:
+        record = state.read("portal-token.json")
+        if invalid == "expired":
+            record["expires_at"] = 0
+        elif invalid == "other_instance":
+            record["instance_id"] = str(uuid4())
+        else:
+            record["sha256"] = "0" * 64
+        state.write("portal-token.json", record)
+    client = Client()
+    client.get(password_free.launch_path, HTTP_HOST="127.0.0.1:8765")
     assert "_auth_user_id" not in client.session
 
 

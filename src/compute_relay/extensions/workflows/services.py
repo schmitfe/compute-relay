@@ -159,7 +159,7 @@ def advance(run, credential=None, *, maximum=2):
     processed = 0
     for key in order:
         node = records[key]
-        if processed >= maximum or node.execution_request_id or node.state in {"blocked_upstream", "blocked_artifact"} or node.next_check_at > timezone.now():
+        if processed >= maximum or node.execution_request_id or node.next_check_at > timezone.now():
             continue
         resolved = _resolve(run, node, specifications[key], dependencies, records, credential)
         if resolved is None:
@@ -257,6 +257,16 @@ def before_lease(worker):
                 advance(run)
         except BrokerError:
             continue  # Revoked/stale authority never stops core observations.
+
+
+def after_report(attempt, extension_data):
+    """Recovered outputs can make a previously blocked workflow runnable."""
+    if attempt.state != "succeeded" or attempt.collection_state != "complete":
+        return
+    node = WorkflowNodeRun.objects.filter(execution_request=attempt.execution_request).first()
+    if node and node.run.nodes.filter(state="blocked_artifact", execution_request__isnull=True).exists():
+        WorkflowRun.objects.filter(id=node.run_id, cancel_requested=False).exclude(state="cancelled").update(
+            state="running", next_check_at=timezone.now())
 
 
 def cancel(run, credential):

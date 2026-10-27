@@ -8,6 +8,8 @@ import hashlib
 import os
 import shutil
 import stat
+import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -38,16 +40,56 @@ def read_blob(blob):
     return data
 
 
-def verify_blob(blob):
-    """Verify arbitrarily large retained objects without buffering them."""
+_verified_objects = OrderedDict()
+_verification_lock = threading.Lock()
+
+
+def _verification_key(blob, info):
+    return (str(blob.project_id), blob.sha256, blob.size_bytes, info.st_dev, info.st_ino,
+        info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _remember_verified(key):
+    with _verification_lock:
+        _verified_objects[key] = True
+        _verified_objects.move_to_end(key)
+        while len(_verified_objects) > 4096:
+            _verified_objects.popitem(last=False)
+
+
+def open_verified_blob(blob):
+    """Reuse hashes only while descriptor identity and metadata are unchanged.
+
+    This bounded process cache is invalidated by replacement, writes or metadata
+    changes. A restart verifies again. Private object files are immutable under
+    the supported account boundary.
+    """
     fd = os.open(blob_path(blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
+    stream = os.fdopen(fd, "rb")
+    try:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != blob.size_bytes:
             raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
-        digest, size = fingerprint(stream)
-        if digest != blob.sha256 or size != blob.size_bytes:
-            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        key = _verification_key(blob, info)
+        with _verification_lock:
+            cached = key in _verified_objects
+        if not cached:
+            digest, size = fingerprint(stream)
+            if (digest != blob.sha256 or size != blob.size_bytes
+                    or key != _verification_key(blob, os.fstat(stream.fileno()))):
+                raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        _remember_verified(key)
+        stream.seek(0)
+        return stream
+    except BaseException:
+        stream.close()
+        raise
+
+
+def verify_blob(blob):
+    """Verify arbitrarily large retained objects without buffering them."""
+    with open_verified_blob(blob):
+        pass
 
 
 def blob_chunk(blob, offset, limit=CHUNK_BYTES):
@@ -80,7 +122,7 @@ def _writer_lock(project_id):
         os.close(fd)
 
 
-def _finish(reservation, *, abort_if_missing):
+def _finish(reservation, *, abort_if_missing, abort=False):
     # All callers hold the project writer lock. Hashing a multi-GiB object must
     # happen outside SQLite's write transaction so other projects can progress.
     snapshot = UploadReservation.objects.get(id=reservation.id)
@@ -89,7 +131,7 @@ def _finish(reservation, *, abort_if_missing):
         (settings.ARTIFACT_ROOT / str(snapshot.project_id) / ("upload-" + str(snapshot.id))).unlink(missing_ok=True)
         candidate = Blob(project_id=snapshot.project_id, sha256=snapshot.sha256, size_bytes=snapshot.size_bytes)
         try:
-            if snapshot.binding and not snapshot.verified:
+            if abort or (snapshot.binding and not snapshot.verified):
                 raise FileNotFoundError("Unverified resumable transfer")
             verify_blob(candidate)
         except FileNotFoundError:
@@ -322,19 +364,37 @@ def transfer_chunk(project, transfer_id, binding, offset, content, *, finish=Fal
             size = os.fstat(stream.fileno()).st_size
             if finish:
                 stream.seek(0)
+                before_hash = os.fstat(stream.fileno())
                 digest, measured = fingerprint(stream)
-                if measured != reservation.size_bytes or digest != reservation.sha256:
+                verified_info = os.fstat(stream.fileno())
+                candidate = Blob(project=project, sha256=reservation.sha256, size_bytes=reservation.size_bytes)
+                if (measured != reservation.size_bytes or digest != reservation.sha256
+                        or _verification_key(candidate, before_hash) != _verification_key(candidate, verified_info)):
+                    # A full corrupt partial cannot be resumed. Release its
+                    # reservation immediately, including when the target hash
+                    # already exists without independent upload authority.
+                    _finish(reservation, abort_if_missing=True, abort=True)
                     raise BrokerError("OBJECT_INTEGRITY", "Transferred object failed checksum verification.", 409)
         UploadReservation.objects.filter(id=reservation.id).update(
             expires_at=timezone.now() + timedelta(hours=24), verified=finish)
         if not finish:
             return {"complete": False, "transfer_id": str(reservation.id), "offset": size}
         target = path.parent / reservation.sha256
+        published = False
         try:
             os.link(path, target, follow_symlinks=False)
+            published = True
         except FileExistsError:
             pass
         path.unlink()
+        if published:
+            # Link/unlink changes ctime; cache the final metadata only for the
+            # inode just verified and published by this writer.
+            candidate = Blob(project=project, sha256=reservation.sha256, size_bytes=reservation.size_bytes)
+            info = target.stat(follow_symlinks=False)
+            if ((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+                    == (verified_info.st_dev, verified_info.st_ino, verified_info.st_size, verified_info.st_mtime_ns)):
+                _remember_verified(_verification_key(candidate, info))
         directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(directory_fd)

@@ -19,7 +19,7 @@ compute-relay
 
 The intended PyPI distribution has not been published yet. Until a release exists, install from this checkout with `python -m pip install .`, or install a locally built wheel. The normal installation includes all runtime dependencies; no extras are required.
 
-The launcher starts the portal at `http://127.0.0.1:8768` and opens your browser. On first launch, choose a local password or leave it blank to use passwordless access on this device. The local account is named `local`. The choice is saved; subsequent launches reuse the same projects, jobs, budgets, and connector configuration.
+The launcher starts the portal at `http://127.0.0.1:8768` and opens your browser. On first launch, choose a local password or leave it blank to use a one-time launch link on this device. The link expires after five minutes; running the launcher again issues a fresh link for an already running portal. Keep the link private. The local account is named `local`. The access choice is saved; subsequent launches reuse the same projects, jobs, budgets, and connector configuration.
 
 Keep the terminal running. Cluster SSH key passphrases and MFA prompts appear there, one connection at a time. Ctrl-C stops the local portal and its connectors; it does not cancel jobs already submitted to Slurm. Run `compute-relay` again to resume monitoring and reconnect.
 

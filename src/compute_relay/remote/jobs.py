@@ -117,7 +117,7 @@ def stage_input(config, request):
                             finally:
                                 os.close(final)
                             return {"offset": entry["size_bytes"], "complete": True}
-                        temporary = "_relay-part-" + entry["sha256"]
+                        temporary = "_relay-part-" + digest(path.encode("utf-8")) + "-" + entry["sha256"]
                         fd = open_regular(parent, temporary, os.O_RDWR | os.O_CREAT)
                         try:
                             size = os.fstat(fd).st_size
