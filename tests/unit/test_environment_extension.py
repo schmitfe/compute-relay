@@ -232,7 +232,7 @@ def test_rejected_inventory_probe_does_not_block_a_new_request(context):
 
 
 def test_async_worker_environment_receipt_publishes_via_durable_core_report(context, tmp_path, django_capture_on_commit_callbacks):
-    from compute_relay.worker.async_runner import AsyncWorker
+    from compute_relay.worker.runner import Worker
     from compute_relay.worker.journal import Journal
     from test_async_worker import Backend, Control
     build, attempt = executed(context)
@@ -251,7 +251,7 @@ def test_async_worker_environment_receipt_publishes_via_durable_core_report(cont
         await asyncio.sleep(0)
         return metadata
     backend.transport = SimpleNamespace(call_helper=helper)
-    worker = AsyncWorker(control, {str(context.connection.id): backend.connection}, Journal(tmp_path / "journal"),
+    worker = Worker(control, {str(context.connection.id): backend.connection}, Journal(tmp_path / "journal"),
         owner_id=context.owner.id, backend_factory=lambda configuration: backend, extensions=["environments"])
     asyncio.run(worker.execute(lease))
     payload = control.calls[-1][2]
@@ -418,13 +418,16 @@ def test_worker_finalizes_only_metadata_and_fake_results_never_look_verified():
     native = {"attempt_id": attempt}
     context = {"attempt_id": attempt, "build_id": build, "spec_sha256": "a" * 64, "generation": 7}
     calls = []
+    async def metadata(source, request):
+        calls.append((source, request))
+        return {"verified": True}
     backend = SimpleNamespace(connection={"backend": "slurm", "remote_root": "/trusted/jobs", "ssh": {"identity_file": "/private/key"}},
-        transport=SimpleNamespace(call_helper=lambda source, request: calls.append((source, request)) or {"verified": True}))
-    result = worker.after_observation(backend, native, {"extension_name": "environments"}, context)
+        transport=SimpleNamespace(call_helper=metadata))
+    result = asyncio.run(worker.after_observation(backend, native, {"extension_name": "environments"}, context))
     assert result == {"environment_finalization": {"verified": True}, "generation": 7}
     assert calls[0][0] == REMOTE_SOURCE and calls[0][1]["config"] == {"remote_root": "/trusted/jobs"}
     backend.connection["backend"] = "fake"
-    result = worker.after_observation(backend, native, {"extension_name": "environments"}, context)
+    result = asyncio.run(worker.after_observation(backend, native, {"extension_name": "environments"}, context))
     assert result["environment_finalization"]["verified"] is False and len(calls) == 1
 
 

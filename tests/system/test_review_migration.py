@@ -16,7 +16,7 @@ from compute_relay.local_runtime import service_environment
 owner_id = str(uuid4())
 with LocalState(sys.argv[1]) as state:
     document = {"schema_version":"1.0", "installation_id":str(uuid4()), "owner_id":owner_id,
-        "portal_auth":"none", "port":8768, "extensions":["environments","workflows"], "initialized":True}
+        "portal_auth":"none", "port":8768, "extensions":["storage","environments","workflows"], "initialized":True}
     state.write("installation.json", document)
     os.environ.update(service_environment(state, document, str(uuid4())))
 os.environ["DJANGO_SETTINGS_MODULE"] = "compute_relay.control.settings"
@@ -25,7 +25,8 @@ django.setup()
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
-old_targets = [("broker","0001_initial"), ("broker_environments","0001_initial"), ("broker_workflows","0001_initial")]
+old_targets = [("broker","0001_initial"), ("broker_storage","0001_initial"),
+    ("broker_environments","0001_initial"), ("broker_workflows","0001_initial")]
 executor = MigrationExecutor(connection)
 executor.migrate(old_targets)
 old = executor.loader.project_state(old_targets).apps
@@ -65,6 +66,16 @@ spec = old.get_model("broker_environments","EnvironmentSpec").objects.create(pro
     connection=cluster, base_environment=env, document={"requirements":[]}, sha256="a" * 64)
 workflow = old.get_model("broker_workflows","WorkflowRevision").objects.create(project=project,
     name="fixture", document={"nodes":[]}, sha256="b" * 64)
+storage = lambda name: old.get_model("broker_storage", name)
+pool = storage("StorageCapacityPool").objects.create(owner=owner, connection=cluster, name="existing pool",
+    probe_root="/trusted/data", observation={"filesystem_id":"fixture:volume"})
+target = storage("StorageTarget").objects.create(owner=owner, project=project, connection=cluster, pool=pool,
+    name="existing target", root_alias="data", root="/trusted/data", roles=["data"],
+    profile_revision_sha256="c" * 64, connection_revision_sha256="2" * 64)
+storage("ProjectStorageBinding").objects.create(project=project, connection=cluster, data=target)
+storage("ProjectStorageBudget").objects.create(project=project, bytes_budget=10000, retained_bytes_estimate=1000)
+storage("StorageEstimateReservation").objects.create(project=project, target=target, reference=uuid4(),
+    bytes_estimate=500, inodes_estimate=2)
 executor = MigrationExecutor(connection)
 executor.migrate(executor.loader.graph.leaf_nodes())
 new = executor.loader.project_state(executor.loader.graph.leaf_nodes()).apps
@@ -83,6 +94,13 @@ assert model("UploadGrant").objects.count() == 0 and model("InputSource").object
 reservation = model("UploadReservation").objects.get()
 assert reservation.state == "reserved" and reservation.sha256 == "" and reservation.expires_at is None
 assert model("Project").objects.get(id=project.id).storage_reserved == 5
+assert model("StoragePool").objects.get(id=1).reserved == 5
+assert "broker_storage_storageestimatereservation" not in connection.introspection.table_names()
+storage = lambda name: new.get_model("broker_storage", name)
+assert storage("StorageTarget").objects.get(id=target.id).root == "/trusted/data"
+assert storage("StorageCapacityPool").objects.get(id=pool.id).observation == {"filesystem_id":"fixture:volume"}
+assert storage("ProjectStorageBinding").objects.get(project_id=project.id).data_id == target.id
+assert storage("ProjectStorageBudget").objects.get(project_id=project.id).retained_bytes_estimate == 1000
 receipt = model("IdempotencyRecord").objects.get()
 assert receipt.key == "original-request" and not receipt.compacted and receipt.response["attempt_id"] == str(attempt.id)
 assert model("WorkerReport").objects.filter(attempt_id=attempt.id).count() == 16

@@ -1,4 +1,6 @@
 """Tests for environment execution."""
+
+import asyncio
 from test_support.unit_test_backends import REVISION, sample
 import json
 import pytest
@@ -134,13 +136,13 @@ def test_conda_inventory_is_fixed_and_does_not_use_personal_registries(tmp_path,
 
 def test_discovery_config_is_forwarded_without_ssh_credentials():
     class CapturingTransport:
-        def call_helper(self, source, request):
+        async def call_helper(self, source, request):
             assert "identity_file" not in repr(request)
             assert request["config"]["environment_discovery"] == {"python_executables": []}
             return {"software": {"status": "available", "scope": "login_node", "verified_on_compute": False}}
 
-    result = SlurmBackend({"ssh": {"identity_file": "/private/key"}, "environment_discovery": {"python_executables": []}},
-                          transport=CapturingTransport()).discover()
+    result = asyncio.run(SlurmBackend({"ssh": {"identity_file": "/private/key"}, "environment_discovery": {"python_executables": []}},
+                          transport=CapturingTransport()).discover())
     assert result["software"]["verified_on_compute"] is False
 
 

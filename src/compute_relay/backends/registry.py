@@ -9,7 +9,6 @@ from dataclasses import dataclass
 import re
 from types import MappingProxyType
 
-from .async_slurm import AsyncSlurmBackend
 from .fake import FakeBackend
 from .preparation import BackendError
 from .slurm import SlurmBackend
@@ -18,8 +17,7 @@ from .slurm import SlurmBackend
 @dataclass(frozen=True)
 class BackendDefinition:
     name: str
-    sync_factory: Callable[[dict], object]
-    async_factory: Callable[[dict], object] | None = None
+    factory: Callable[[dict], object]
 
 
 class BackendRegistry:
@@ -28,32 +26,28 @@ class BackendRegistry:
         for definition in definitions:
             if (not isinstance(definition.name, str)
                     or not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", definition.name)
-                    or not callable(definition.sync_factory)
-                    or definition.async_factory is not None and not callable(definition.async_factory)):
+                    or not callable(definition.factory)):
                 raise ValueError("Invalid trusted backend definition")
             if definition.name in registered:
                 raise ValueError("Duplicate backend registration")
             registered[definition.name] = definition
         self._definitions = MappingProxyType(registered)
 
-    def create(self, connection: dict, *, asynchronous: bool = False):
+    def create(self, connection: dict):
         kind = connection.get("backend", "slurm")
         definition = self._definitions.get(kind) if isinstance(kind, str) else None
         if definition is None:
             raise BackendError("Unsupported configured backend")
-        factory = definition.async_factory if asynchronous else definition.sync_factory
-        if factory is None:
-            raise BackendError("Configured backend has no asynchronous implementation")
-        return factory(connection)
+        return definition.factory(connection)
 
 
 # Keep the installed-code allowlist reviewable in one place. Adding a factory
 # does not supply a new backend's policy, schemas, preparation or identity rules.
 _BACKENDS = BackendRegistry((
     BackendDefinition("fake", FakeBackend),
-    BackendDefinition("slurm", SlurmBackend, AsyncSlurmBackend),
+    BackendDefinition("slurm", SlurmBackend),
 ))
 
 
-def create_backend(connection: dict, *, asynchronous: bool = False):
-    return _BACKENDS.create(connection, asynchronous=asynchronous)
+def create_backend(connection: dict):
+    return _BACKENDS.create(connection)

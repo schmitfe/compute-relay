@@ -13,10 +13,8 @@ from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Connection, Job, Project, ProjectCredential, User, WorkerIdentity
 from compute_relay.extensions.storage import services
-from compute_relay.extensions.storage.models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageEstimateReservation, StorageTarget
+from compute_relay.extensions.storage.models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageTarget
 from compute_relay.extensions.storage.planning import ROLES
-
-
 
 
 def select(resources, target, **changes):
@@ -114,7 +112,7 @@ def test_inventory_and_plan_are_read_only_scoped_and_explicit_about_unknown_capa
     payload = response.json()
     assert payload["status"] == "unknown" and payload["creates_reservations"] is False
     assert payload["enforced_at_dispatch"] is False and payload["dry_run"] is True
-    assert not StorageEstimateReservation.objects.exists() and not Job.objects.exists()
+    assert not Job.objects.exists()
 
 
 def test_api_rejects_foreign_project_expired_and_wrong_scope_credentials(resources):
@@ -186,39 +184,6 @@ def test_observation_hook_is_worker_scoped_fresh_and_never_claims_unpinned_ident
     with pytest.raises(BrokerError) as denied:
         services.record_observation(resources.worker, target.pool_id, value)
     assert denied.value.code == "STALE_OBSERVATION"
-
-
-def test_advisory_reservations_are_idempotent_and_share_project_budget(resources):
-    target = enroll(resources)
-    select(resources, target, bytes_budget=1000, retained_bytes_estimate=100)
-    reference = uuid4()
-    first = services.reserve_estimate(resources.project, target, reference, 600, 1)
-    assert services.reserve_estimate(resources.project, target, reference, 600, 1).id == first.id
-    with pytest.raises(BrokerError) as conflict:
-        services.reserve_estimate(resources.project, target, reference, 601, 1)
-    assert conflict.value.code == "STORAGE_RESERVATION_CONFLICT"
-    with pytest.raises(BrokerError) as exceeded:
-        services.reserve_estimate(resources.project, target, uuid4(), 301, 1)
-    assert exceeded.value.code == "STORAGE_BUDGET_EXCEEDED"
-    assert services.inventory(resources.project)["budget"]["reserved_bytes_estimate"] == 600
-    services.release_estimate(resources.project, reference)
-    services.release_estimate(resources.project, reference)
-    assert services.inventory(resources.project)["budget"]["reserved_bytes_estimate"] == 0
-    assert services.reserve_estimate(resources.project, target, reference, 600, 1).state == "released"
-
-
-def test_internal_reservation_cannot_cross_project_or_target_scope(resources):
-    target = enroll(resources)
-    select(resources, target)
-    project = Project.objects.create(owner=resources.outsider, name="foreign")
-    project.connections.add(resources.connection)
-    with pytest.raises(BrokerError) as denied:
-        services.reserve_estimate(project, target, uuid4(), 100, 1)
-    assert denied.value.code == "STORAGE_TARGET_DENIED"
-    reference = uuid4()
-    services.reserve_estimate(resources.project, target, reference, 100, 1)
-    assert services.release_estimate(project, reference) is None
-    assert StorageEstimateReservation.objects.get().state == "held"
 
 
 def test_plan_body_limit_and_unknown_path_fields_are_rejected(resources):
@@ -295,7 +260,7 @@ def test_inode_exhaustion_blocks_plan_even_when_bytes_and_project_budget_fit(res
     assert result["pools"][0]["health"]["state"] == "emergency"
 
 
-def test_global_pool_plans_include_other_projects_pending_growth_without_double_counting_data(resources):
+def test_shared_pool_plans_use_observed_free_space_without_double_counting_retained_usage(resources):
     target = pinned_target(resources)
     services.record_observation(resources.worker, target.pool_id, observation())
     other = Project.objects.create(owner=resources.owner, name="Other project on the shared NAS")
@@ -304,8 +269,6 @@ def test_global_pool_plans_include_other_projects_pending_growth_without_double_
         project=other, pool=target.pool)
     services.save_project_storage(resources.owner, other, resources.connection,
         {"bytes_budget": 10000, "inodes_budget": 10000, "retained_bytes_estimate": 0, "retained_inodes_estimate": 0, "work": other_target})
-    services.reserve_estimate(other, other_target, uuid4(), 7500, 1)
     result = services.plan_for_credential(resources.credential, plan(resources, target))
-    assert result["status"] == "blocked"
-    assert result["pools"][0]["headroom_bytes_estimate"] == 8000 - 7500 - 100 - 500
-    assert services.inventory(resources.project)["budget"]["reserved_bytes_estimate"] == 0
+    assert result["status"] == "ready"
+    assert result["pools"][0]["headroom_bytes_estimate"] == 8000 - 100 - 500

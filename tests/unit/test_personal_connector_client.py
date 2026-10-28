@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from compute_relay.worker import async_client, async_runner, personal_connector as connector, ssh_session
+from compute_relay.worker import async_client, runner, personal_connector as connector, ssh_session
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.enrollment import profile_metadata
 
@@ -308,7 +308,7 @@ def patch_async_runtime(monkeypatch, *, poll):
         async def close(self):
             pass
     monkeypatch.setattr(async_client, "AsyncJsonClient", Client)
-    monkeypatch.setattr(async_runner, "AsyncWorker", Worker)
+    monkeypatch.setattr(runner, "Worker", Worker)
     monkeypatch.setattr(personal_setup, "PersonalWorker", Worker)
     return closed
 

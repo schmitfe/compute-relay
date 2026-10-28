@@ -1,4 +1,6 @@
 """Backend contracts without cluster credentials or uploaded-code execution."""
+
+import asyncio
 from test_support.unit_test_backends import ATTEMPT, REVISION, metadata_module_catalog, observation, sample
 
 import base64
@@ -106,30 +108,30 @@ def test_fake_persists_identity_without_executing_uploaded_source(sample, tmp_pa
     sample = (*sample[:3], content)
     prepared, files = package(sample)
     backend = FakeBackend(sample[2])
-    result = backend.submit(ATTEMPT, prepared["manifest"], files)
+    result = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))
     assert not marker.exists()
     restarted = FakeBackend(sample[2])
-    assert restarted.reconcile(ATTEMPT, prepared["manifest"])["native_identity"] == result["native_identity"]
-    assert restarted.observe(result["native_identity"], manifest=prepared["manifest"])["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
-    collected = restarted.collect(result["native_identity"], ["results/metrics.json"], manifest=prepared["manifest"])
+    assert asyncio.run(restarted.reconcile(ATTEMPT, prepared["manifest"]))["native_identity"] == result["native_identity"]
+    assert asyncio.run(restarted.observe(result["native_identity"], manifest=prepared["manifest"]))["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+    collected = asyncio.run(restarted.collect(result["native_identity"], ["results/metrics.json"], manifest=prepared["manifest"]))
     assert json.loads(collected["artifacts"]["results/metrics.json"])["executed_uploaded_code"] is False
     with pytest.raises(BackendError):
-        restarted.collect(result["native_identity"], ["not-declared"], manifest=prepared["manifest"])
+        asyncio.run(restarted.collect(result["native_identity"], ["not-declared"], manifest=prepared["manifest"]))
 
 
 def test_fake_cancellation_is_durable(sample):
     prepared, files = package(sample)
     backend = FakeBackend(sample[2])
-    identity = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
-    assert backend.cancel(identity, manifest=prepared["manifest"])["outcome"] == "cancel_requested"
-    assert FakeBackend(sample[2]).observe(identity, manifest=prepared["manifest"])["state"] == "cancelled"
+    identity = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
+    assert asyncio.run(backend.cancel(identity, manifest=prepared["manifest"]))["outcome"] == "cancel_requested"
+    assert asyncio.run(FakeBackend(sample[2]).observe(identity, manifest=prepared["manifest"]))["state"] == "cancelled"
 
 
 def test_native_transport_timeout_does_not_resubmit(sample):
     class Unavailable:
         calls = 0
 
-        def call_helper(self, source, request):
+        async def call_helper(self, source, request):
             self.calls += 1
             assert "ssh" not in request["config"]
             raise TransportError("Lost reply after Slurm may have accepted")
@@ -137,9 +139,9 @@ def test_native_transport_timeout_does_not_resubmit(sample):
     prepared, files = package(sample)
     transport = Unavailable()
     backend = SlurmBackend(sample[2], transport=transport)
-    assert backend.submit(ATTEMPT, prepared["manifest"], files)["outcome"] == "submission_uncertain"
+    assert asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["outcome"] == "submission_uncertain"
     assert transport.calls == 1
-    assert backend.reconcile(ATTEMPT, prepared["manifest"])["outcome"] == "submission_uncertain"
+    assert asyncio.run(backend.reconcile(ATTEMPT, prepared["manifest"]))["outcome"] == "submission_uncertain"
     assert transport.calls == 2
 
 
@@ -416,8 +418,8 @@ def test_simulated_zero_second_job_still_spends_allowance(sample):
     sample[2]["fake_elapsed_seconds"] = 0
     prepared, files = package(sample)
     backend = FakeBackend(sample[2])
-    native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
-    assert backend.observe(native, manifest=prepared["manifest"])["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
+    assert asyncio.run(backend.observe(native, manifest=prepared["manifest"]))["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
 
 
 def test_preempted_no_requeue_job_has_final_accounting():

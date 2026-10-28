@@ -276,7 +276,7 @@ def plan_storage(document, inventory, *, now=None):
     estimates = {f"peak_{unit}": total(item[f"peak_{unit}"] for item in request["estimates"]) for unit in ("bytes", "inodes")}
     estimates.update({f"retained_{unit}": total(item[f"retained_{unit}"] for item in request["estimates"]) for unit in ("bytes", "inodes")})
     for unit in ("bytes", "inodes"):
-        projected = total([budget[f"retained_{unit}_estimate"], budget[f"reserved_{unit}_estimate"], estimates[f"peak_{unit}"]])
+        projected = total([budget[f"retained_{unit}_estimate"], estimates[f"peak_{unit}"]])
         estimates[f"projected_{unit}_estimate"] = projected
         if budget[f"{unit}_budget"] is not None and projected > budget[f"{unit}_budget"]:
             reasons.append(f"project_{unit}_budget_exceeded")
@@ -305,12 +305,11 @@ def plan_storage(document, inventory, *, now=None):
                     continue
                 capacity = observation.get(f"total_{unit}")
                 floor = threshold(health["policy"], "stop", unit, capacity)
-                pending = pool[f"reserved_{unit}_estimate"]
-                required = total([pending, peak[f"peak_{unit}"], floor])
+                required = total([peak[f"peak_{unit}"], floor])
                 row[f"headroom_{unit}_estimate"] = available - required
                 if row[f"headroom_{unit}_estimate"] < 0:
                     reasons.append(f"{pool_id}:{unit}_headroom_insufficient")
-                if quota_available is not None and quota_available < total([pending, peak[f"peak_{unit}"]]):
+                if quota_available is not None and quota_available < peak[f"peak_{unit}"]:
                     reasons.append(f"{pool_id}:reported_quota_{unit}_insufficient")
         pools.append(row)
     return {"schema_version": "1.0", "project_id": inventory["project_id"], "connection_id": request["connection_id"],

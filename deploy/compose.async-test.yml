@@ -1,5 +1,0 @@
-# Core Slurm acceptance only. Optional extension hooks are not async yet.
-services:
-  worker:
-    environment:
-      BROKER_WORKER_ASYNC: "1"

@@ -8,6 +8,8 @@ the normal HTTP smoke separately checks admission and transactional settlement.
 Never use institutional credentials or a production scheduler with this tool.
 """
 
+import asyncio
+
 import argparse
 import hashlib
 import json
@@ -28,8 +30,8 @@ class FixtureTransport:
         self.submissions = 0
         self.lose_next_response = False
 
-    def call_helper(self, source, request):
-        result = self.transport.call_helper(source, request)
+    async def call_helper(self, source, request):
+        result = await self.transport.call_helper(source, request)
         if request["operation"] == "submit":
             self.submissions += 1
             if self.lose_next_response:
@@ -68,7 +70,7 @@ def make_package(connection):
     return package["manifest"], {"main.py": source, **{path: text.encode() for path, text in package["generated_files"].items()}}
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture-only", action="store_true", required=True)
     parser.add_argument("--worker-config", type=Path, default=Path("/run/demo/worker.json"))
@@ -84,34 +86,34 @@ def main():
             with patch.object(bundles, "_component", side_effect=lambda name: original(name) + ("# approved fixture version N\n" if name == "jobs.py" else "")):
                 manifest, files = make_package(connection)
                 transport.lose_next_response = lose_reply
-                submitted = backend.submit(attempt_id, manifest, files)
+                submitted = await backend.submit(attempt_id, manifest, files)
             if submitted["outcome"] != ("submission_uncertain" if lose_reply else "submitted"):
                 raise RuntimeError("Fixture did not reach expected submission state")
             if submission_helper_is_current(manifest):
                 raise RuntimeError("Fixture did not change execution-helper version")
-            recovered = backend.reconcile(attempt_id, manifest)
+            recovered = await backend.reconcile(attempt_id, manifest)
             if recovered.get("outcome") != "submitted":
                 raise RuntimeError("Current management could not recover old attempt")
             native = recovered["native_identity"]
             attempts.append((native, manifest))
             try:
-                backend.submit(attempt_id, manifest, files)
+                await backend.submit(attempt_id, manifest, files)
             except BackendError:
                 pass
             else:
                 raise RuntimeError("Old package unexpectedly permitted a new submission call")
-            if backend.cancel(native, manifest=manifest).get("outcome") != "cancel_requested":
+            if (await backend.cancel(native, manifest=manifest)).get("outcome") != "cancel_requested":
                 raise RuntimeError("Current management did not acknowledge native cancellation")
             deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
-                observation = backend.observe(native, manifest=manifest)
+                observation = await backend.observe(native, manifest=manifest)
                 if observation.get("terminal") is True and observation.get("accounting", {}).get("final") is True:
                     break
-                time.sleep(1)
+                await asyncio.sleep(1)
             else:
                 raise RuntimeError("Current management did not obtain final native accounting")
-            backend.collect(native, manifest=manifest)
-            if backend.reconcile(attempt_id, manifest).get("native_identity") != native:
+            await backend.collect(native, manifest=manifest)
+            if (await backend.reconcile(attempt_id, manifest)).get("native_identity") != native:
                 raise RuntimeError("Repeated recovery changed native identity")
         if transport.submissions != 2:
             raise RuntimeError("Recovery submitted an additional native job")
@@ -120,8 +122,8 @@ def main():
                           "final_native_accounting": True}, sort_keys=True))
     finally:
         for native, manifest in attempts:
-            backend.cancel(native, manifest=manifest)
+            await backend.cancel(native, manifest=manifest)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -1,5 +1,5 @@
 """Fixed source packaging and cross-upgrade management without a cluster."""
-from test_support.unit_test_remote_bundles import AsyncLocalFixedTransport, LocalFixedTransport, prepared, site
+from test_support.unit_test_remote_bundles import LocalFixedTransport, prepared, site
 
 import ast
 import asyncio
@@ -19,7 +19,6 @@ from compute_relay.backends import (
     prepare, submission_helper_is_current, verify_package,
 )
 from compute_relay.backends.preparation import helper_source
-from compute_relay.backends.async_slurm import AsyncSlurmBackend
 from compute_relay.remote import bundles
 
 
@@ -139,7 +138,7 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
         if legacy_protocol:
             package["manifest"].pop("helper_protocol")
             package["manifest_sha256"] = digest(canonical_json_bytes(package["manifest"]))
-        native = backend.submit(attempt, package["manifest"], files)["native_identity"]
+        native = asyncio.run(backend.submit(attempt, package["manifest"], files))["native_identity"]
     manifest = package["manifest"]
     assert management_protocol_supported(manifest)
     assert not submission_helper_is_current(manifest)
@@ -147,15 +146,15 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
         verify_package(manifest, package["manifest_sha256"], files)
     for operation in ("observe", "cancel", "collect", "reconcile"):
         verify_package(manifest, package["manifest_sha256"], files, operation=operation)
-    assert backend.reconcile(attempt, manifest)["native_identity"] == native
-    assert backend.observe(native, manifest=manifest)["state"] == "running"
-    assert backend.cancel(native, manifest=manifest)["outcome"] == "cancel_requested"
-    observation = backend.observe(native, manifest=manifest)
+    assert asyncio.run(backend.reconcile(attempt, manifest))["native_identity"] == native
+    assert asyncio.run(backend.observe(native, manifest=manifest))["state"] == "running"
+    assert asyncio.run(backend.cancel(native, manifest=manifest))["outcome"] == "cancel_requested"
+    observation = asyncio.run(backend.observe(native, manifest=manifest))
     assert observation["terminal"] is True
     assert observation["accounting"] == {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}
     directory = Path(native["work_dir"])
     (directory / "result.txt").write_text("bounded artifact")
-    assert backend.collect(native, ["result.txt"], manifest=manifest)["artifacts"] == {"result.txt": b"bounded artifact"}
+    assert asyncio.run(backend.collect(native, ["result.txt"], manifest=manifest))["artifacts"] == {"result.txt": b"bounded artifact"}
     assert site[4].read_text().splitlines().count("sbatch") == 1
 
 
@@ -168,9 +167,9 @@ def test_uncertain_old_submission_reconciles_without_resubmission_after_upgrade(
     with monkeypatch.context() as old:
         old.setattr(bundles, "_component", lambda name: original(name) + ("# previous helper\n" if name == "jobs.py" else ""))
         package, files = prepared(site)
-        assert backend.submit(attempt, package["manifest"], files)["outcome"] == "submission_uncertain"
-    assert backend.reconcile(attempt, package["manifest"])["outcome"] == "submitted"
-    assert backend.reconcile(attempt, package["manifest"])["outcome"] == "submitted"
+        assert asyncio.run(backend.submit(attempt, package["manifest"], files))["outcome"] == "submission_uncertain"
+    assert asyncio.run(backend.reconcile(attempt, package["manifest"]))["outcome"] == "submitted"
+    assert asyncio.run(backend.reconcile(attempt, package["manifest"]))["outcome"] == "submitted"
     assert transport.operations == ["submit", "reconcile", "reconcile"]
     assert site[4].read_text().splitlines().count("sbatch") == 1
 
@@ -178,8 +177,8 @@ def test_uncertain_old_submission_reconciles_without_resubmission_after_upgrade(
 def test_native_async_management_uses_current_bundle_after_upgrade_and_uncertain_reply(site, monkeypatch):
     async def scenario():
         original = bundles._component
-        transport = AsyncLocalFixedTransport()
-        backend = AsyncSlurmBackend(site[0], transport=transport)
+        transport = LocalFixedTransport()
+        backend = SlurmBackend(site[0], transport=transport)
         site[3].write_text(json.dumps({"lose_reply": True}))
         attempt = str(uuid4())
         with monkeypatch.context() as old:
@@ -200,10 +199,10 @@ def test_native_async_management_uses_current_bundle_after_upgrade_and_uncertain
 @pytest.mark.parametrize("outcome", ["unknown", "identity_mismatch", "cancel_requested", "already_terminal", "bogus", None])
 def test_backend_cancel_reports_only_explicit_understood_results(site, outcome):
     class Transport:
-        def call_helper(self, source, request):
+        async def call_helper(self, source, request):
             return {"outcome": outcome, "detail": "private diagnostic must not leak"} if outcome is not None else None
     package, _ = prepared(site)
-    actual = SlurmBackend(site[0], transport=Transport()).cancel({}, manifest=package["manifest"])
+    actual = asyncio.run(SlurmBackend(site[0], transport=Transport()).cancel({}, manifest=package["manifest"]))
     assert actual == {"outcome": outcome if outcome in {"unknown", "identity_mismatch", "cancel_requested", "already_terminal"} else "unknown"}
 
 
@@ -224,7 +223,7 @@ def test_current_management_requires_exact_original_journal_and_native_binding(s
     transport = LocalFixedTransport()
     backend = SlurmBackend(site[0], transport=transport)
     package, files = prepared(site)
-    native = backend.submit(str(uuid4()), package["manifest"], files)["native_identity"]
+    native = asyncio.run(backend.submit(str(uuid4()), package["manifest"], files))["native_identity"]
     before = site[4].read_text()
     manifest = copy.deepcopy(package["manifest"])
     if change == "digest":
@@ -239,7 +238,7 @@ def test_current_management_requires_exact_original_journal_and_native_binding(s
     else:
         manifest["helper_protocol"] = "slurm-jobs/v999"
     with pytest.raises(BackendError):
-        backend.cancel(native, manifest=manifest)
+        asyncio.run(backend.cancel(native, manifest=manifest))
     assert site[4].read_text() == before
 
 

@@ -61,12 +61,6 @@ def reserve_metadata(project, kind, object_id, size_bytes):
                                               defaults={"size_bytes": size_bytes})
 
 
-def release_metadata(project, kind, object_id):
-    with transaction.atomic():
-        _lock(project)
-        MetadataUsage.objects.filter(project=project, kind=kind, object_id=str(object_id)).delete()
-
-
 def retire_metadata(project, object_id, size_bytes):
     """Atomically shrink a job charge into a small, count-capped tombstone.
 

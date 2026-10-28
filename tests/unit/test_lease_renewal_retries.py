@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-import threading
 import pytest
 
 from compute_relay.worker import lease as module
@@ -30,24 +29,12 @@ def test_async_heartbeat_retries_one_http_blip(lease):
                 renewed.set()
                 return {"renewed": True}
         client = Client()
-        async with module.renewing_async(client, lease):
+        async with module.renewing(client, lease):
             await asyncio.wait_for(renewed.wait(), .5)
         assert client.calls >= 2 and asyncio.current_task().cancelling() == 0
     asyncio.run(scenario())
 
 
-def test_sync_heartbeat_retries_one_http_blip(lease):
-    renewed = threading.Event()
-    class Client:
-        calls = 0
-        def request(self, *args):
-            self.calls += 1
-            if self.calls == 1:
-                raise ControlError("CONTROL_UNAVAILABLE")
-            renewed.set()
-            return {"renewed": True}
-    with module.renewing(Client(), lease):
-        assert renewed.wait(.5)
 
 
 def test_async_expiry_clears_only_its_own_cancellation(lease):
@@ -58,7 +45,7 @@ def test_async_expiry_clears_only_its_own_cancellation(lease):
                 raise ControlError("CONTROL_UNAVAILABLE")
         owner = asyncio.current_task()
         with pytest.raises(ControlError, match="LEASE_RENEWAL_FAILED"):
-            async with module.renewing_async(Client(), lease):
+            async with module.renewing(Client(), lease):
                 await asyncio.sleep(.5)
         assert owner.cancelling() == 0
         await asyncio.sleep(0)
@@ -72,7 +59,7 @@ def test_hung_async_renewal_is_bounded_by_remaining_lease(lease):
             async def request(self, *args):
                 await asyncio.Event().wait()
         async def operation():
-            async with module.renewing_async(Client(), lease):
+            async with module.renewing(Client(), lease):
                 await asyncio.sleep(1)
         with pytest.raises(ControlError, match="LEASE_RENEWAL_FAILED"):
             await asyncio.wait_for(operation(), .3)

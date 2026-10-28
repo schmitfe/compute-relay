@@ -10,21 +10,11 @@ from compute_relay.backends import BackendError, prepare
 def digest(value):
     return hashlib.sha256(value).hexdigest()
 
-class LocalFixedTransport:
-    """Only installed first-party helper source runs; payload files stay inert."""
 
+class LocalFixedTransport:
     def __init__(self):
         self.operations = []
 
-    def call_helper(self, source, request):
-        self.operations.append(request["operation"])
-        result = subprocess.run([sys.executable, "-I", "-c", source],
-                                input=json.dumps(request).encode(), capture_output=True, timeout=10, check=False)
-        if result.returncode:
-            raise BackendError("Fixed fixture helper rejected request")
-        return json.loads(result.stdout)
-
-class AsyncLocalFixedTransport(LocalFixedTransport):
     async def call_helper(self, source, request):
         self.operations.append(request["operation"])
         process = await asyncio.create_subprocess_exec(sys.executable, "-I", "-c", source,

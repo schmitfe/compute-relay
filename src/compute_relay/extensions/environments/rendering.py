@@ -5,7 +5,6 @@ import json
 import re
 from .inventory import INVENTORY_PROGRAM
 
-SUPPORTED_MANAGERS = ("venv",)
 _NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
 

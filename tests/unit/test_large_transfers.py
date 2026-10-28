@@ -1,6 +1,7 @@
 """Bounded end-to-end transfer and live-output acceptance without real compute."""
 
 import asyncio
+from unittest.mock import AsyncMock
 import base64
 import hashlib
 import json
@@ -15,7 +16,6 @@ from django.utils import timezone
 import pytest
 
 from compute_relay.backends import SlurmBackend, prepare
-from compute_relay.backends.async_slurm import AsyncSlurmBackend
 from compute_relay.backends.preparation import sha256, canonical_json_bytes, JOB_PROTOCOL
 from compute_relay.control import services
 from compute_relay.control.models import Artifact, Attempt, Blob, LedgerEntry, UploadGrant, UploadReservation
@@ -25,8 +25,7 @@ from compute_relay.remote import helper
 from compute_relay.transfer import CHUNK_BYTES, FileReference, MAX_FILE_BYTES
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.runner import Worker
-from compute_relay.worker.async_runner import AsyncWorker
-from compute_relay.worker.transfers import collect_outputs, collect_outputs_async, stage_inputs, stage_inputs_async
+from compute_relay.worker.transfers import collect_outputs, stage_inputs
 from compute_relay.worker.client import ControlError
 from compute_relay.workspace import WorkspaceClient
 from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
@@ -76,7 +75,7 @@ class LocalTransport:
     def __init__(self):
         self.calls = []
 
-    def call_helper(self, source, request):
+    async def call_helper(self, source, request):
         assert len(json.dumps(request)) < 2 * CHUNK_BYTES + 65536
         self.calls.append(request)
         return helper.execute(request["config"], request)
@@ -90,9 +89,6 @@ class AsyncHTTP:
         return self.sync.request(*args, **kwargs)
 
 
-class AsyncLocalTransport(LocalTransport):
-    async def call_helper(self, source, request):
-        return super().call_helper(source, request)
 
 
 def post(client, path, data):
@@ -212,12 +208,11 @@ def remote_package(sample, tmp_path, monkeypatch, *, large_input=False):
     return backend, prepared, files, data, calls
 
 
-@pytest.mark.parametrize("asynchronous", [False, True])
-def test_remote_large_input_resume_before_single_submission(sample, tmp_path, monkeypatch, asynchronous):
+def test_remote_large_input_resume_before_single_submission(sample, tmp_path, monkeypatch):
     backend, prepared, files, data, calls = remote_package(sample, tmp_path, monkeypatch, large_input=True)
     manifest = prepared["manifest"]
-    first = backend.stage_input(ATTEMPT, manifest, "data/input.bin", offset=0,
-        content_base64=base64.b64encode(data[:CHUNK_BYTES]).decode(), finish=False)
+    first = asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/input.bin", offset=0,
+        content_base64=base64.b64encode(data[:CHUNK_BYTES]).decode(), finish=False))
     assert first["offset"] == CHUNK_BYTES and calls == []
     class Input:
         def request(self, method, path, body):
@@ -225,13 +220,9 @@ def test_remote_large_input_resume_before_single_submission(sample, tmp_path, mo
             assert offset >= CHUNK_BYTES
             return {"offset": offset, "content_base64": base64.b64encode(data[offset:offset + CHUNK_BYTES]).decode()}
     lease = {"attempt_id": ATTEMPT, "id": str(uuid4()), "generation": 1}
-    if asynchronous:
-        backend = AsyncSlurmBackend(backend.connection, transport=AsyncLocalTransport())
-        asyncio.run(stage_inputs_async(AsyncHTTP(Input()), backend, lease, manifest, files))
-        submitted = asyncio.run(backend.submit(ATTEMPT, manifest, files))
-    else:
-        stage_inputs(Input(), backend, lease, manifest, files)
-        submitted = backend.submit(ATTEMPT, manifest, files)
+    backend = SlurmBackend(backend.connection, transport=LocalTransport())
+    asyncio.run(stage_inputs(AsyncHTTP(Input()), backend, lease, manifest, files))
+    submitted = asyncio.run(backend.submit(ATTEMPT, manifest, files))
     assert submitted["outcome"] == "submitted" and calls == ["sbatch"]
     assert (Path(submitted["native_identity"]["work_dir"]) / "data/input.bin").read_bytes() == data
 
@@ -244,71 +235,71 @@ def test_same_content_inputs_keep_independent_partial_offsets(sample, tmp_path, 
         sample[0]["files"].append({"path": path, "sha256": sha256(data), "size_bytes": len(data), "executable": False})
     backend, prepared, _, _, _ = remote_package(sample, tmp_path, monkeypatch)
     manifest = prepared["manifest"]
-    first = backend.stage_input(ATTEMPT, manifest, "data/one.bin", offset=0,
-        content_base64=base64.b64encode(data[:10]).decode())
+    first = asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/one.bin", offset=0,
+        content_base64=base64.b64encode(data[:10]).decode()))
     assert first["offset"] == 10
-    assert backend.stage_input(ATTEMPT, manifest, "data/two.bin")["offset"] == 0
-    backend.stage_input(ATTEMPT, manifest, "data/two.bin", offset=0,
-        content_base64=base64.b64encode(data[:20]).decode())
-    assert backend.stage_input(ATTEMPT, manifest, "data/one.bin")["offset"] == 10
+    assert asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/two.bin"))["offset"] == 0
+    asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/two.bin", offset=0,
+        content_base64=base64.b64encode(data[:20]).decode()))
+    assert asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/one.bin"))["offset"] == 10
 
 
 def test_legacy_collection_stops_after_aggregate_cap(sample, tmp_path, monkeypatch):
     sample = deepcopy(sample)
     sample[0]["outputs"] = ["first.bin", "second.bin"]
     backend, prepared, files, _, _ = remote_package(sample, tmp_path, monkeypatch)
-    native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
+    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
     directory = Path(native["work_dir"])
     (directory / "first.bin").write_bytes(b"x" * (10 * 1024 * 1024))
     (directory / "second.bin").write_bytes(b"more")
-    result = backend.collect(native, sample[0]["outputs"], manifest=prepared["manifest"])
+    result = asyncio.run(backend.collect(native, sample[0]["outputs"], manifest=prepared["manifest"]))
     assert set(result["artifacts"]) == {"first.bin"}
 
 
 def test_remote_output_manifest_and_ranges_reject_changes_and_symlinks(sample, tmp_path, monkeypatch):
     backend, prepared, files, _, _ = remote_package(sample, tmp_path, monkeypatch)
-    native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
+    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
     directory = Path(native["work_dir"])
     (directory / "results").mkdir()
     output = directory / "results/metrics.json"
     output.write_bytes(b"x" * (11 * CHUNK_BYTES))
-    inventory = backend.output_manifest(native, manifest=prepared["manifest"])
+    inventory = asyncio.run(backend.output_manifest(native, manifest=prepared["manifest"]))
     from compute_relay.worker.client import strict_json
     # Persistent SSH frames reject integers outside the exact wire range.
     assert strict_json(json.dumps(inventory).encode()) == inventory
     entry = inventory["files"][0]
     assert entry["size_bytes"] > 10 * CHUNK_BYTES
-    chunk = backend.output_chunk(native, manifest=prepared["manifest"], path=entry["path"], offset=10 * CHUNK_BYTES, version=entry["version"])
+    chunk = asyncio.run(backend.output_chunk(native, manifest=prepared["manifest"], path=entry["path"], offset=10 * CHUNK_BYTES, version=entry["version"]))
     assert len(base64.b64decode(chunk["content_base64"])) == CHUNK_BYTES
     output.write_bytes(b"changed")
     with pytest.raises(ValueError, match="changed"):
-        backend.output_chunk(native, manifest=prepared["manifest"], path=entry["path"], offset=0, version=entry["version"])
+        asyncio.run(backend.output_chunk(native, manifest=prepared["manifest"], path=entry["path"], offset=0, version=entry["version"]))
     output.unlink();output.symlink_to(tmp_path / "outside")
     with pytest.raises(OSError):
-        backend.output_manifest(native, manifest=prepared["manifest"])
+        asyncio.run(backend.output_manifest(native, manifest=prepared["manifest"]))
 
 
 def test_live_logs_arrive_before_completion_report_gaps_and_reset(sample, tmp_path, monkeypatch):
     backend, prepared, files, _, _ = remote_package(sample, tmp_path, monkeypatch)
-    native = backend.submit(ATTEMPT, prepared["manifest"], files)["native_identity"]
+    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
     log = Path(native["work_dir"]) / "stdout.log"
     log.write_bytes(b"realization 1 done\n")
-    first = backend.read_logs(native, manifest=prepared["manifest"], cursors={})["stdout"]
+    first = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors={}))["stdout"]
     assert base64.b64decode(first["content_base64"]) == b"realization 1 done\n"
     with log.open("ab") as stream:
         stream.write(b"realization 2 done\n")
     cursors = {"stdout": {"cursor": first["next_cursor"], "file_id": first["file_id"]}}
-    second = backend.read_logs(native, manifest=prepared["manifest"], cursors=cursors)["stdout"]
+    second = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors=cursors))["stdout"]
     assert base64.b64decode(second["content_base64"]) == b"realization 2 done\n"
     log.write_bytes(b"x" * 100000)
-    large = backend.read_logs(native, manifest=prepared["manifest"], cursors=cursors)["stdout"]
+    large = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors=cursors))["stdout"]
     assert large["truncated"] and len(base64.b64decode(large["content_base64"])) == 65536
     log.write_bytes(b"restart\n")
-    reset = backend.read_logs(native, manifest=prepared["manifest"], cursors=cursors)["stdout"]
+    reset = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors=cursors))["stdout"]
     assert reset["reset"] and base64.b64decode(reset["content_base64"]) == b"restart\n"
     log.unlink();os.mkfifo(log)
     with pytest.raises(ValueError, match="regular files"):
-        backend.read_logs(native, manifest=prepared["manifest"], cursors={})
+        asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors={}))
 
 
 def test_live_log_report_cursor_preserves_raw_utf8_and_no_accounting_settlement(broker):
@@ -363,9 +354,8 @@ def test_collection_failure_retries_settled_attempt_without_new_compute_or_charg
     assert Attempt.objects.count() == 1 and LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1
 
 
-@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.django_db(transaction=True)
-def test_worker_streams_live_output_and_large_artifacts_through_broker(broker, tmp_path, monkeypatch, asynchronous):
+def test_worker_streams_live_output_and_large_artifacts_through_broker(broker, tmp_path, monkeypatch):
     # The helper runs only fixed reviewed code. The fixture scheduler never runs the uploaded script.
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     budgeted(broker)
@@ -376,32 +366,24 @@ def test_worker_streams_live_output_and_large_artifacts_through_broker(broker, t
     monkeypatch.setattr(helper, "scheduler", lambda *a, **kw: {"returncode": 0, "stdout": "42\n", "stderr": ""})
     backend = SlurmBackend(config, transport=LocalTransport())
     work = PreparedWork.decode(first)
-    native = backend.submit(str(attempt.id), job.manifest, work.files)["native_identity"]
+    native = asyncio.run(backend.submit(str(attempt.id), job.manifest, work.files))["native_identity"]
     services.report(broker.worker, attempt.id, {"lease_id": first["id"], "generation": first["generation"],
         "outcome": "submitted", "native_identity": native})
     directory = Path(native["work_dir"])
     log = directory / "stdout.log"
     log.write_bytes(b"realization 1/2 done\n")
     worker_api = HTTP("synthetic-worker-token")
-    if asynchronous:
-        backend = AsyncSlurmBackend(config, transport=AsyncLocalTransport())
-        worker = AsyncWorker(AsyncHTTP(worker_api), {str(broker.connection.id): config}, Journal(tmp_path / "journal"),
-            backend_factory=lambda _: backend, extensions=[], owner_id=uuid4())
-    else:
-        worker = Worker(worker_api, {str(broker.connection.id): config}, Journal(tmp_path / "journal"),
-            backend_factory=lambda _: backend, extensions=[])
+    backend = SlurmBackend(config, transport=LocalTransport())
+    worker = Worker(AsyncHTTP(worker_api), {str(broker.connection.id): config}, Journal(tmp_path / "journal"),
+        backend_factory=lambda _: backend, extensions=[], owner_id=uuid4())
     observation = {"state": "running", "terminal": False, "accounting": {"final": False}}
     def invoke():
         Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
         lease = services.lease_work(broker.worker)["lease"]
-        if asynchronous:
-            async def observe(*a, **kw):
-                return deepcopy(observation)
-            backend.observe = observe
-            asyncio.run(worker.execute(lease))
-        else:
-            backend.observe = lambda *a, **kw: deepcopy(observation)
-            worker.execute(lease)
+        async def observe(*a, **kw):
+            return deepcopy(observation)
+        backend.observe = observe
+        asyncio.run(worker.execute(lease))
     invoke()
     attempt.refresh_from_db()
     assert attempt.state == "running" and attempt.stdout == "realization 1/2 done\n"
@@ -473,21 +455,21 @@ def test_multigib_roundtrip_is_bounded_across_workspace_broker_and_worker(broker
         "remote_root": str(tmp_path / "remote")}
     monkeypatch.setattr(helper, "scheduler", lambda *a, **kw: {"returncode": 0, "stdout": "42\n", "stderr": ""})
     class UnrecordedTransport:
-        def call_helper(self, source, request):
+        async def call_helper(self, source, request):
             return helper.execute(request["config"], request)
     submission_errors = []
     class DiagnosticBackend(SlurmBackend):
-        def submit(self, *args, **kwargs):
+        async def submit(self, *args, **kwargs):
             try:
-                return super().submit(*args, **kwargs)
+                return await super().submit(*args, **kwargs)
             except Exception as error:
                 submission_errors.append(type(error).__name__ + ": " + str(error))
                 raise
     backend = DiagnosticBackend(config, transport=UnrecordedTransport())
     private = HTTP("synthetic-worker-token", record_bytes=False)
-    worker = Worker(private, {str(broker.connection.id): config}, Journal(tmp_path / "journal"),
-        backend_factory=lambda _: backend, extensions=[])
-    worker.execute(lease)
+    worker = Worker(AsyncHTTP(private), {str(broker.connection.id): config}, Journal(tmp_path / "journal"),
+        backend_factory=lambda _: backend, extensions=[], owner_id=str(uuid4()))
+    asyncio.run(worker.execute(lease))
     attempt = request.attempt
     attempt.refresh_from_db()
     assert attempt.state == "queued", submission_errors
@@ -495,10 +477,10 @@ def test_multigib_roundtrip_is_bounded_across_workspace_broker_and_worker(broker
     shutil.copyfile(directory / "input.bin", directory / "output.bin")
     with (directory / "output.bin").open("r+b") as stream:
         stream.write(b"different output\n")
-    backend.observe = lambda *a, **kw: {"state": "completed", "terminal": True,
-        "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}}
+    backend.observe = AsyncMock(return_value= {"state": "completed", "terminal": True,
+        "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}})
     Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
-    worker.execute(services.lease_work(broker.worker)["lease"])
+    asyncio.run(worker.execute(services.lease_work(broker.worker)["lease"]))
     attempt.refresh_from_db()
     assert attempt.collection_state == "complete"
     receipt = workspace_client.fetch(str(attempt.id), "download")

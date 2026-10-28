@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 import pytest
 from compute_relay.backends import prepare
-from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.runner import Worker
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.journal import Journal
 
@@ -60,7 +60,7 @@ def configured(tmp_path):
     connection_id, owner_id = str(uuid4()), str(uuid4())
     connection = {"backend": "fake", "revision_sha256": "c" * 64}
     journal = Journal(tmp_path / "journal")
-    worker = AsyncWorker(control, {connection_id: connection}, journal, owner_id=owner_id,
+    worker = Worker(control, {connection_id: connection}, journal, owner_id=owner_id,
                          backend_factory=lambda _: backend, extensions=[])
     source = b"raise RuntimeError('must never execute in a connector')\n"
     request = {"schema_version": "1.0", "project_id": str(uuid4()), "connection_id": connection_id, "name": "async-test",

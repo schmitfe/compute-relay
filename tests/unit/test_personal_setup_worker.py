@@ -240,7 +240,7 @@ def test_verbose_job_progress_is_meaningful_without_repeating_observation_polls(
     operations = []
     async def execute(_worker, lease):
         operations.append(lease["operation"])
-    monkeypatch.setattr(personal_setup.AsyncWorker, "_execute", execute)
+    monkeypatch.setattr(personal_setup.Worker, "_execute", execute)
     lease = {"operation": "observe", "attempt_id": str(uuid4()), "prepared": {"script": "private_script_body"}}
     asyncio.run(runtime.worker._execute(lease))
     asyncio.run(runtime.worker._execute(lease))
@@ -255,7 +255,7 @@ def test_verbose_job_progress_is_meaningful_without_repeating_observation_polls(
 def test_non_verbose_job_progress_is_quiet(runtime, monkeypatch, capsys):
     async def execute(_worker, lease):
         pass
-    monkeypatch.setattr(personal_setup.AsyncWorker, "_execute", execute)
+    monkeypatch.setattr(personal_setup.Worker, "_execute", execute)
     asyncio.run(runtime.worker._execute({"operation": "submit"}))
     assert capsys.readouterr().out == ""
 

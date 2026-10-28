@@ -22,19 +22,7 @@ def _unverified():
     return {"verified": False, "error_code": "ENVIRONMENT_METADATA_UNVERIFIED"}
 
 
-def after_observation(backend, native, manifest, context):
-    if context.get("inspection_id"):
-        return {"inventory_collection": True, "generation": context.get("generation")}
-    if getattr(backend, "connection", {}).get("backend") == "fake":
-        return _result(context, {"verified": False, "error_code": "SIMULATED_BUILD_NOT_PUBLISHED"})
-    try:
-        result = backend.transport.call_helper(REMOTE_SOURCE, _finalization_request(backend, native, manifest, context))
-    except Exception:
-        result = _unverified()
-    return _result(context, result)
-
-
-async def after_observation_async(backend, native, manifest, context):
+async def after_observation(backend, native, manifest, context):
     if context.get("inspection_id"):
         return {"inventory_collection": True, "generation": context.get("generation")}
     if getattr(backend, "connection", {}).get("backend") == "fake":

@@ -1,9 +1,8 @@
 """Bounded generation-fenced HTTP heartbeats; remote SSH stays in its adapter."""
 
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import threading
 import time
 
 from .client import ControlError
@@ -61,37 +60,8 @@ def _checked_response(response):
         raise ControlError("LEASE_RENEWAL_FAILED")
 
 
-@contextmanager
-def renewing(client, lease):
-    """The sync adapter's background thread performs HTTP only, never SSH."""
-    stopped, failed = threading.Event(), []
-    window = RenewalWindow(lease)
-    def renew():
-        while not stopped.wait(window.wait()):
-            if window.expired():
-                failed.append(True)
-                return
-            try:
-                window.renewed(client.request("POST", f"/internal/v1/attempts/{lease['attempt_id']}/renew", _renew_document(lease)))
-            except Exception as exc:
-                if not window.retry(exc):
-                    failed.append(True)
-                    return
-    thread = threading.Thread(target=renew, name="compute-relay-lease-renewal", daemon=True)
-    thread.start()
-    def check():
-        if failed or window.expired():
-            raise ControlError("LEASE_RENEWAL_FAILED")
-    try:
-        yield check
-        check()
-    finally:
-        stopped.set()
-        thread.join(timeout=1)
-
-
 @asynccontextmanager
-async def renewing_async(client, lease):
+async def renewing(client, lease):
     owner = asyncio.current_task()
     failed = False
     window = RenewalWindow(lease)

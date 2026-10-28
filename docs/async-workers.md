@@ -15,7 +15,7 @@ backend. The connector has no direct controller database access.
 
 Transport-independent rules live in `domain/lifecycle.py`: typed operations and
 outcomes, bounded package decoding, submit-versus-reconcile decisions, native
-identity checks, cancellation mapping and durable-report replay. Both runners
+identity checks, cancellation mapping and durable-report replay. The worker
 and the controller validate the same operation/outcome combinations. Their I/O
 remains separate, and controller accounting transactions remain explicit.
 
@@ -26,8 +26,8 @@ requires the original journal manifest digest, embedded manifest, exact native
 identity and derived attempt directory. Discovery has its own deterministic
 stdlib bundle and cannot change the execution identity with a catalog-only edit.
 Components declare their own imports; the fixed linker checks provider exports
-and dependency cycles before assembling a deterministic program. Both worker
-adapters select implementations through the same trusted backend registry.
+and dependency cycles before assembling a deterministic program. The worker
+selects implementations through the trusted backend registry.
 
 The launcher passes its selected bundled module names through connector startup.
 The worker advertises only those modules and imports implementations only from
@@ -40,18 +40,26 @@ the trusted registry. Current async module operations include:
 - Workflow terminal hooks preserve their metadata contract; concrete workflow
   nodes still use normal core jobs and accounting.
 
-The async extension entrypoints are `execute_extension_work_async` and
-`worker_after_observation_async`, with module-owned `execute_async` and
-`after_observation_async` implementations. Disabled or unsupported module work
+The async extension entrypoints are `execute_extension_work` and
+`worker_after_observation`, with module-owned `execute` and
+`after_observation` implementations. Disabled or unsupported module work
 fails closed. Hook failures are redacted and must not prevent valid core
 accounting or collection from reaching the controller. Module enablement is not
 permission to build, probe or submit; current project scopes/policy and lease
 identity checks still apply.
 
-The synchronous runner remains a lower-level developer/test implementation.
-It is not required to run the local package's bundled capabilities. This
-release supports Slurm. Other schedulers are unsupported; see the
+The launcher, developer tools and fixtures use the same asynchronous worker,
+Slurm adapter and OpenSSH transport. There is no synchronous execution mode.
+This release supports Slurm. Other schedulers are unsupported; see the
 [roadmap](roadmap.md) before adding one.
+
+Python integrations use `Worker` from `worker.runner`, `SlurmBackend` from
+`backends.slurm`, and `OpenSSHTransport` from `transports.openssh`, and await
+their execution methods. The former `async_*` modules and `Async*` class names
+have been removed. `python -m compute_relay.worker` starts this same worker
+without a mode switch; its protected configuration includes `owner_id` (or
+the operator supplies `BROKER_WORKER_OWNER_ID`). Saved personal connectors use
+their existing owner identity and state.
 
 ## Bounds and durable recovery
 
@@ -110,9 +118,8 @@ Core leases last 120 seconds and renew every 20 seconds using the exact attempt,
 lease ID and generation. Each generation has a fixed 40-minute overall deadline;
 renewal cannot move that deadline. A replaced generation remains fenced. An
 expired but unsuperseded lease can renew only within its original deadline.
-Failed renewal stops further progress on that operation; the async path cancels
-its owned I/O, while durable evidence remains available for recovery. The
-synchronous adapter's heartbeat thread performs HTTP only, never SSH.
+Failed renewal stops further progress on that operation and cancels its owned
+I/O, while durable evidence remains available for recovery.
 
 A terminal observation is written to the local report journal **before** module
 finalization and output collection. A complete report is stored before delivery,
@@ -145,7 +152,7 @@ cannot delay a process.
 
 ## SSH, HTTP and shutdown
 
-Both transports construct fixed OpenSSH arguments from the reviewed connection:
+The transport constructs fixed OpenSSH arguments from the reviewed connection:
 pinned hosts, explicit identity/session, no agent/X11 forwarding and no arbitrary
 agent-controlled options. The connector's authenticated master is required;
 its failing proxy fallback prevents a dead master from triggering a fresh
@@ -212,7 +219,7 @@ Default worker/transport tests use controlled local processes, stub schedulers
 and synthetic credentials. They cover bounds, cancellation, journal recovery,
 cross-version helper management, current module capabilities, slow collection,
 renewal failure, superseded generations, lost final reports and preservation of
-core settlement. Shared lifecycle cases run against both worker variants.
+core settlement. Lifecycle cases exercise the single maintained worker implementation.
 Scaling regressions cover two continuously running jobs plus eight pending
 submissions, 200 admitted attempts with due observations, a 200-job worker queue
 bounded to four concurrent operations, duplicate attempt execution and parallel

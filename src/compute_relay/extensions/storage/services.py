@@ -7,7 +7,6 @@ from datetime import timedelta
 import posixpath
 
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from compute_relay.control.auth import connection_allowed, human_permission
@@ -15,9 +14,9 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Connection, Project, WorkerIdentity
 from compute_relay.control.services import audit, digest
 from .models import (ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool,
-                     StorageEstimateReservation, StorageObservationLease, StorageTarget, StorageTargetRegistration)
+                     StorageObservationLease, StorageTarget, StorageTargetRegistration)
 from .planning import (ROLES, StoragePlanningError, assess_health, canonical_root, integer,
-                       plan_storage, roots_from_metadata, timestamp, total, validate_observation)
+                       plan_storage, roots_from_metadata, timestamp, validate_observation)
 
 
 def protected_roots(connection):
@@ -283,19 +282,12 @@ def save_project_storage(user, project, connection, data):
         return binding
 
 
-def _reserved(queryset):
-    values = queryset.filter(state="held").aggregate(bytes=Sum("bytes_estimate"), inodes=Sum("inodes_estimate"))
-    return {unit: integer(value or 0) for unit, value in values.items()}
-
-
 def inventory(project, *, credential=None, now=None):
     now = now or timezone.now()
     budget = ProjectStorageBudget.objects.filter(project=project).first()
-    reserved = _reserved(StorageEstimateReservation.objects.filter(project=project))
     budget_data = {"bytes_budget": budget.bytes_budget if budget else None, "inodes_budget": budget.inodes_budget if budget else None,
         "retained_bytes_estimate": budget.retained_bytes_estimate if budget else 0,
         "retained_inodes_estimate": budget.retained_inodes_estimate if budget else 0,
-        "reserved_bytes_estimate": reserved["bytes"], "reserved_inodes_estimate": reserved["inodes"],
         "estimate_updated_at": budget.estimate_updated_at.isoformat() if budget and budget.estimate_updated_at else None,
         "estimate_source": budget.estimate_source if budget else "not_estimated"}
     bindings, targets = [], {}
@@ -318,7 +310,6 @@ def inventory(project, *, credential=None, now=None):
         pool = target.pool
         if str(pool.id) in pools:
             continue
-        held = _reserved(StorageEstimateReservation.objects.filter(target__pool=pool))
         health = assess_health(pool.observation, pool.health_policy, now=now, previous_state=pool.health_state,
                                recovery_since=pool.recovery_since.isoformat() if pool.recovery_since else None)
         pools[str(pool.id)] = {"id": str(pool.id), "name": pool.name, "observation": pool.observation,
@@ -327,7 +318,6 @@ def inventory(project, *, credential=None, now=None):
             "next_probe_at": pool.next_probe_at.isoformat() if pool.probe_enabled else None,
             "health_policy": pool.health_policy, "health_state": pool.health_state,
             "recovery_since": pool.recovery_since.isoformat() if pool.recovery_since else None, "health": health,
-            "reserved_bytes_estimate": held["bytes"], "reserved_inodes_estimate": held["inodes"],
             "measurement_status": "cached" if pool.observation else "not_observed"}
     return {"schema_version": "1.0", "project_id": str(project.id), "advisory_only": True,
         "enforced_at_dispatch": False, "probe_wired": True, "budget": budget_data, "bindings": bindings,
@@ -384,49 +374,6 @@ def record_observation(worker, pool_id, document):
         pool.recovery_since = timestamp(health["recovery_since"]) if health["recovery_since"] else None
         pool.save(update_fields=["observation", "health_state", "recovery_since"])
         return {"accepted": True, "health": health}
-
-
-def reserve_estimate(project, target, reference, peak_bytes, peak_inodes):
-    """Optional integration ledger: estimated growth, never an OS reservation.
-
-    Currently unused by job dispatch/builds. Integrators must prove that their
-    actual write path is derived from this target before calling it.
-    """
-    reference, peak_bytes, peak_inodes = UUID(str(reference)), integer(peak_bytes), integer(peak_inodes)
-    with transaction.atomic():
-        Project.objects.select_for_update().get(id=project.id)
-        target = StorageTarget.objects.select_related("connection__worker", "pool").get(id=target.id)
-        if (target.project_id != project.id or target.owner_id != target.connection.owner_id or not target_current(target)
-                or not project.connections.filter(id=target.connection_id, enabled=True, archived=False).exists()
-                or not any(getattr(binding, f"{role}_id") == target.id for binding in ProjectStorageBinding.objects.filter(
-                    project=project, connection_id=target.connection_id) for role in ROLES)):
-            raise BrokerError("STORAGE_TARGET_DENIED", "The target is not selected for this project.", 403)
-        existing = StorageEstimateReservation.objects.filter(reference=reference).first()
-        if existing:
-            if (existing.project_id, existing.target_id, existing.bytes_estimate, existing.inodes_estimate) != (project.id, target.id, peak_bytes, peak_inodes):
-                raise BrokerError("STORAGE_RESERVATION_CONFLICT", "The reference already identifies a different estimate.", 409)
-            return existing
-        StorageCapacityPool.objects.select_for_update().get(id=target.pool_id)
-        budget = ProjectStorageBudget.objects.filter(project=project).first()
-        reserved = _reserved(StorageEstimateReservation.objects.filter(project=project))
-        if budget:
-            for unit, requested in (("bytes", peak_bytes), ("inodes", peak_inodes)):
-                projected = total([getattr(budget, f"retained_{unit}_estimate"), reserved[unit], requested])
-                limit = getattr(budget, f"{unit}_budget")
-                if limit is not None and projected > limit:
-                    raise BrokerError("STORAGE_BUDGET_EXCEEDED", "The declared growth exceeds the advisory project budget.", 409)
-        return StorageEstimateReservation.objects.create(project=project, target=target, reference=reference,
-                                                          bytes_estimate=peak_bytes, inodes_estimate=peak_inodes)
-
-
-def release_estimate(project, reference):
-    with transaction.atomic():
-        Project.objects.select_for_update().get(id=project.id)
-        reservation = StorageEstimateReservation.objects.select_for_update().filter(project=project, reference=reference).first()
-        if reservation and reservation.state == "held":
-            reservation.state, reservation.released_at = "released", timezone.now()
-            reservation.save(update_fields=["state", "released_at"])
-        return reservation
 
 
 def set_probe_enabled(user, pool, enabled):

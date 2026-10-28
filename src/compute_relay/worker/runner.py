@@ -1,231 +1,341 @@
-"""Polling execution worker with persistent intent fencing."""
+"""Slurm worker with native async SSH, bundled hooks and bounded owner lanes.
+
+Local journal verification/fsync remains synchronous on a protected filesystem;
+network I/O and optional extension helpers use awaitable HTTP/OpenSSH transports.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import base64
+from contextlib import AsyncExitStack
 import logging
 import os
-import time
 from pathlib import Path
+import time
 from uuid import UUID
 
-from .client import ControlError, JsonClient, environment_token, strict_json
-from .journal import Journal
+from .async_client import AsyncJsonClient
+from .client import ControlError, environment_token, strict_json
+from .concurrency import PrincipalScheduler, poll_parallel, remote_parallelism
 from .enrollment import EnrollmentError, profile_metadata, resolve_connection
+from .journal import Journal
 from .lease import renewing
 from compute_relay.domain.lifecycle import (CancellationStatus, PreparedWork, cancellation_result, cancellation_status,
     native_for, replay_result, report_record, submission_plan, submission_record, terminal_observation)
 
 
 class Worker:
-    def __init__(self, client, connections: dict, journal: Journal, backend_factory=None,
-                 credential_profiles=None, extensions=None):
+    def __init__(self, client, connections: dict, journal: Journal, *, owner_id,
+                 backend_factory=None, credential_profiles=None, extensions=None,
+                 scheduler=None, parallelism=None):
+        from compute_relay.extensions import async_worker_names, configured_names
         self.client = client
         self.connections = connections
         self.journal = journal
         self.backend_factory = backend_factory or self._backend
         self.credential_profiles = credential_profiles or {}
-        from compute_relay.extensions import configured_names
-        self.extensions = configured_names(",".join(extensions)) if extensions is not None else configured_names()
+        requested = configured_names(",".join(extensions)) if extensions is not None else configured_names()
+        self.extensions = async_worker_names(requested)
         self._profiles_published_at = None
+        self.parallelism = remote_parallelism(parallelism)
+        self.scheduler = scheduler or PrincipalScheduler(max_concurrency=self.parallelism, max_per_owner=self.parallelism)
+        self.owner_id = self.scheduler.register(owner_id)
+        self._poll_lock = asyncio.Lock()
+        self._in_progress = {}
+        from .experimental import status_batch_size
+        self.observation_batch = status_batch_size()
 
     @staticmethod
     def _backend(connection):
         from compute_relay.backends import create_backend
         return create_backend(connection)
 
-    def poll_once(self) -> bool:
-        self.replay_pending_reports()
-        now = time.monotonic()
-        if self._profiles_published_at is None or now - self._profiles_published_at >= 60:
-            self.publish_profiles()
-        response = self.client.request("POST", "/internal/v1/lease", {})
-        lease = response.get("lease")
-        if lease is None:
-            return False
-        self.execute(lease)
-        return True
+    async def poll_once(self):
+        return await self.scheduler.run(self.owner_id, self._poll_once)
 
-    def publish_profiles(self):
+    async def _poll_once(self):
+        # Fetch and configuration changes serialize; independent attempt I/O
+        # runs outside this lock. No operation waits in a leased local backlog.
+        async with self._poll_lock:
+            await self.replay_pending_reports()
+            if await self.setup_before_poll():
+                return True
+            if self.configuration_pending:
+                return False
+            if self._profiles_published_at is None or time.monotonic() - self._profiles_published_at >= 60:
+                await self.publish_profiles()
+            options = {"core_only": bool(self._in_progress), "in_progress": sorted(self._in_progress)}
+            if self.observation_batch > 1:
+                options["observation_batch"] = self.observation_batch
+            response = await self.client.request("POST", "/internal/v1/lease", options)
+            lease = response.get("lease")
+            if lease is None:
+                return False
+            if lease.get("operation") == "availability":
+                await self.availability(lease)
+                return True
+            if lease.get("operation") in {"discover", "extension"}:
+                if self._in_progress:
+                    raise ControlError("CONFIGURATION_WHILE_BUSY")
+                await self._execute(lease)
+                return True
+            batch = [lease, *response.get("observations", [])]
+            if len(batch) > self.observation_batch or len(batch) > 1 and any(
+                    item.get("operation") != "observe" or item.get("connection_id") != lease["connection_id"]
+                    or item.get("configuration") != lease.get("configuration") for item in batch):
+                raise ControlError("INVALID_STATUS_BATCH")
+            attempts = {str(UUID(item["attempt_id"])) for item in batch}
+            if len(attempts) != len(batch) or attempts.intersection(self._in_progress):
+                raise ControlError("DUPLICATE_ACTIVE_LEASE")
+            self._in_progress.update({str(UUID(item["attempt_id"])): item["id"] for item in batch})
+        try:
+            if len(batch) > 1:
+                await self._execute_observations(batch)
+            else:
+                await self._execute(lease)
+            return True
+        finally:
+            for item in batch:
+                self._release_in_progress(item)
+
+    def _release_in_progress(self, lease):
+        attempt = str(UUID(lease["attempt_id"]))
+        if self._in_progress.get(attempt) == lease["id"]:
+            self._in_progress.pop(attempt)
+
+    async def setup_before_poll(self):
+        return False
+
+    async def close(self):
+        pass
+
+    @property
+    def configuration_pending(self):
+        return False
+
+    async def publish_profiles(self):
         profiles = []
         for alias, profile in sorted(self.credential_profiles.items()):
             try:
                 profiles.append(profile_metadata(alias, profile))
             except EnrollmentError:
-                # One unavailable connection must not block healthy targets.
-                # No invalid profile is advertised and no secret is logged.
                 logging.getLogger(__name__).warning("A credential profile is invalid and was not advertised")
-        payload = {"profiles": profiles, "execution_features": ["availability_v1"]}
-        if self.extensions:
-            payload["extensions"] = list(self.extensions)
-        self.client.request("POST", "/internal/v1/worker/profiles", payload)
+        await self.client.request("POST", "/internal/v1/worker/profiles", {"profiles": profiles, "extensions": list(self.extensions),
+            "execution_features": ["availability_v1"]})
         self._profiles_published_at = time.monotonic()
 
-    def discover(self, lease):
+    async def execute(self, lease):
+        return await self.scheduler.run(self.owner_id, lambda: self._execute(lease))
+
+    async def discover(self, lease):
         connection_id = str(UUID(lease["connection_id"]))
         report = {"lease_id": lease["id"], "generation": lease["generation"]}
         try:
-            # Discovery may renew derived settings; the explicit host/user/port/
-            # root/alias must still satisfy the current protected target scope.
-            configuration, public, revision = resolve_connection(
-                lease["configuration"], self.credential_profiles, refresh=True)
-            snapshot = self.backend_factory(configuration).discover()
-            report.update(outcome="discovered", configuration=public,
-                          connection_revision_sha256=revision, discovery_snapshot=snapshot)
-        except EnrollmentError as exc:
-            report.update(outcome="discovery_failed", error_code=exc.code)
+            connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
+            snapshot = await self.backend_factory(connection).discover()
+            report.update(outcome="discovered", configuration=public, connection_revision_sha256=revision, discovery_snapshot=snapshot)
+        except EnrollmentError as error:
+            report.update(outcome="discovery_failed", error_code=error.code)
         except Exception:
             report.update(outcome="discovery_failed", error_code="DISCOVERY_UNAVAILABLE")
-        self.client.request("POST", f"/internal/v1/connections/{connection_id}/report", report)
+        await self.client.request("POST", f"/internal/v1/connections/{connection_id}/report", report)
         if report["outcome"] == "discovered":
-            self.connections[connection_id] = configuration
+            self.connections[connection_id] = connection
 
-    def execute(self, lease):
-        if lease.get("operation") == "availability":
-            self.availability(lease)
+    async def _execute(self, lease):
+        operation = lease.get("operation")
+        if operation == "availability":
+            await self.availability(lease)
             return
-        if lease.get("operation") == "discover":
-            self.discover(lease)
+        if operation == "discover":
+            await self.discover(lease)
             return
-        if lease.get("operation") == "extension":
+        if operation == "extension":
             from compute_relay.extensions import execute_extension_work
-            execute_extension_work(self, lease)
+            await execute_extension_work(self, lease)
             return
         work = PreparedWork.decode(lease)
         operation, attempt_id = work.operation, work.attempt_id
         public = lease.get("configuration", {})
-        connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[work.connection_id]
+        connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[lease["connection_id"]]
         manifest, digest, files = work.manifest, work.manifest_sha256, work.files
-        with self.journal.locked(attempt_id):
+        async with self.journal.async_locked(attempt_id):
             previous = self.journal.read(attempt_id)
             work.verify(connection, previous, self.extensions)
             native = native_for(lease, previous)
             saved = self.journal.read_report(attempt_id)
             result = replay_result(saved, lease, digest, native)
             if result is not None and saved["phase"] == "ready":
-                self.deliver_report(attempt_id, report_record(lease, digest, result))
+                await self.deliver_report(attempt_id, report_record(lease, digest, result))
                 return
             backend = self.backend_factory(connection)
-            with renewing(self.client, lease) as check_lease:
+            async with renewing(self.client, lease):
                 if operation in {"submit", "reconcile"}:
-                    result = self._submission(lease, backend, manifest, files, previous)
+                    result = await self._submission(lease, backend, manifest, files, previous)
                 elif not native:
                     raise ValueError("Management operation has no native identity")
                 elif result is None:
                     if operation == "cancel":
                         try:
-                            cancelled = backend.cancel(native, manifest=manifest)
+                            cancelled = await backend.cancel(native, manifest=manifest)
                         except Exception:
                             cancelled = {"outcome": "unknown"}
                         observation = None
                         if cancellation_status(cancelled) in {CancellationStatus.UNKNOWN, CancellationStatus.ALREADY_TERMINAL}:
-                            check_lease()
                             try:
-                                observation = backend.observe(native, manifest=manifest)
+                                observation = await backend.observe(native, manifest=manifest)
                             except Exception:
                                 pass
                         result = cancellation_result(cancelled, native, observation)
                     else:
                         result = {"outcome": "observed", "native_identity": native,
-                            "observation": lease["observation"] if lease.get("collection_only") else backend.observe(native, manifest=manifest)}
-                if native and result.get("outcome") in {"observed", "cancel_requested", "cancel_unknown"} and getattr(backend, "supports_live_logs", False) is True:
-                    try:
-                        result["log_chunks"] = backend.read_logs(native, manifest=manifest, cursors=lease.get("log_cursors", {}))
-                    except Exception:
-                        pass  # Output visibility must never prevent accounting/cancellation.
-                if result.get("outcome") == "observed" and terminal_observation(result.get("observation")):
-                    self.journal.write_report(attempt_id, report_record(lease, digest, result, phase="observed"))
-                    check_lease()
-                    try:
-                        from compute_relay.extensions import worker_after_observation
-                        extension_data = worker_after_observation(self.extensions, backend, native, manifest,
-                            lease.get("extension_context", {}))
-                        if extension_data:
-                            result["extension_data"] = extension_data
-                    except Exception:
-                        result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
-                    check_lease()
-                    try:
-                        if getattr(backend, "supports_file_transfer", False) is True:
-                            from .transfers import collect_outputs
-                            result.update(collect_outputs(self.client, backend, lease, native, manifest))
-                        else:
-                            result.update(self._collect(backend, native, manifest), collection_state="complete")
-                    except Exception:
-                        result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
+                            "observation": lease["observation"] if lease.get("collection_only") else await backend.observe(native, manifest=manifest)}
+                await self._finish_observation(lease, work, native, backend, result)
                 record = report_record(lease, digest, result)
                 self.journal.write_report(attempt_id, record)
-            self.deliver_report(attempt_id, record)
+            await self.deliver_report(attempt_id, record)
 
-    def deliver_report(self, attempt_id, record):
+    async def _finish_observation(self, lease, work, native, backend, result):
+        if native and result.get("outcome") in {"observed", "cancel_requested", "cancel_unknown"} and getattr(backend, "supports_live_logs", False) is True:
+            try:
+                result["log_chunks"] = await backend.read_logs(native, manifest=work.manifest, cursors=lease.get("log_cursors", {}))
+            except Exception:
+                pass
+        if result.get("outcome") != "observed" or not terminal_observation(result.get("observation")):
+            return
+        manifest = work.manifest
+        self.journal.write_report(work.attempt_id, report_record(lease, work.manifest_sha256, result, phase="observed"))
+        try:
+            from compute_relay.extensions import worker_after_observation
+            extension_data = await worker_after_observation(self.extensions, backend, native, manifest, lease.get("extension_context", {}))
+            if extension_data:
+                result["extension_data"] = extension_data
+        except Exception:
+            result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
+        try:
+            if getattr(backend, "supports_file_transfer", False) is True:
+                from .transfers import collect_outputs
+                result.update(await collect_outputs(self.client, backend, lease, native, manifest))
+            else:
+                collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
+                result.update(self._serialized_collection(collected, manifest), collection_state="complete")
+        except Exception:
+            result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
+
+    async def _execute_observations(self, leases):
+        contexts = []
+        async with AsyncExitStack() as scope:
+            for lease in leases:
+                item_lock = AsyncExitStack()
+                scope.push_async_callback(item_lock.aclose)
+                try:
+                    work = PreparedWork.decode(lease)
+                    if work.operation != "observe":
+                        raise ValueError("Only observations can be batched")
+                    public = lease.get("configuration", {})
+                    connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[work.connection_id]
+                    await item_lock.enter_async_context(self.journal.async_locked(work.attempt_id))
+                    previous = self.journal.read(work.attempt_id)
+                    work.verify(connection, previous, self.extensions)
+                    native = native_for(lease, previous)
+                    if not native:
+                        raise ValueError("Missing native identity")
+                    saved = self.journal.read_report(work.attempt_id)
+                    result = replay_result(saved, lease, work.manifest_sha256, native)
+                    if result is not None and saved["phase"] == "ready":
+                        await self.deliver_report(work.attempt_id, report_record(lease, work.manifest_sha256, result))
+                        await item_lock.aclose()
+                        self._release_in_progress(lease)
+                        continue
+                    renewal = AsyncExitStack()
+                    scope.push_async_callback(renewal.aclose)
+                    await renewal.enter_async_context(renewing(self.client, lease))
+                    contexts.append((lease, work, native, connection, result, renewal, item_lock))
+                except (ValueError, KeyError, EnrollmentError):
+                    await item_lock.aclose()
+                    self._release_in_progress(lease)
+                    logging.getLogger(__name__).error("Invalid batch item deferred; other observations remain available")
+            if not contexts:
+                return
+            backend = self.backend_factory(contexts[0][3])
+            pending = [{"native_identity": native, "manifest": work.manifest}
+                for lease, work, native, _, result, _, _ in contexts if result is None and not lease.get("collection_only")]
+            observed = await backend.observe_many(pending) if pending else {}
+            for lease, work, native, _, result, renewal, item_lock in contexts:
+                if result is None:
+                    result = {"outcome": "observed", "native_identity": native,
+                        "observation": lease["observation"] if lease.get("collection_only") else observed[native["attempt_id"]]}
+                await self._finish_observation(lease, work, native, backend, result)
+                record = report_record(lease, work.manifest_sha256, result)
+                self.journal.write_report(work.attempt_id, record)
+                await renewal.aclose()
+                await self.deliver_report(work.attempt_id, record)
+                await item_lock.aclose()
+                self._release_in_progress(lease)
+
+    async def deliver_report(self, attempt_id, record):
         self.journal.write_report(attempt_id, record)
         try:
-            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
+            await self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
         except ControlError as error:
             if error.status != 409:
                 raise
-            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/renew",
+            await self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/renew",
                 {key: record["report"][key] for key in ("lease_id", "generation")})
-            self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
+            await self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/report", record["report"])
         self.journal.clear_report(attempt_id, record)
 
-    def availability(self, lease):
+    async def availability(self, lease):
         public = lease.get("configuration", {})
         connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[lease["connection_id"]]
         try:
-            snapshot = self.backend_factory(connection).availability()
+            snapshot = await self.backend_factory(connection).availability()
         except Exception:
             snapshot = {"partitions": [], "nodes_status": "unknown", "queue_status": "unknown"}
-        self.client.request("POST", f"/internal/v1/connections/{lease['connection_id']}/availability-report", {
+        await self.client.request("POST", f"/internal/v1/connections/{lease['connection_id']}/availability-report", {
             "lease_id": lease["id"], "generation": lease["generation"], "connection_revision_sha256": lease["connection_revision_sha256"],
             "snapshot": snapshot})
 
-    def replay_pending_reports(self):
+    async def replay_pending_reports(self):
         for attempt_id, _ in self.journal.pending_reports():
-            with self.journal.locked(attempt_id):
+            if attempt_id in self._in_progress:
+                continue
+            async with self.journal.async_locked(attempt_id):
                 record = self.journal.read_report(attempt_id)
                 if not record or record.get("phase") != "ready":
                     continue
                 try:
-                    self.deliver_report(attempt_id, record)
+                    await self.deliver_report(attempt_id, record)
                 except ControlError as error:
                     if error.status != 409:
                         raise
 
-    def _submission(self, lease, backend, manifest, files, previous):
+    async def _submission(self, lease, backend, manifest, files, previous):
         attempt_id = str(UUID(lease["attempt_id"]))
         digest = lease["prepared"]["manifest_sha256"]
         action, replayed = submission_plan(lease["operation"], previous)
         if action == "replay":
             return replayed
         if action == "reconcile":
-            result = backend.reconcile(attempt_id, manifest)
+            result = await backend.reconcile(attempt_id, manifest)
         else:
             from .transfers import stage_inputs
-            stage_inputs(self.client, backend, lease, manifest, files)
-            confirmed = self.client.request(
-                "POST", f"/internal/v1/attempts/{attempt_id}/dispatch",
-                {"lease_id": lease["id"], "generation": lease["generation"],
-                 "manifest_sha256": digest,
-                 "connection_revision_sha256": manifest["connection_revision_sha256"]},
-            )
+            await stage_inputs(self.client, backend, lease, manifest, files)
+            confirmed = await self.client.request("POST", f"/internal/v1/attempts/{attempt_id}/dispatch", {
+                "lease_id": lease["id"], "generation": lease["generation"], "manifest_sha256": digest,
+                "connection_revision_sha256": manifest["connection_revision_sha256"]})
             if not confirmed.get("authorized"):
                 raise ControlError("DISPATCH_DENIED")
             self.journal.write(attempt_id, {"manifest_sha256": digest, "outcome": "intent"})
             try:
-                result = backend.submit(attempt_id, manifest, files)
+                result = await backend.submit(attempt_id, manifest, files)
             except Exception:
-                # Neither exception text nor an assumption of non-submission is safe.
                 result = {"outcome": "submission_uncertain"}
         record = submission_record(digest, result)
         self.journal.write(attempt_id, record)
         return record["result"]
 
-    @staticmethod
-    def _collect(backend, native, manifest):
-        permitted = manifest["request"].get("outputs", [])
-        collected = backend.collect(native, outputs=permitted, manifest=manifest)
-        return Worker._serialized_collection(collected, manifest)
 
     @staticmethod
     def _serialized_collection(collected, manifest):
@@ -249,31 +359,35 @@ class Worker:
                 "artifacts": artifacts}
 
 
-def main(*, once=False):
-    """Entry point called by the installation CLI; secrets never appear in argv."""
-    if os.environ.get("BROKER_WORKER_ASYNC") == "1":
-        import asyncio
-        from .async_runner import main as async_main
-        asyncio.run(async_main(once=once))
-        return
+async def serve_workers(workers, *, once=False):
+    """A fixed owner registry; each owner polls independently within shared bounds."""
+    if not workers or len(workers) > 64 or len({id(worker.scheduler) for worker in workers}) != 1:
+        raise ValueError("Configure one through 64 workers sharing one principal scheduler")
+
+    async def serve(worker):
+        async def poll():
+            try:
+                return await worker.poll_once()
+            except Exception:
+                logging.getLogger(__name__).error("Async worker operation failed; preserving uncertain state")
+                return False
+        await poll_parallel(poll, concurrency=worker.parallelism, once=once)
+
+    async with asyncio.TaskGroup() as group:
+        for worker in workers:
+            group.create_task(serve(worker))
+
+
+async def main(*, once=False):
     config = strict_json(Path(os.environ["BROKER_WORKER_CONFIG"]).read_bytes())
-    client = JsonClient(
-        os.environ.get("BROKER_CONTROL_URL", "http://127.0.0.1:8765"),
-        environment_token("BROKER_WORKER_TOKEN"),
-        allow_insecure_http=os.environ.get("BROKER_ALLOW_INSECURE_HTTP") == "1",
-        max_response_bytes=384 * 1024 * 1024,
-    )
-    worker = Worker(client, config.get("connections", {}),
-                    Journal(os.environ.get("BROKER_WORKER_JOURNAL", "/var/lib/compute-relay/worker")),
-                    credential_profiles=config.get("credential_profiles", {}), extensions=config.get("extensions"))
-    while True:
-        try:
-            worked = worker.poll_once()
-        except Exception:
-            logging.getLogger(__name__).error("Worker operation failed; preserving uncertain state")
-            worked = False
-        if once:
-            return
-        # The control service also schedules per-attempt observation backoff.
-        # Never spin a healthy active job into an unbounded scheduler poll loop.
-        time.sleep(1 if worked else 2)
+    owner_id = str(UUID(os.environ.get("BROKER_WORKER_OWNER_ID", config.get("owner_id", ""))))
+    parallelism = remote_parallelism(config.get("max_concurrency"))
+    scheduler = PrincipalScheduler(max_concurrency=parallelism, max_pending=config.get("max_pending", 16), max_per_owner=parallelism)
+    client = AsyncJsonClient(os.environ.get("BROKER_CONTROL_URL", "http://127.0.0.1:8765"), environment_token("BROKER_WORKER_TOKEN"),
+        allow_insecure_http=os.environ.get("BROKER_ALLOW_INSECURE_HTTP") == "1", max_response_bytes=384 * 1024 * 1024)
+    try:
+        worker = Worker(client, config.get("connections", {}), Journal(os.environ.get("BROKER_WORKER_JOURNAL", "/var/lib/compute-relay/worker")),
+            credential_profiles=config.get("credential_profiles", {}), extensions=config.get("extensions"), owner_id=owner_id, scheduler=scheduler, parallelism=parallelism)
+        await serve_workers([worker], once=once)
+    finally:
+        await client.close()

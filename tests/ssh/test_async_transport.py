@@ -9,12 +9,12 @@ import sys
 
 import pytest
 
-from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+from compute_relay.transports.openssh import OpenSSHTransport
 from compute_relay.transports.openssh import TransportError
 
 
 def transport(timeout=10, **ssh):
-    return AsyncOpenSSHTransport({"command_timeout_seconds": timeout, "ssh": {
+    return OpenSSHTransport({"command_timeout_seconds": timeout, "ssh": {
         "host": "not-contacted", "user": "broker", "known_hosts": "/protected/known_hosts", **ssh,
     }})
 

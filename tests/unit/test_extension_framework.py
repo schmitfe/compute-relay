@@ -1,6 +1,7 @@
 """The core gates new extension work independently of final accounting."""
 
 from types import SimpleNamespace
+import asyncio
 
 import pytest
 from django.db import transaction
@@ -97,7 +98,7 @@ def test_after_report_ignores_disabled_extension_without_importing_it(broker, mo
 
 
 def test_worker_never_loads_an_unconfigured_extension():
-    assert extensions.worker_after_observation((), None, {}, {"extension_name": "environments"}, {}) == {}
+    assert asyncio.run(extensions.worker_after_observation((), None, {}, {"extension_name": "environments"}, {})) == {}
 
 
 def test_background_work_requires_server_and_worker_enablement(monkeypatch):
@@ -121,4 +122,4 @@ def test_background_work_cannot_override_core_lease_fields(monkeypatch):
 def test_worker_rejects_disabled_background_extension_before_import(monkeypatch):
     monkeypatch.setattr(extensions, "import_module", lambda _: pytest.fail("disabled extension imported"))
     with pytest.raises(ValueError, match="not enabled"):
-        extensions.execute_extension_work(SimpleNamespace(extensions=()), {"extension": "storage"})
+        asyncio.run(extensions.execute_extension_work(SimpleNamespace(extensions=()), {"extension": "storage"}))

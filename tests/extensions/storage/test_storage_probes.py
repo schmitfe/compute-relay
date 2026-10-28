@@ -1,4 +1,6 @@
 """Opt-in leased statvfs maintenance, without real SSH or remote storage."""
+
+import asyncio
 from test_support.extensions_storage_test_storage_probes import lease, probes, sample
 
 import copy
@@ -44,7 +46,7 @@ class CaptureClient:
     def __init__(self):
         self.calls = []
 
-    def request(self, *args, **kwargs):
+    async def request(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return {"accepted": True}
 
@@ -146,12 +148,14 @@ def test_http_probe_controls_require_owner_session_csrf_and_worker_auth(probes):
     assert accepted.status_code == 200, accepted.content
 
 
-def test_worker_resolves_root_privately_and_fixed_helper_reports_real_tmp_metadata(probes, tmp_path):
+@pytest.mark.django_db(transaction=True)
+def test_worker_resolves_root_privately_and_fixed_helper_reports_real_tmp_metadata(probes, tmp_path, monkeypatch):
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     document = lease(probes)
     requests = []
 
     class Transport:
-        def call_helper(self, source, request):
+        async def call_helper(self, source, request):
             requests.append(request)
             assert source == REMOTE_SOURCE
             assert "identity_file" not in json.dumps(request)
@@ -160,14 +164,14 @@ def test_worker_resolves_root_privately_and_fixed_helper_reports_real_tmp_metada
             return json.loads(result.stdout)
 
     class HttpClient:
-        def request(self, method, path, body):
+        async def request(self, method, path, body):
             response = Client().post(path, json.dumps(body), content_type="application/json", HTTP_AUTHORIZATION="Bearer storage-worker")
             assert response.status_code == 200, response.content
             return response.json()
 
     worker = Worker(HttpClient(), {}, Journal(str(tmp_path / "journal")), credential_profiles={"protected": probes.profile},
-                    extensions=["storage"], backend_factory=lambda configuration: SimpleNamespace(transport=Transport()))
-    worker.execute(document)
+                    extensions=["storage"], backend_factory=lambda configuration: SimpleNamespace(transport=Transport()), owner_id=str(uuid4()))
+    asyncio.run(worker.execute(document))
     assert requests[0]["root"] == str(probes.root)
     probes.target.pool.refresh_from_db()
     data = probes.target.pool.observation
@@ -188,8 +192,8 @@ def test_fake_backend_never_fabricates_capacity_or_calls_any_transport(probes, t
     document["context"]["profile_revision_sha256"] = profile_metadata("protected", profile)["revision_sha256"]
     client = CaptureClient()
     worker = Worker(client, {}, Journal(str(tmp_path / "fake-journal")), credential_profiles={"protected": profile}, extensions=["storage"],
-                    backend_factory=lambda *_args: pytest.fail("fake storage performed an operation"))
-    execute(worker, document)
+                    backend_factory=lambda *_args: pytest.fail("fake storage performed an operation"), owner_id=str(uuid4()))
+    asyncio.run(execute(worker, document))
     observation = client.calls[0][0][2]["observation"]
     assert observation["error_code"] == "SIMULATED_STORAGE_NOT_PROBED"
     assert observation["available_bytes"] is None and observation["available_inodes"] is None
@@ -200,13 +204,13 @@ def test_unknown_root_or_changed_fingerprint_never_reaches_ssh_or_leaks_diagnost
     document["context"]["root_alias"] = "not-advertised"
     client = CaptureClient()
     worker = Worker(client, {}, Journal(str(tmp_path / "invalid-journal")), credential_profiles={"protected": probes.profile}, extensions=["storage"],
-                    backend_factory=lambda *_args: pytest.fail("unapproved storage root reached transport"))
-    execute(worker, document)
+                    backend_factory=lambda *_args: pytest.fail("unapproved storage root reached transport"), owner_id=str(uuid4()))
+    asyncio.run(execute(worker, document))
     assert client.calls[0][0][2]["observation"]["error_code"] == "STORAGE_PROBE_UNAVAILABLE"
     assert "not-readable-by-agent" not in json.dumps(client.calls)
     document["context"]["root"] = "/agent-selected/path"
     with pytest.raises(ValueError):
-        execute(worker, document)
+        asyncio.run(execute(worker, document))
     assert len(client.calls) == 1
 
 

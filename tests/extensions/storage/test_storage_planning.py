@@ -10,7 +10,6 @@ from compute_relay.extensions.storage.planning import (
     StoragePlanningError, assess_health, default_health_policy, plan_storage,
     validate_observation, validate_plan, validate_storage_roots,
 )
-from compute_relay.extensions.storage.probe import probe_filesystem, snapshot_from_statvfs
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
 
@@ -31,13 +30,12 @@ def simple_inventory(snapshot=None):
     project_id, connection_id, target_id, pool_id = [str(uuid4()) for _ in range(4)]
     return {"project_id": project_id,
             "budget": {"bytes_budget": 20000, "inodes_budget": 20000, "retained_bytes_estimate": 100,
-                       "retained_inodes_estimate": 10, "reserved_bytes_estimate": 200, "reserved_inodes_estimate": 20,
+                       "retained_inodes_estimate": 10,
                        "estimate_updated_at": NOW.isoformat()},
             "bindings": [{"connection_id": connection_id, "targets": {"work": target_id, "results": target_id}}],
             "targets": [{"id": target_id, "connection_id": connection_id, "roles": ["work", "results"], "pool_id": pool_id}],
             "pools": [{"id": pool_id, "observation": snapshot or observation(), "health_policy": small_policy(),
-                       "health_state": "normal", "recovery_since": None, "reserved_bytes_estimate": 200,
-                       "reserved_inodes_estimate": 20}]}
+                       "health_state": "normal", "recovery_since": None}]}
 
 
 def request(inventory, *, peak_bytes=1000, peak_inodes=100):
@@ -114,8 +112,8 @@ def test_planning_is_pure_and_does_not_double_subtract_retained_usage():
     before = copy.deepcopy(fixture)
     result = plan_storage(request(fixture), fixture, now=NOW)
     assert result["status"] == "ready"
-    assert result["estimates"]["projected_bytes_estimate"] == 1300
-    assert result["pools"][0]["headroom_bytes_estimate"] == 8000 - 200 - 1000 - 500
+    assert result["estimates"]["projected_bytes_estimate"] == 1100
+    assert result["pools"][0]["headroom_bytes_estimate"] == 8000 - 1000 - 500
     assert result["dry_run"] and result["advisory_only"] and not result["creates_reservations"] and not result["enforced_at_dispatch"]
     assert fixture == before
 
@@ -150,10 +148,9 @@ def test_multiple_roles_share_one_pool_and_sum_growth_conservatively():
 
 def test_aggregate_headroom_cannot_emit_integers_outside_wire_range():
     fixture = simple_inventory()
-    fixture["budget"].update(bytes_budget=None, retained_bytes_estimate=0, reserved_bytes_estimate=0)
-    fixture["pools"][0]["reserved_bytes_estimate"] = 2**53 - 1
+    fixture["budget"].update(bytes_budget=None, retained_bytes_estimate=0)
     with pytest.raises(StoragePlanningError, match="safe integers"):
-        plan_storage(request(fixture, peak_bytes=1000), fixture, now=NOW)
+        plan_storage(request(fixture, peak_bytes=2**53 - 1), fixture, now=NOW)
 
 
 @pytest.mark.parametrize("change", [
@@ -184,30 +181,3 @@ def test_plan_denies_wrong_cluster_target_and_duplicate_role():
 def test_protected_storage_root_metadata_rejects_paths_and_endpoints(path):
     with pytest.raises(StoragePlanningError):
         validate_storage_roots([{"alias": "root", "path": path, "roles": ["work"]}])
-
-
-def test_statvfs_conversion_uses_user_available_blocks_and_marks_unknown_identity():
-    data = snapshot_from_statvfs({"f_frsize": 4096, "f_blocks": 100, "f_bavail": 10, "f_files": 0, "f_favail": 0},
-                                filesystem_id="1:2", observed_at=NOW)
-    assert data["available_bytes"] == 40960
-    assert data["total_inodes"] is None and data["available_inodes"] is None
-    assert data["identity_verified"] is False
-    mismatch = snapshot_from_statvfs({"f_frsize": 4096, "f_blocks": 100, "f_bavail": 10, "f_files": 100, "f_favail": 10},
-        filesystem_id="1:2", expected_filesystem_id="9:9", observed_at=NOW)
-    assert mismatch["status"] == "unavailable"
-    unknown_inodes = snapshot_from_statvfs({"f_frsize": 4096, "f_blocks": 100, "f_bavail": 10,
-        "f_files": 2**64 - 1, "f_favail": 2**64 - 1}, filesystem_id="1:2", observed_at=NOW)
-    assert unknown_inodes["available_inodes"] is None and unknown_inodes["available_bytes"] == 40960
-
-
-def test_unused_probe_reads_only_directory_metadata_and_never_follows_links(tmp_path, monkeypatch):
-    from compute_relay.extensions.storage import probe
-    root = tmp_path / "enrolled"
-    root.mkdir()
-    monkeypatch.setattr(probe.os, "scandir", lambda *_args: pytest.fail("probe scanned directories"))
-    data = probe_filesystem(str(root), observed_at=NOW)
-    assert data["source"] == "statvfs" and data["identity_verified"] is False
-    alias = tmp_path / "alias"
-    alias.symlink_to(root, target_is_directory=True)
-    with pytest.raises(OSError):
-        probe_filesystem(str(alias), observed_at=NOW)

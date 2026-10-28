@@ -10,13 +10,12 @@ import base64
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal
 from uuid import UUID
 from compute_relay.transfer import FileReference, INLINE_BYTES, MAX_FILE_BYTES
 
 
 Operation = Literal["submit", "reconcile", "observe", "cancel"]
-SubmissionOutcome = Literal["submitted", "submission_uncertain", "rejected"]
 
 
 class CancellationStatus(StrEnum):
@@ -24,13 +23,6 @@ class CancellationStatus(StrEnum):
     UNKNOWN = "unknown"
     ALREADY_TERMINAL = "already_terminal"
     IDENTITY_MISMATCH = "identity_mismatch"
-
-
-class WorkerResult(TypedDict):
-    outcome: Literal["submitted", "submission_uncertain", "rejected", "observed", "cancel_requested", "cancel_unknown", "cancel_identity_mismatch"]
-    native_identity: NotRequired[dict]
-    observation: NotRequired[dict]
-    error_code: NotRequired[str]
 
 
 REPORT_OUTCOMES = {

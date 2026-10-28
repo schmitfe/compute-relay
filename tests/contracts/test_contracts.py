@@ -4,43 +4,51 @@ from copy import deepcopy
 import sys
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from jsonschema import ValidationError
 from referencing.exceptions import NoSuchResource
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from check_contracts import (  # noqa: E402
-    CONTRACTS,
-    EXAMPLES,
-    load_json,
-    main,
-    no_remote_retrieval,
-    validate_document,
-)
+from check_contracts import CONTRACTS, EXAMPLES, main  # noqa: E402
+from compute_relay.domain.validation import _deny_remote, strict_json, validate
 
 
 class PlanningContractTests(unittest.TestCase):
     def setUp(self):
-        self.request = load_json(CONTRACTS / "examples" / "gpu-job.json")
-        self.prepared = load_json(CONTRACTS / "examples" / "prepared-gpu-job.json")
+        self.request = strict_json((CONTRACTS / "examples" / "gpu-job.json").read_bytes())
+        self.prepared = strict_json((CONTRACTS / "examples" / "prepared-gpu-job.json").read_bytes())
 
     def reject_request(self, data):
         with self.assertRaises((ValueError, ValidationError)):
-            validate_document("job-request.schema.json", data)
+            validate("job-request.schema.json", data)
 
     def reject_prepared(self, data):
         with self.assertRaises((ValueError, ValidationError)):
-            validate_document("prepared-job.schema.json", data)
+            validate("prepared-job.schema.json", data)
 
     def test_all_documented_examples_validate(self):
         for filename, schema in EXAMPLES.items():
             with self.subTest(filename=filename):
-                validate_document(schema, load_json(CONTRACTS / "examples" / filename))
+                validate(schema, strict_json((CONTRACTS / "examples" / filename).read_bytes()))
 
     def test_example_inventory_is_complete(self):
         main()
+
+    def test_large_input_descriptors_use_the_runtime_limit_in_prepared_packages(self):
+        data = deepcopy(self.prepared)
+        source = data["request"]["files"][0]
+        source["size_bytes"] = 300 * 1024**2
+        next(entry for entry in data["files"] if entry["path"] == source["path"])["size_bytes"] = source["size_bytes"]
+        validate("job-request.schema.json", data["request"])
+        validate("prepared-job.schema.json", data)
+
+    def test_aggregate_input_limit_remains_bounded(self):
+        data = deepcopy(self.request)
+        source = data["files"][0]
+        data["files"] = [{**source, "path": f"input{index}.py", "size_bytes": 8 * 1024**3} for index in range(9)]
+        data["command"]["script"] = data["files"][0]["path"]
+        self.reject_request(data)
 
     def test_credential_and_authority_fields_are_not_job_inputs(self):
         for field in ("ssh_private_key", "host", "ssh_options", "approved", "budget_override", "sbatch_args"):
@@ -144,24 +152,24 @@ class PlanningContractTests(unittest.TestCase):
         data["maximum_allocation"]["cpu_cores"] = 16
         self.reject_prepared(data)
         data["reservation"]["cpu_core_seconds"] = 16 * data["maximum_allocation"]["time_limit_seconds"]
-        validate_document("prepared-job.schema.json", data)
+        validate("prepared-job.schema.json", data)
 
     def test_new_packages_reserve_requested_walltime_without_added_duration(self):
         data = deepcopy(self.prepared)
         data["reservation"]["cpu_core_seconds"] = 8 * data["maximum_allocation"]["time_limit_seconds"]
         data["reservation"]["gpu_device_seconds"] = data["maximum_allocation"]["time_limit_seconds"]
-        validate_document("prepared-job.schema.json", data)
+        validate("prepared-job.schema.json", data)
         data["reservation"]["cpu_core_seconds"] += 8 * 60
         data["reservation"]["gpu_device_seconds"] += 60
         self.reject_prepared(data)
 
     def test_policy_rejects_a_separate_charge_duration(self):
-        data = load_json(CONTRACTS / "examples" / "project-policy.json")
+        data = strict_json((CONTRACTS / "examples" / "project-policy.json").read_bytes())
         self.assertNotIn("maximum_charge_duration_seconds", data["per_job_limits"])
-        validate_document("project-policy.schema.json", data)
+        validate("project-policy.schema.json", data)
         data["per_job_limits"]["maximum_charge_duration_seconds"] = 60
         with self.assertRaises(ValidationError):
-            validate_document("project-policy.schema.json", data)
+            validate("project-policy.schema.json", data)
 
     def test_connection_revision_is_required(self):
         data = deepcopy(self.prepared)
@@ -169,20 +177,17 @@ class PlanningContractTests(unittest.TestCase):
         self.reject_prepared(data)
 
     def test_wire_counters_remain_exact_in_browser_json(self):
-        data = load_json(CONTRACTS / "examples" / "project-policy.json")
+        data = strict_json((CONTRACTS / "examples" / "project-policy.json").read_bytes())
         data["allowance"]["cpu_core_seconds"] = 2**53 - 1
-        validate_document("project-policy.schema.json", data)
+        validate("project-policy.schema.json", data)
         data["allowance"]["cpu_core_seconds"] = 2**53
         with self.assertRaises(ValidationError):
-            validate_document("project-policy.schema.json", data)
+            validate("project-policy.schema.json", data)
 
     def test_loader_rejects_duplicate_keys_and_nonfinite_numbers(self):
         for contents in ('{"approved": false, "approved": true}', '{"n": NaN}', '{"n": Infinity}'):
-            with self.subTest(contents=contents), TemporaryDirectory() as directory:
-                path = Path(directory) / "invalid.json"
-                path.write_text(contents, encoding="utf-8")
-                with self.assertRaises(ValueError):
-                    load_json(path)
+            with self.subTest(contents=contents), self.assertRaises(ValueError):
+                strict_json(contents)
 
     def test_unpaired_unicode_surrogate_is_rejected(self):
         data = deepcopy(self.request)
@@ -190,14 +195,14 @@ class PlanningContractTests(unittest.TestCase):
         self.reject_request(data)
 
     def test_policy_rejects_malformed_expiry(self):
-        data = load_json(CONTRACTS / "examples" / "project-policy.json")
+        data = strict_json((CONTRACTS / "examples" / "project-policy.json").read_bytes())
         data["admission_expires_at"] = "sometime"
         with self.assertRaises(ValidationError):
-            validate_document("project-policy.schema.json", data)
+            validate("project-policy.schema.json", data)
 
     def test_remote_schema_resolution_is_disabled(self):
         with self.assertRaises(NoSuchResource):
-            no_remote_retrieval("https://example.invalid/untrusted.schema.json")
+            _deny_remote("https://example.invalid/untrusted.schema.json")
 
 
 if __name__ == "__main__":

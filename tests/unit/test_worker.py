@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+from unittest.mock import AsyncMock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
@@ -20,7 +21,7 @@ class FakeControl:
         self.calls = []
         self.fail_report = False
 
-    def request(self, method, path, body=None, **kwargs):
+    async def request(self, method, path, body=None, **kwargs):
         self.calls.append((method, path, body))
         if path.endswith("/dispatch"):
             return {"authorized": True}
@@ -36,25 +37,25 @@ class BackendSpy:
         self.reconciled = 0
         self.failure = False
 
-    def submit(self, attempt_id, manifest, files):
+    async def submit(self, attempt_id, manifest, files):
         self.submitted += 1
         if self.failure:
             raise TimeoutError("sensitive remote diagnostics must not reach a report")
         return {"outcome": "submitted", "native_identity": {"job_id": "17", "attempt_id": attempt_id}}
 
-    def reconcile(self, attempt_id, manifest):
+    async def reconcile(self, attempt_id, manifest):
         self.reconciled += 1
         return {"outcome": "submission_uncertain"}
 
-    def observe(self, native, *, manifest):
+    async def observe(self, native, *, manifest):
         return {"state": "completed", "terminal": True,
                 "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}}
 
-    def collect(self, native, outputs, *, manifest):
+    async def collect(self, native, outputs, *, manifest):
         return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}
 
 
-class WorkerTests(unittest.TestCase):
+class WorkerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from compute_relay.backends import prepare
 
@@ -66,7 +67,7 @@ class WorkerTests(unittest.TestCase):
         self.connection = {"backend": "fake", "revision_sha256": "c" * 64}
         self.journal = Journal(Path(self.temp.name) / "journal")
         self.worker = Worker(self.control, {self.connection_id: self.connection}, self.journal,
-                             backend_factory=lambda _: self.backend)
+                             backend_factory=lambda _: self.backend, owner_id=str(uuid4()))
         self.source = b"raise RuntimeError('must never execute on the worker')\n"
         request = {
             "schema_version": "1.0", "project_id": str(uuid4()), "connection_id": self.connection_id,
@@ -86,75 +87,75 @@ class WorkerTests(unittest.TestCase):
                       "prepared": {"manifest": package["manifest"], "manifest_sha256": package["manifest_sha256"],
                                    "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}}
 
-    def test_report_failure_replays_saved_receipt_without_submission(self):
+    async def test_report_failure_replays_saved_receipt_without_submission(self):
         self.control.fail_report = True
         with self.assertRaises(ControlError):
-            self.worker.execute(self.lease)
-        self.worker.execute(self.lease)
+            await self.worker.execute(self.lease)
+        await self.worker.execute(self.lease)
         self.assertEqual(self.backend.submitted, 1)
         self.assertEqual(self.backend.reconciled, 0)
         self.assertEqual(sum(path.endswith("/dispatch") for _, path, _ in self.control.calls), 1)
         self.assertEqual(self.journal.read(self.lease["attempt_id"])["outcome"], "submitted")
 
-    def test_ambiguous_external_call_is_reconciled_never_retried(self):
+    async def test_ambiguous_external_call_is_reconciled_never_retried(self):
         self.backend.failure = True
-        self.worker.execute(self.lease)
-        self.worker.execute(self.lease)
+        await self.worker.execute(self.lease)
+        await self.worker.execute(self.lease)
         self.assertEqual((self.backend.submitted, self.backend.reconciled), (1, 1))
         reports = [body for _, path, body in self.control.calls if path.endswith("/report")]
         self.assertEqual([item["outcome"] for item in reports], ["submission_uncertain"] * 2)
         self.assertNotIn("sensitive", json.dumps(reports))
 
-    def test_persisted_intent_after_crash_requires_reconciliation(self):
+    async def test_persisted_intent_after_crash_requires_reconciliation(self):
         self.journal.write(self.lease["attempt_id"],
                            {"manifest_sha256": self.lease["prepared"]["manifest_sha256"], "outcome": "intent"})
-        self.worker.execute(self.lease)
+        await self.worker.execute(self.lease)
         self.assertEqual((self.backend.submitted, self.backend.reconciled), (0, 1))
         self.assertFalse(any(path.endswith("/dispatch") for _, path, _ in self.control.calls))
 
-    def test_tampered_payload_never_dispatches(self):
+    async def test_tampered_payload_never_dispatches(self):
         self.lease["prepared"]["files"]["main.py"] = base64.b64encode(b"changed").decode()
         with self.assertRaises(ValueError):
-            self.worker.execute(self.lease)
+            await self.worker.execute(self.lease)
         self.assertEqual(self.control.calls, [])
         self.assertEqual(self.backend.submitted, 0)
 
-    def test_changed_connection_revision_never_dispatches(self):
+    async def test_changed_connection_revision_never_dispatches(self):
         self.connection["revision_sha256"] = "d" * 64
         with self.assertRaises(ValueError):
-            self.worker.execute(self.lease)
+            await self.worker.execute(self.lease)
         self.assertEqual(self.control.calls, [])
 
-    def test_terminal_report_includes_bounded_outputs_and_accounting(self):
-        self.worker.execute(self.lease)
+    async def test_terminal_report_includes_bounded_outputs_and_accounting(self):
+        await self.worker.execute(self.lease)
         self.lease["operation"] = "observe"
         self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
-        self.worker.execute(self.lease)
+        await self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "observed")
         self.assertTrue(report["observation"]["accounting"]["final"])
         self.assertEqual(report["stdout"], "synthetic result")
 
-    def test_unauthorized_artifact_is_not_reported(self):
+    async def test_unauthorized_artifact_is_not_reported(self):
         self.lease["operation"] = "observe"
         self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
-        self.backend.collect = lambda *args, **kwargs: {"artifacts": {"secrets": b"no"}}
-        self.worker.execute(self.lease)
+        self.backend.collect = AsyncMock(return_value={"artifacts": {"secrets": b"no"}})
+        await self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
         self.assertTrue(report["observation"]["accounting"]["final"])
         self.assertEqual(report["artifacts"], {})
         self.assertEqual(report["error_code"], "OUTPUT_COLLECTION_FAILED")
         self.assertNotIn("secrets", str(report))
 
-    def test_unavailable_outputs_do_not_suppress_final_accounting(self):
+    async def test_unavailable_outputs_do_not_suppress_final_accounting(self):
         self.lease["operation"] = "observe"
         self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
 
-        def failed_collection(*args, **kwargs):
+        async def failed_collection(*args, **kwargs):
             raise OSError("sensitive path or remote diagnostic")
 
         self.backend.collect = failed_collection
-        self.worker.execute(self.lease)
+        await self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "observed")
         self.assertEqual(report["observation"]["accounting"]["cpu_core_seconds"], 2)
@@ -202,7 +203,7 @@ class ClientTests(unittest.TestCase):
             thread.join()
 
 
-class EnrollmentTests(unittest.TestCase):
+class EnrollmentTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -227,13 +228,13 @@ class EnrollmentTests(unittest.TestCase):
             return SimpleDiscoveryBackend()
 
         self.worker = Worker(self.control, {}, Journal(Path(self.temp.name) / "journal"),
-                             backend_factory=backend_factory, credential_profiles=self.profiles)
+                             backend_factory=backend_factory, credential_profiles=self.profiles, owner_id=str(uuid4()))
 
     def discovery_lease(self, configuration=None):
         return {"id": str(uuid4()), "operation": "discover", "connection_id": str(uuid4()),
                 "generation": 1, "configuration": configuration or self.public}
 
-    def test_protected_credentials_merge_locally_and_public_revision_is_stable(self):
+    async def test_protected_credentials_merge_locally_and_public_revision_is_stable(self):
         private, public, digest = resolve_connection(self.public, self.profiles)
         self.assertEqual(private["ssh"]["identity_file"], "/protected/id_ed25519")
         self.assertEqual(private["ssh"]["host"], "login.example.invalid")
@@ -244,7 +245,7 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual((same, same_digest, again), (public, digest, private))
         self.assertEqual(private["revision_sha256"], digest)
 
-    def test_browser_cannot_supply_credential_paths_commands_or_broaden_target(self):
+    async def test_browser_cannot_supply_credential_paths_commands_or_broaden_target(self):
         variants = []
         for key, value in (("host", "attacker.invalid"), ("user", "root"), ("port", 2222)):
             changed = copy.deepcopy(self.public)
@@ -263,20 +264,20 @@ class EnrollmentTests(unittest.TestCase):
         for configuration in variants:
             with self.subTest(configuration=configuration):
                 lease = self.discovery_lease(configuration)
-                self.worker.execute(lease)
+                await self.worker.execute(lease)
                 report = self.control.calls[-1][2]
                 self.assertEqual(report["outcome"], "discovery_failed")
                 self.assertNotIn("configuration", report)
         self.assertEqual(self.backend_calls, [])
 
-    def test_changed_protected_profile_invalidates_previous_public_binding(self):
+    async def test_changed_protected_profile_invalidates_previous_public_binding(self):
         _, old, _ = resolve_connection(self.public, self.profiles)
         self.profile["ssh"]["identity_file"] = "/protected/rotated-key"
         with self.assertRaises(EnrollmentError) as error:
             resolve_connection(old, self.profiles)
         self.assertEqual(error.exception.code, "CREDENTIAL_PROFILE_CHANGED")
 
-    def test_site_automation_review_flag_round_trips_as_protected_boolean_metadata(self):
+    async def test_site_automation_review_flag_round_trips_as_protected_boolean_metadata(self):
         digests = []
         for allowed in (False, True):
             with self.subTest(automatic_execution_allowed=allowed):
@@ -287,12 +288,12 @@ class EnrollmentTests(unittest.TestCase):
                 self.assertIs(private["site_profile"]["automatic_execution_allowed"], allowed)
                 self.assertIs(public["site_profile"]["automatic_execution_allowed"], allowed)
                 self.assertEqual(resolve_connection(public, self.profiles)[2], digest)
-                self.worker.publish_profiles()
+                await self.worker.publish_profiles()
                 self.assertIs(self.control.calls[-1][2]["profiles"][0]["site_profile"]["automatic_execution_allowed"], allowed)
                 digests.append(digest)
         self.assertNotEqual(*digests)
 
-    def test_browser_cannot_enable_automation_disabled_by_protected_site_profile(self):
+    async def test_browser_cannot_enable_automation_disabled_by_protected_site_profile(self):
         self.profile["site_profile"]["automatic_execution_allowed"] = False
         _, public, _ = resolve_connection(self.public, self.profiles)
         public["site_profile"]["automatic_execution_allowed"] = True
@@ -300,7 +301,7 @@ class EnrollmentTests(unittest.TestCase):
             resolve_connection(public, self.profiles)
         self.assertEqual(denied.exception.code, "CREDENTIAL_PROFILE_CHANGED")
 
-    def test_site_automation_flag_rejects_truthy_numbers_strings_and_other_nonbooleans(self):
+    async def test_site_automation_flag_rejects_truthy_numbers_strings_and_other_nonbooleans(self):
         for invalid in (0, 1, "false", "true", None, [], {}):
             with self.subTest(invalid=invalid):
                 self.profile["site_profile"]["automatic_execution_allowed"] = invalid
@@ -308,7 +309,7 @@ class EnrollmentTests(unittest.TestCase):
                     profile_metadata("university", self.profile)
                 self.assertEqual(rejected.exception.code, "INVALID_CREDENTIAL_PROFILE")
 
-    def test_unknown_site_fields_are_rejected_before_profile_publication_or_discovery(self):
+    async def test_unknown_site_fields_are_rejected_before_profile_publication_or_discovery(self):
         for field in ("termination_margin_seconds", "overtime_margin_seconds", "cleanup_margin_seconds"):
             with self.subTest(field=field):
                 profile = copy.deepcopy(self.profile)
@@ -321,12 +322,12 @@ class EnrollmentTests(unittest.TestCase):
                     with self.assertRaises(EnrollmentError):
                         resolve_connection(configuration, self.profiles, refresh=refresh)
 
-    def test_authorized_discovery_can_renew_derived_binding_but_jobs_remain_strict(self):
+    async def test_authorized_discovery_can_renew_derived_binding_but_jobs_remain_strict(self):
         _, old, old_digest = resolve_connection(self.public, self.profiles)
         self.profile["site_profile"]["allocated_cpus"] = 4
         with self.assertRaises(EnrollmentError):
             resolve_connection(old, self.profiles)
-        self.worker.execute(self.discovery_lease(old))
+        await self.worker.execute(self.discovery_lease(old))
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "discovered")
         self.assertNotEqual(report["connection_revision_sha256"], old_digest)
@@ -335,17 +336,17 @@ class EnrollmentTests(unittest.TestCase):
             self.assertEqual(report["configuration"][key], old[key])
         # Renewal never bypasses a withdrawn host/user/root permission.
         self.profile["allowed_hosts"] = ["replacement.example.invalid"]
-        self.worker.execute(self.discovery_lease(old))
+        await self.worker.execute(self.discovery_lease(old))
         self.assertEqual(self.control.calls[-1][2]["error_code"], "TARGET_NOT_ALLOWED")
 
-    def test_browser_cannot_replace_trusted_allocation_floor(self):
+    async def test_browser_cannot_replace_trusted_allocation_floor(self):
         _, public, _ = resolve_connection(self.public, self.profiles)
         public["site_profile"]["allocated_cpus"] = 1
         with self.assertRaises(EnrollmentError):
             resolve_connection(public, self.profiles)
 
-    def test_discovery_report_and_capability_publication_contain_no_credentials(self):
-        self.worker.publish_profiles()
+    async def test_discovery_report_and_capability_publication_contain_no_credentials(self):
+        await self.worker.publish_profiles()
         published = self.control.calls[-1]
         self.assertEqual(published[1], "/internal/v1/worker/profiles")
         metadata = published[2]["profiles"][0]
@@ -353,7 +354,7 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual(metadata["allowed_hosts"], ["login.example.invalid"])
         self.assertNotIn("/protected", json.dumps(metadata))
         self.assertNotIn("environment_discovery", metadata)
-        self.worker.execute(self.discovery_lease())
+        await self.worker.execute(self.discovery_lease())
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "discovered")
         self.assertEqual(report["discovery_snapshot"]["partitions"], ["debug"])
@@ -361,9 +362,9 @@ class EnrollmentTests(unittest.TestCase):
         self.assertNotIn("slurm_paths", json.dumps(report))
         self.assertEqual(len(self.backend_calls), 1)
 
-    def test_unknown_profile_and_discovery_error_return_bounded_codes(self):
+    async def test_unknown_profile_and_discovery_error_return_bounded_codes(self):
         self.public["credential_profile"] = "missing"
-        self.worker.execute(self.discovery_lease())
+        await self.worker.execute(self.discovery_lease())
         self.assertEqual(self.control.calls[-1][2]["error_code"], "CREDENTIAL_PROFILE_UNKNOWN")
         self.assertEqual(self.backend_calls, [])
         self.public["credential_profile"] = "university"
@@ -372,17 +373,17 @@ class EnrollmentTests(unittest.TestCase):
             raise OSError("sensitive login command or credential path")
 
         self.worker.backend_factory = failure
-        self.worker.execute(self.discovery_lease())
+        await self.worker.execute(self.discovery_lease())
         report = self.control.calls[-1][2]
         self.assertEqual(report["error_code"], "DISCOVERY_UNAVAILABLE")
         self.assertNotIn("sensitive", json.dumps(report))
 
-    def test_bad_profile_does_not_block_other_connections(self):
+    async def test_bad_profile_does_not_block_other_connections(self):
         self.profiles["misconfigured"] = {"backend": "slurm", "allowed_hosts": []}
-        self.worker.publish_profiles()
+        await self.worker.publish_profiles()
         self.assertEqual([item["alias"] for item in self.control.calls[-1][2]["profiles"]], ["university"])
 
-    def test_new_worker_reconstructs_dynamic_job_from_public_lease(self):
+    async def test_new_worker_reconstructs_dynamic_job_from_public_lease(self):
         from compute_relay.backends import prepare
 
         private, public, digest = resolve_connection(self.public, self.profiles)
@@ -403,8 +404,8 @@ class EnrollmentTests(unittest.TestCase):
         # This worker has no cached/static connection UUID and has not discovered
         # anything in this process. The protected alias supplies credentials.
         worker = Worker(self.control, {}, self.worker.journal, backend_factory=lambda _: backend,
-                        credential_profiles=self.profiles)
-        worker.execute({"id": str(uuid4()), "operation": "submit", "attempt_id": str(uuid4()),
+                        credential_profiles=self.profiles, owner_id=str(uuid4()))
+        await worker.execute({"id": str(uuid4()), "operation": "submit", "attempt_id": str(uuid4()),
                         "generation": 1, "connection_id": connection_id, "configuration": public,
                         "prepared": {"manifest": package["manifest"], "manifest_sha256": package["manifest_sha256"],
                                      "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}})
@@ -412,7 +413,7 @@ class EnrollmentTests(unittest.TestCase):
 
 
 class SimpleDiscoveryBackend:
-    def discover(self):
+    async def discover(self):
         return {"partitions": ["debug"], "simulation": True}
 
 

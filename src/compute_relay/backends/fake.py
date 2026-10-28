@@ -42,7 +42,7 @@ class FakeBackend:
         finally:
             os.close(fd)
 
-    def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes]) -> dict:
+    async def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes]) -> dict:
         digest = sha256(canonical_json_bytes(manifest))
         verify_package(manifest, digest, files)
         if manifest["connection_revision_sha256"] != connection_revision_sha256(self.connection):
@@ -60,7 +60,7 @@ class FakeBackend:
             self._save(attempt_id, record)
             return {"outcome": "submitted", "native_identity": identity, "simulation": True}
 
-    def reconcile(self, attempt_id: str, manifest: dict) -> dict:
+    async def reconcile(self, attempt_id: str, manifest: dict) -> dict:
         self._verify_management(manifest)
         record = self._load(attempt_id)
         if not record:
@@ -84,7 +84,7 @@ class FakeBackend:
             raise BackendError("Unknown simulated native identity")
         return record
 
-    def observe(self, native_identity: dict, *, manifest: dict) -> dict:
+    async def observe(self, native_identity: dict, *, manifest: dict) -> dict:
         record = self._owned(native_identity, manifest)
         state = "cancelled" if record["cancelled"] else self.connection.get("fake_outcome", "completed")
         if state not in ("completed", "failed", "cancelled"):
@@ -100,13 +100,13 @@ class FakeBackend:
                 "accounting": {"final": terminal, "cpu_core_seconds": resource["cpu_cores"] * seconds,
                                "gpu_device_seconds": resource["gpu_devices"] * seconds}}
 
-    def cancel(self, native_identity: dict, *, manifest: dict) -> dict:
+    async def cancel(self, native_identity: dict, *, manifest: dict) -> dict:
         record = self._owned(native_identity, manifest)
         record["cancelled"] = True
         self._save(native_identity["attempt_id"], record)
         return {"outcome": "cancel_requested", "simulation": True}
 
-    def collect(self, native_identity: dict, outputs: Sequence[str] = (), *, manifest: dict) -> dict:
+    async def collect(self, native_identity: dict, outputs: Sequence[str] = (), *, manifest: dict) -> dict:
         record = self._owned(native_identity, manifest)
         if set(outputs) - set(record["manifest"]["request"]["outputs"]):
             raise BackendError("Undeclared simulated output")
@@ -114,7 +114,7 @@ class FakeBackend:
         return {"stdout": "Simulated Slurm job; uploaded code was not executed.\n", "stderr": "",
                 "artifacts": {path: metrics for path in outputs}, "simulation": True}
 
-    def discover(self) -> dict:
+    async def discover(self) -> dict:
         return {"simulation": True, "partitions": ["debug"], "authorization": "simulated only",
                 "software": {"status": "simulated", "scope": "login_node", "verified_on_compute": False,
                     "modules": {"status": "simulated", "available": [], "truncated": False},

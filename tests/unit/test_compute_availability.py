@@ -16,13 +16,11 @@ import pytest
 from compute_relay.backends.availability import parse_availability
 from compute_relay.control import availability
 from compute_relay.backends import SlurmBackend
-from compute_relay.backends.async_slurm import AsyncSlurmBackend
 from compute_relay.worker.runner import Worker
-from compute_relay.worker.async_runner import AsyncWorker
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.client import JsonClient
 from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job
-from test_support.unit_test_remote_bundles import LocalFixedTransport, AsyncLocalFixedTransport
+from test_support.unit_test_remote_bundles import LocalFixedTransport
 
 
 RAW = {"nodes": {"returncode": 0, "stdout": (
@@ -178,8 +176,7 @@ def test_connector_leaves_job_processing_time_between_cluster_refreshes(broker):
     assert availability.lease_availability(c.worker)["lease"]["connection_id"] != first["connection_id"]
 
 
-@pytest.mark.parametrize("asynchronous", [False, True])
-def test_fixed_scheduler_helper_and_worker_report_both_execution_modes(tmp_path, asynchronous):
+def test_fixed_scheduler_helper_and_worker_report_async_execution(tmp_path):
     program = tmp_path / "scheduler"
     calls = tmp_path / "calls.jsonl"
     program.write_text(f'''#!{sys.executable}
@@ -201,21 +198,13 @@ sys.stdout.write(raw[name]['stdout'])
     lease = {"operation": "availability", "id": str(uuid4()), "connection_id": identifier,
         "generation": 7, "configuration": {}, "connection_revision_sha256": connection["revision_sha256"]}
     reports = []
-    if asynchronous:
-        class Control:
-            async def request(self, method, path, body):
-                reports.append((path, body))
-        backend = AsyncSlurmBackend(connection, AsyncLocalFixedTransport())
-        worker = AsyncWorker(Control(), {identifier: connection}, Journal(tmp_path / "journal"), owner_id=str(uuid4()),
-            backend_factory=lambda _: backend, extensions=[])
-        asyncio.run(worker.execute(lease))
-    else:
-        class Control:
-            def request(self, method, path, body):
-                reports.append((path, body))
-        backend = SlurmBackend(connection, LocalFixedTransport())
-        worker = Worker(Control(), {identifier: connection}, Journal(tmp_path / "journal"), backend_factory=lambda _: backend, extensions=[])
-        worker.execute(lease)
+    class Control:
+        async def request(self, method, path, body):
+            reports.append((path, body))
+    backend = SlurmBackend(connection, LocalFixedTransport())
+    worker = Worker(Control(), {identifier: connection}, Journal(tmp_path / "journal"), owner_id=str(uuid4()),
+        backend_factory=lambda _: backend, extensions=[])
+    asyncio.run(worker.execute(lease))
     assert len(reports) == 1 and reports[0][0].endswith("/availability-report")
     report = reports[0][1]
     assert report["generation"] == 7 and report["lease_id"] == lease["id"]

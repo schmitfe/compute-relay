@@ -112,7 +112,7 @@ creates only its requested final directory. Manual usage values are labeled
 Both routes require a valid project bearer key with `jobs:read`:
 
 - `GET /api/v1/projects/<project-id>/storage` returns allowed target IDs, roles,
-  capabilities, selected locations, shared budgets, pending advisory estimates,
+  capabilities, selected locations, shared budgets, retained usage estimates,
   and cached pool/quota observations. Agent responses omit absolute roots.
 - `POST /api/v1/projects/<project-id>/storage/plan` accepts up to five distinct
   role estimates. It is read-only, needs no idempotency key, and creates no jobs,
@@ -146,7 +146,7 @@ Responses identify `advisory_only: true`, `dry_run: true`,
 `creates_reservations: false`, and `enforced_at_dispatch: false`. `ready`,
 `warning`, `blocked` and `unknown` describe a planning assessment, not permission
 to execute or a guarantee of free disk space. Project budgets use retained plus
-held plus proposed peak estimates. Pool headroom subtracts other pending growth
+proposed peak estimates. Pool headroom subtracts proposed peak growth
 and operational reserve from current free space; already-retained bytes are not
 subtracted a second time. Available native quota is considered separately.
 
@@ -230,12 +230,15 @@ above 7% / 700 GiB and the configured inode recovery threshold. These are
 operator-tunable starting values, not universal storage guarantees. No job
 dispatch gate is connected in this implementation.
 
-`reserve_estimate` / `release_estimate` provide an internal, idempotent advisory
-ledger. No agent endpoint creates these records. A caller must prove its actual
-write path is derived from the selected target first; environment builds must
-not charge an unrelated selected location. Shared remote Unix UIDs and external
-writes remain outside the broker's isolation/enforcement. See the
-[roadmap](roadmap.md) for storage integration work.
+Storage plans do not maintain a reservation ledger. Shared remote Unix UIDs,
+other projects' pending growth and external writes remain outside these
+estimates. Any future reservation integration must bind the actual write path
+to its selected target; environment builds must not charge an unrelated
+location. See the [roadmap](roadmap.md) for storage integration work.
+
+The storage upgrade removes the unused advisory reservation table. It preserves
+targets, bindings, capacity observations, manual usage estimates, compute
+accounting and the broker's artifact/upload quotas.
 
 ## Current limits
 

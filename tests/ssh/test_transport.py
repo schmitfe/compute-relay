@@ -1,5 +1,6 @@
 """The local process/one-shot protocol boundary, without real keys or a cluster."""
 
+import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -22,19 +23,19 @@ def test_local_process_streams_large_input_without_shell_execution():
     # First-party harness reads bytes as data; it never evaluates the payload.
     payload = b"print('must not execute')\n" * 50000
     program = "import sys,json; data=sys.stdin.buffer.read(); print(json.dumps({'bytes':len(data)}))"
-    output = transport()._run([sys.executable, "-I", "-c", program], payload)
+    output = asyncio.run(transport()._run([sys.executable, "-I", "-c", program], payload))
     assert json.loads(output) == {"bytes": len(payload)}
 
 
 def test_excess_diagnostics_are_killed_and_not_exposed():
     with pytest.raises(TransportError, match="diagnostic limit") as error:
-        transport()._run([sys.executable, "-I", "-c", "import sys; sys.stderr.write('secret' * 30000)"], b"")
+        asyncio.run(transport()._run([sys.executable, "-I", "-c", "import sys; sys.stderr.write('secret' * 30000)"], b""))
     assert "secret" not in str(error.value)
 
 
 def test_remote_timeout_is_explicit_and_reaps_process():
     with pytest.raises(TransportError, match="timed out"):
-        transport(timeout=1)._run([sys.executable, "-I", "-c", "import time; time.sleep(10)"], b"")
+        asyncio.run(transport(timeout=1)._run([sys.executable, "-I", "-c", "import time; time.sleep(10)"], b""))
 
 
 def test_one_shot_helper_has_a_durable_cross_process_submission_journal(tmp_path):
@@ -61,7 +62,7 @@ def test_one_shot_helper_has_a_durable_cross_process_submission_journal(tmp_path
                  "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}
 
     def call(_):
-        return json.loads(transport()._run([sys.executable, "-I", "-c", helper_source()], json.dumps(operation).encode()))
+        return json.loads(asyncio.run(transport()._run([sys.executable, "-I", "-c", helper_source()], json.dumps(operation).encode())))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(call, range(2)))

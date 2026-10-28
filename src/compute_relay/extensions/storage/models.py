@@ -90,18 +90,6 @@ class ProjectStorageBinding(models.Model):
         constraints = [models.UniqueConstraint(fields=["project", "connection"], name="project_storage_connection_once")]
 
 
-class StorageEstimateReservation(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    project = models.ForeignKey("broker.Project", on_delete=models.PROTECT)
-    target = models.ForeignKey(StorageTarget, on_delete=models.PROTECT)
-    reference = models.UUIDField(unique=True)
-    bytes_estimate = models.BigIntegerField()
-    inodes_estimate = models.BigIntegerField()
-    state = models.CharField(max_length=20, default="held")
-    created_at = models.DateTimeField(default=timezone.now)
-    released_at = models.DateTimeField(null=True)
-
-
 class StorageObservationLease(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     pool = models.ForeignKey(StorageCapacityPool, on_delete=models.PROTECT)

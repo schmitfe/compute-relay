@@ -129,9 +129,6 @@ def test_foreign_project_targets_are_rejected_even_for_same_cluster_owner(resour
     inventory = services.inventory(project)
     assert inventory["targets"] == [] and inventory["bindings"][0]["targets"]["data"] is None
     assert list(services.selected_targets(project, resources.connection)) == []
-    with pytest.raises(BrokerError) as denied:
-        services.reserve_estimate(project, target, uuid4(), 1, 1)
-    assert denied.value.code == "STORAGE_TARGET_DENIED"
 
 
 def test_data_role_supports_input_dataset_planning_without_filesystem_actions(resources):

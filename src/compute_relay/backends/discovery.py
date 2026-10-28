@@ -49,8 +49,8 @@ def parse_discovery(response: dict, connection: dict) -> dict:
     }
 
 
-def discover(connection: dict, transport=None) -> dict:
+async def discover(connection: dict, transport=None) -> dict:
     """Convenience entry point for an operator CLI; performs no submissions."""
     from .slurm import SlurmBackend
 
-    return SlurmBackend(connection, transport=transport).discover()
+    return await SlurmBackend(connection, transport=transport).discover()

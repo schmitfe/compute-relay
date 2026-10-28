@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10", "pytest-django>=4.10,<5", "hypothesis>=6,<7", "build>=1.2,<2"]
+test = ["pytest>=8,<10", "pytest-django>=4.10,<5", "build>=1.2,<2"]
 
 [project.scripts]
 compute-relay = "compute_relay.cli:main"

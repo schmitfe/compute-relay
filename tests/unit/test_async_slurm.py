@@ -10,10 +10,10 @@ from uuid import uuid4
 import pytest
 
 from compute_relay.backends import canonical_json_bytes, prepare
-from compute_relay.backends.async_slurm import AsyncSlurmBackend
-from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+from compute_relay.backends.slurm import SlurmBackend
+from compute_relay.transports.openssh import OpenSSHTransport
 from compute_relay.transports.openssh import TransportError
-from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.runner import Worker
 from compute_relay.worker.journal import Journal
 
 
@@ -41,7 +41,7 @@ def package(tmp_path):
 def test_async_adapter_uses_fixed_helper_and_cross_process_durable_submission_fence(package):
     async def scenario():
         connection, manifest, files, sentinel, calls = package
-        transport = AsyncOpenSSHTransport({"command_timeout_seconds": 10, "ssh": {
+        transport = OpenSSHTransport({"command_timeout_seconds": 10, "ssh": {
             "host": "never-contacted", "user": "broker", "known_hosts": "/protected/known_hosts"}})
 
         class LocalFixedHelper:
@@ -52,7 +52,7 @@ def test_async_adapter_uses_fixed_helper_and_cross_process_durable_submission_fe
                 return json.loads(output)
 
         attempt = str(uuid4())
-        backend = AsyncSlurmBackend(connection, transport=LocalFixedHelper())
+        backend = SlurmBackend(connection, transport=LocalFixedHelper())
         first, second = await asyncio.gather(backend.submit(attempt, manifest, files), backend.submit(attempt, manifest, files))
         assert first["outcome"] == second["outcome"] == "submitted"
         assert first["native_identity"] == second["native_identity"]
@@ -82,7 +82,7 @@ def test_async_worker_default_backend_uses_actual_async_subprocess_path(package,
                 return {"authorized": True}
 
         connection_id = manifest["request"]["connection_id"]
-        worker = AsyncWorker(Control(), {connection_id: connection}, Journal(tmp_path / "worker-journal"), owner_id=uuid4(), extensions=[])
+        worker = Worker(Control(), {connection_id: connection}, Journal(tmp_path / "worker-journal"), owner_id=uuid4(), extensions=[])
         lease = {"id": str(uuid4()), "operation": "submit", "attempt_id": str(uuid4()), "generation": 1,
             "connection_id": connection_id, "prepared": {"manifest": manifest,
             "manifest_sha256": hashlib.sha256(canonical_json_bytes(manifest)).hexdigest(),
@@ -105,7 +105,7 @@ def test_async_submission_transport_failure_is_uncertain_without_retry_and_cance
                 raise TransportError("private path")
 
         failure = Failure()
-        backend = AsyncSlurmBackend(connection, transport=failure)
+        backend = SlurmBackend(connection, transport=failure)
         assert (await backend.submit(str(uuid4()), manifest, files))["outcome"] == "submission_uncertain"
         assert failure.calls == 1
         assert (await backend.observe({"job_id": "42"}, manifest=manifest))["accounting"] == {"final": False}
@@ -115,7 +115,7 @@ def test_async_submission_transport_failure_is_uncertain_without_retry_and_cance
                 raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
-            await AsyncSlurmBackend(connection, transport=Cancelled()).submit(str(uuid4()), manifest, files)
+            await SlurmBackend(connection, transport=Cancelled()).submit(str(uuid4()), manifest, files)
     asyncio.run(scenario())
 
 
@@ -129,7 +129,7 @@ def test_async_collect_validates_paths_and_decodes_only_structured_artifacts(pac
                 assert "identity_file" not in request["config"]
                 return {"stdout": "result", "artifacts_base64": {"results/metrics.json": base64.b64encode(b"{}").decode()}}
 
-        backend = AsyncSlurmBackend(package[0], transport=Transport())
+        backend = SlurmBackend(package[0], transport=Transport())
         with pytest.raises(ValueError):
             await backend.collect({"job_id": "42"}, outputs=["../private"], manifest=package[1])
         assert calls == []

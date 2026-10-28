@@ -26,7 +26,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install planning check dependencies
         run: python -m pip install -r requirements-plan.txt
-      - name: Validate planning schemas and examples
+      - name: Validate packaged schemas and examples
         run: python tools/check_contracts.py
       - name: Run planning contract tests
         run: python -m unittest discover -s tests/contracts -v

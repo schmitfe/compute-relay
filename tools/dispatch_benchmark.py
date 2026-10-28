@@ -27,7 +27,7 @@ from personal_connector_smoke import finish_configuration, interrupt_master, red
 
 def connector_child(directory):
     from compute_relay.worker.personal_connector import read_private
-    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    from compute_relay.transports.openssh import OpenSSHTransport
     from compute_relay.worker.async_client import AsyncJsonClient
     from compute_relay.transports.persistent_openssh import _Channel
     state = read_private(directory / "state.json")
@@ -37,7 +37,7 @@ def connector_child(directory):
     def emit(event, **fields):
         print(json.dumps({"event": event, "at": time.monotonic(), **fields}), flush=True)
 
-    original_remote, original_http = AsyncOpenSSHTransport.call_helper, AsyncJsonClient.request
+    original_remote, original_http = OpenSSHTransport.call_helper, AsyncJsonClient.request
     original_start = _Channel._start
 
     async def start_channel(self):
@@ -72,7 +72,7 @@ def connector_child(directory):
                 emit("settled", attempt=attempt)
         return result
 
-    AsyncOpenSSHTransport.call_helper, AsyncJsonClient.request = remote, http
+    OpenSSHTransport.call_helper, AsyncJsonClient.request = remote, http
     _Channel._start = start_channel
     from compute_relay.cli import main
     main(["connector", "--state-directory", str(directory), "--non-interactive", "--allow-insecure-http"])

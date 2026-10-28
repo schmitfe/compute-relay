@@ -6,8 +6,8 @@ import os
 import posixpath
 from uuid import uuid4
 
-from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
-from .async_runner import AsyncWorker
+from compute_relay.transports.openssh import OpenSSHTransport
+from .runner import Worker
 from .client import ControlError
 from .connector_status import ConnectorStatus
 from .enrollment import resolve_connection
@@ -16,7 +16,7 @@ from .enrollment import resolve_connection
 async def remote_setup(session, operation, **arguments):
     connection = session.runtime_configuration()
     connection["command_timeout_seconds"] = 20
-    transport = AsyncOpenSSHTransport(connection)
+    transport = OpenSSHTransport(connection)
     transport.STDOUT_LIMIT = 128 * 1024
     source = files("compute_relay.remote").joinpath("connector_setup.py").read_text(encoding="utf-8")
     return await transport.call_helper(source, {"operation": operation, **arguments})
@@ -28,7 +28,7 @@ async def remote_environment(session, selection):
     inspection_request(selection)
     connection = session.runtime_configuration()
     connection["command_timeout_seconds"] = 30
-    transport = AsyncOpenSSHTransport(connection)
+    transport = OpenSSHTransport(connection)
     transport.STDOUT_LIMIT = 128 * 1024
     return await transport.call_helper(bundle_source("environment"), {
         "operation": "inspect_environment", "config": {}, "environment": selection})
@@ -57,7 +57,7 @@ def save_state(directory, state):
         temporary.unlink(missing_ok=True)
 
 
-class PersonalWorker(AsyncWorker):
+class PersonalWorker(Worker):
     def __init__(self, *args, state, session, state_directory, status=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.state, self.session, self.state_directory = state, session, state_directory
@@ -80,9 +80,9 @@ class PersonalWorker(AsyncWorker):
             await self._helper_pool.close()
 
     def _backend(self, connection):
-        from compute_relay.backends.async_slurm import AsyncSlurmBackend
+        from compute_relay.backends.slurm import SlurmBackend
         backend = super()._backend(connection)
-        if isinstance(backend, AsyncSlurmBackend):
+        if isinstance(backend, SlurmBackend):
             if self._helper_pool is None:
                 backend.transport.retry_gate = self._remote_gate
             else:

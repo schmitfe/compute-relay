@@ -8,7 +8,7 @@ import pytest
 
 from compute_relay.extensions.storage import services
 from compute_relay.extensions.storage.remote import REMOTE_SOURCE
-from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.runner import Worker
 from compute_relay.worker.journal import Journal
 from test_support.extensions_storage_test_storage_probes import lease, probes, sample
 
@@ -29,7 +29,7 @@ def worker_for(probes, tmp_path, transport):
     def backend(configuration):
         configurations.append(configuration)
         return SimpleNamespace(transport=transport)
-    worker = AsyncWorker(client, {}, Journal(tmp_path / "async-journal"), owner_id=probes.owner.id,
+    worker = Worker(client, {}, Journal(tmp_path / "async-journal"), owner_id=probes.owner.id,
         credential_profiles={"protected": probes.profile}, extensions=["storage"], backend_factory=backend)
     return worker, client, configurations
 

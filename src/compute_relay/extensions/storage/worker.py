@@ -51,22 +51,7 @@ def _report(lease, context, observation):
         "connection_revision_sha256": context["connection_revision_sha256"], "observation": observation}
 
 
-def execute(worker, lease):
-    context = probe_context(lease)
-    try:
-        configuration, root = _protected_probe(worker, lease, context)
-        if configuration["backend"] == "fake":
-            observation = unavailable("SIMULATED_STORAGE_NOT_PROBED")
-        else:
-            backend = worker.backend_factory(configuration)
-            result = backend.transport.call_helper(REMOTE_SOURCE, _probe_request(context, root))
-            observation = _probe_observation(result, context, root)
-    except Exception:
-        observation = unavailable("STORAGE_PROBE_UNAVAILABLE")
-    worker.client.request("POST", f"/internal/v1/extensions/storage/pools/{context['pool_id']}/report", _report(lease, context, observation))
-
-
-async def execute_async(worker, lease):
+async def execute(worker, lease):
     context = probe_context(lease)
     try:
         configuration, root = _protected_probe(worker, lease, context)

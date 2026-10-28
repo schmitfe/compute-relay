@@ -139,14 +139,14 @@ def test_master_control_operations_cannot_fall_back_to_authentication(connection
 
 
 def test_async_session_checks_and_shutdown_use_native_bounded_ssh_without_identity_fallback(connection, state, runner, monkeypatch):
-    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    from compute_relay.transports.openssh import OpenSSHTransport
     session = SSHSession(connection, state).start()
     calls = []
     async def native_run(transport, arguments, payload):
         await asyncio.sleep(0)
         calls.append((arguments, payload, transport.connection))
         return b""
-    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", native_run)
+    monkeypatch.setattr(OpenSSHTransport, "_run", native_run)
     monkeypatch.setattr(asyncio, "to_thread", lambda *a, **kw: pytest.fail("Session control used a thread-pool SSH bridge"))
     async def scenario():
         assert await session.check_async()
@@ -163,14 +163,14 @@ def test_async_session_checks_and_shutdown_use_native_bounded_ssh_without_identi
 
 
 def test_async_shutdown_finishes_owned_exit_when_cancelled(connection, state, runner, monkeypatch):
-    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    from compute_relay.transports.openssh import OpenSSHTransport
     session = SSHSession(connection, state).start()
     entered, release = asyncio.Event(), asyncio.Event()
     async def native_run(*args):
         entered.set()
         await release.wait()
         return b""
-    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", native_run)
+    monkeypatch.setattr(OpenSSHTransport, "_run", native_run)
     async def scenario():
         task = asyncio.create_task(session.close_async())
         await entered.wait()
@@ -216,7 +216,7 @@ def test_recovery_refuses_a_replaced_socket_or_regular_file(connection, state, r
 
 
 def test_async_reconnect_is_one_public_key_only_attempt_without_prompts(connection, state, runner, monkeypatch):
-    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    from compute_relay.transports.openssh import OpenSSHTransport
     session = SSHSession(connection, state).start()
     runner.close()
     (state / "s").unlink()
@@ -229,7 +229,7 @@ def test_async_reconnect_is_one_public_key_only_attempt_without_prompts(connecti
             master.bind(str(state / "s")); os.chmod(state / "s", 0o600)
             runner.sockets.append(master)
         return b""
-    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", run)
+    monkeypatch.setattr(OpenSSHTransport, "_run", run)
     asyncio.run(session.reconnect_async())
     command, payload, configuration = calls[0]
     for expected in ("BatchMode=yes", "NumberOfPasswordPrompts=0", "StrictHostKeyChecking=yes",
@@ -243,7 +243,7 @@ def test_async_reconnect_is_one_public_key_only_attempt_without_prompts(connecti
 
 
 def test_async_control_never_contacts_a_replacement_socket(connection, state, runner, monkeypatch):
-    from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+    from compute_relay.transports.openssh import OpenSSHTransport
     session = SSHSession(connection, state).start()
     path = state / "s"
     path.unlink()
@@ -251,7 +251,7 @@ def test_async_control_never_contacts_a_replacement_socket(connection, state, ru
     foreign.bind(str(path));os.chmod(path, 0o600);runner.sockets.append(foreign)
     async def forbidden(*args):
         pytest.fail("A replacement socket was contacted")
-    monkeypatch.setattr(AsyncOpenSSHTransport, "_run", forbidden)
+    monkeypatch.setattr(OpenSSHTransport, "_run", forbidden)
     async def scenario():
         assert await session.check_async() is False
         await session.close_async()

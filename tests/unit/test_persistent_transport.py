@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from compute_relay.backends.async_slurm import AsyncSlurmBackend
+from compute_relay.backends.slurm import SlurmBackend
 from compute_relay.backends.preparation import helper_source
 from compute_relay.remote.bundles import bundle_source
 from compute_relay.transports.openssh import OpenSSHTransport, TransportError
@@ -33,7 +33,7 @@ def local_transport(site, monkeypatch):
 def test_repeated_calls_reuse_one_process_and_keep_package_submission_once(site, local_transport):
     async def scenario():
         pool = PersistentHelperPool(4)
-        backend = AsyncSlurmBackend(local_transport, transport=PersistentOpenSSHTransport(local_transport, pool))
+        backend = SlurmBackend(local_transport, transport=PersistentOpenSSHTransport(local_transport, pool))
         package, files = prepared(site)
         try:
             attempt = str(uuid4())
@@ -64,7 +64,7 @@ def test_persistent_startup_streams_bundle_before_framed_requests(site, tmp_path
             "known_hosts": "/synthetic/known_hosts", "control_path": "/synthetic/master"}}
     async def scenario():
         pool = PersistentHelperPool(1)
-        backend = AsyncSlurmBackend(connection, transport=PersistentOpenSSHTransport(connection, pool))
+        backend = SlurmBackend(connection, transport=PersistentOpenSSHTransport(connection, pool))
         package, files = prepared(site)
         try:
             result = await backend.submit(str(uuid4()), package["manifest"], files)
@@ -104,7 +104,7 @@ def test_lost_submit_response_reconciles_without_second_scheduler_submission(sit
         target.write_text(source)
         pool = PersistentHelperPool(1)
         connection = {**local_transport, "command_timeout_seconds": 1}
-        backend = AsyncSlurmBackend(connection, transport=PersistentOpenSSHTransport(connection, pool))
+        backend = SlurmBackend(connection, transport=PersistentOpenSSHTransport(connection, pool))
         package, files = prepared(site)
         attempt = str(uuid4())
         try:
@@ -208,7 +208,7 @@ def test_persistent_helper_transfers_large_files_and_live_logs_without_restartin
         files = {"main.py": script, "input.bin": FileReference(hashlib.sha256(data).hexdigest(), len(data)),
             **{path: text.encode() for path, text in package["generated_files"].items()}}
         pool = PersistentHelperPool(1)
-        backend = AsyncSlurmBackend(local_transport, transport=PersistentOpenSSHTransport(local_transport, pool))
+        backend = SlurmBackend(local_transport, transport=PersistentOpenSSHTransport(local_transport, pool))
         attempt = str(uuid4())
         try:
             for offset in range(0, len(data), CHUNK_BYTES):

@@ -105,6 +105,7 @@ def bootstrap_demo(args):
 
 
 def discover(args):
+    import asyncio
     # This path deliberately never initializes Django or reads its credential DB.
     from compute_relay.backends import SlurmBackend
     if args.config:
@@ -121,7 +122,7 @@ def discover(args):
         if args.known_hosts:
             ssh["known_hosts"] = args.known_hosts
         connection = {"ssh": ssh, "python_path": "/usr/bin/python3"}
-    result = SlurmBackend(connection).discover()
+    result = asyncio.run(SlurmBackend(connection).discover())
     content = json.dumps(result, indent=2) + "\n"
     if args.output:
         output = Path(args.output).resolve()

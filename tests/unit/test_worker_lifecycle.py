@@ -1,19 +1,16 @@
-"""One lifecycle contract exercised by both transport adapters, without SSH."""
+"""One lifecycle contract exercised by the async execution path, without SSH."""
 
 import asyncio
 from copy import deepcopy
-import inspect
-import time
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from compute_relay.domain.lifecycle import replay_result, report_record, validate_report_outcome
-from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.runner import Worker
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.journal import Journal
-from compute_relay.worker.runner import Worker
 from test_support.unit_test_async_worker import configured
 
 
@@ -77,16 +74,6 @@ class ControlState:
         return {"accepted": True}
 
 
-class SyncBackend:
-    def __init__(self, state):
-        self.state = state
-
-    def __getattr__(self, name):
-        def call(*args, **kwargs):
-            if name == "collect":
-                time.sleep(self.state.delay)
-            return getattr(self.state, name)(*args, **kwargs)
-        return call
 
 
 class AsyncBackend:
@@ -110,26 +97,25 @@ class AsyncControl:
         return self.state.request(*args, **kwargs)
 
 
-@pytest.fixture(params=["sync", "async"])
-def lifecycle(request, configured):
+@pytest.fixture
+def lifecycle(configured):
     c = configured
     backend, control = BackendState(), ControlState()
-    asynchronous = request.param == "async"
 
     def worker():
-        common = {"backend_factory": lambda _: AsyncBackend(backend) if asynchronous else SyncBackend(backend), "extensions": []}
+        common = {"backend_factory": lambda _: AsyncBackend(backend), "extensions": []}
         journal = Journal(c.journal.root)
-        if asynchronous:
-            return AsyncWorker(AsyncControl(control), c.worker.connections, journal, owner_id=uuid4(), **common)
-        return Worker(control, c.worker.connections, journal, **common)
+        return Worker(AsyncControl(control), c.worker.connections, journal, owner_id=uuid4(), **common)
 
     return SimpleNamespace(worker=worker(), restart=worker, lease=c.lease, backend=backend, control=control,
-                           journal=c.journal, asynchronous=asynchronous)
+                           journal=c.journal)
 
 
 def invoke(worker, method, *args):
     result = getattr(worker, method)(*args)
-    return asyncio.run(asyncio.wait_for(result, timeout=2)) if inspect.isawaitable(result) else result
+    async def run():
+        return await asyncio.wait_for(result, timeout=2)
+    return asyncio.run(run())
 
 
 def management(c, operation="cancel"):
@@ -240,7 +226,7 @@ def test_durable_final_report_cannot_rebind_to_different_native_identity(lifecyc
     assert c.journal.read_report(c.lease["attempt_id"]) is not None
 
 
-def test_prior_submission_intent_always_reconciles_in_both_adapters(lifecycle):
+def test_prior_submission_intent_always_reconciles_after_restart(lifecycle):
     c = lifecycle
     c.journal.write(c.lease["attempt_id"], {"manifest_sha256": c.lease["prepared"]["manifest_sha256"], "outcome": "intent"})
     invoke(c.worker, "execute", c.lease)

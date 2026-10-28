@@ -235,10 +235,10 @@ class SSHSession:
             return False
 
     async def _control_async(self, operation):
-        from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+        from compute_relay.transports.openssh import OpenSSHTransport
         configuration = self.runtime_configuration()
         configuration["command_timeout_seconds"] = 10
-        transport = AsyncOpenSSHTransport(configuration)
+        transport = OpenSSHTransport(configuration)
         transport.STDOUT_LIMIT = transport.STDERR_LIMIT = 16384
         await transport._run(self._control_argv(operation), b"")
 
@@ -285,7 +285,7 @@ class SSHSession:
 
     async def reconnect_async(self):
         """One bounded public-key-only attempt; cannot prompt or replay MFA."""
-        from compute_relay.transports.async_openssh import AsyncOpenSSHTransport
+        from compute_relay.transports.openssh import OpenSSHTransport
         if self._directory_fd is not None:
             raise TransportError("Retire the previous SSH session before reconnecting")
         launched = False
@@ -306,7 +306,7 @@ class SSHSession:
             configuration = self.runtime_configuration()
             configuration["command_timeout_seconds"] = 30
             launched = True
-            await AsyncOpenSSHTransport(configuration)._run(argv, b"")
+            await OpenSSHTransport(configuration)._run(argv, b"")
             metadata = self._socket_metadata()
             if metadata is not None:
                 self._socket_identity = self._identity(metadata)
@@ -329,7 +329,7 @@ class SSHSession:
 
     async def close_async(self):
         """Finish owned master shutdown even if application shutdown is cancelled."""
-        from compute_relay.transports.async_openssh import _complete_despite_cancellation
+        from compute_relay.transports.openssh import _complete_despite_cancellation
         try:
             metadata = self._socket_metadata()
             if metadata is not None and self._identity(metadata) == self._socket_identity:

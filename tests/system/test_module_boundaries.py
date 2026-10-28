@@ -175,13 +175,17 @@ def control_probe():
     execution = tool("request_execution", {"job_id": prepared["id"], "idempotency_key": str(uuid4())})
     assert execution["attempt_id"]
     worker_config = json.loads((demo_dir / "worker.json").read_text())
-    worker = Worker(HttpBridge((demo_dir / "worker-token").read_text()), worker_config["connections"],
-                    Journal(root / "journal"), credential_profiles=worker_config["credential_profiles"])
+    worker_client = HttpBridge((demo_dir / "worker-token").read_text())
+    async def worker_request(*args, **kwargs):
+        return worker_client.request(*args, **kwargs)
+    worker = Worker(SimpleNamespace(request=worker_request), worker_config["connections"],
+                    Journal(root / "journal"), credential_profiles=worker_config["credential_profiles"],
+                    owner_id=worker_config["owner_id"])
     # Advance only the disposable test scheduler clock; there are no sleeps or
     # real scheduler operations. Bootstrap also queues one simulated discovery.
     for _ in range(6):
         Attempt.objects.update(next_poll_at=timezone.now())
-        worker.poll_once()
+        asyncio.run(worker.poll_once())
         attempt = Attempt.objects.get(id=execution["attempt_id"])
         if attempt.accounting_state == "settled":
             break
@@ -232,8 +236,12 @@ def worker_probe():
             raise AssertionError("Unexpected offline request: " + path)
 
     client = OfflineClient()
-    worker = Worker(client, {}, Journal(Path(os.environ["BROKER_BOUNDARY_ROOT"]) / "journal"))
-    assert worker.extensions == () and worker.poll_once() is False
+    from types import SimpleNamespace
+    async def worker_request(*args, **kwargs):
+        return client.request(*args, **kwargs)
+    worker = Worker(SimpleNamespace(request=worker_request), {},
+                    Journal(Path(os.environ["BROKER_BOUNDARY_ROOT"]) / "journal"), owner_id=uuid4())
+    assert worker.extensions == () and asyncio.run(worker.poll_once()) is False
     assert client.calls == [("POST", "/internal/v1/worker/profiles"), ("POST", "/internal/v1/lease")]
     server = create_server(ProjectFacade(client, str(uuid4())))
     result = asyncio.run(server.call_tool("get_broker_capabilities", {}))

@@ -17,8 +17,7 @@ from compute_relay.remote.bundles import bundle_source
 from compute_relay.remote.protocol import JOB_OPERATIONS
 from compute_relay.worker.client import strict_json
 
-from .async_openssh import AsyncOpenSSHTransport, _complete_despite_cancellation, _stop
-from .openssh import OpenSSHTransport, TransportError
+from .openssh import OpenSSHTransport, TransportError, _complete_despite_cancellation, _stop
 
 PROTOCOL = "compute-relay-stream/v1"
 
@@ -175,7 +174,7 @@ class PersistentHelperPool:
         await _complete_despite_cancellation(asyncio.create_task(finish()), propagate=True)
 
 
-class PersistentOpenSSHTransport(AsyncOpenSSHTransport):
+class PersistentOpenSSHTransport(OpenSSHTransport):
     def __init__(self, connection, pool, *, retry_gate=None):
         super().__init__(connection, retry_gate=retry_gate)
         self.pool = pool

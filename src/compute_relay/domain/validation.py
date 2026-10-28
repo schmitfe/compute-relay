@@ -8,6 +8,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 from referencing.exceptions import NoSuchResource
 
+from compute_relay.transfer import MAX_BUNDLE_BYTES
+
 
 def _pairs(pairs):
     result = {}
@@ -57,13 +59,20 @@ def validators():
     return {name: Draft202012Validator(schema, registry=registry, format_checker=FormatChecker()) for name, schema in schemas.items()}
 
 
+def _files_by_path(files):
+    indexed = {entry["path"]: entry for entry in files}
+    if len(indexed) != len(files):
+        raise ValueError("Duplicate logical file path")
+    if sum(entry["size_bytes"] for entry in files) > MAX_BUNDLE_BYTES:
+        raise ValueError("Package too large")
+    return indexed
+
+
 def validate(schema_name, document):
     check_unicode(document)
     validators()[schema_name].validate(document)
     if schema_name == "job-request.schema.json":
-        files = {f["path"]: f for f in document["files"]}
-        if len(files) != len(document["files"]):
-            raise ValueError("Duplicate logical file path")
+        files = _files_by_path(document["files"])
         if document["command"]["script"] not in files:
             raise ValueError("Entrypoint is not an uploaded file")
         if set(files).intersection(document["outputs"]):
@@ -73,8 +82,32 @@ def validate(schema_name, document):
                 raise ValueError("Reserved broker namespace")
             if path.count("/") > 16:
                 raise ValueError("Logical path nesting exceeds limit")
-        if sum(f["size_bytes"] for f in files.values()) > 64 * 1024**3:
-            raise ValueError("Package too large")
+    elif schema_name == "prepared-job.schema.json":
+        request = document["request"]
+        validate("job-request.schema.json", request)
+        files = _files_by_path(document["files"])
+        if list(files) != sorted(files):
+            raise ValueError("Prepared file descriptors must be sorted by path")
+        for entry in request["files"]:
+            if files.get(entry["path"]) != entry:
+                raise ValueError("Prepared package changed or omitted an uploaded file")
+        generated = set(files) - {entry["path"] for entry in request["files"]}
+        if generated != {document["batch_script"], document["environment_wrapper"]}:
+            raise ValueError("Unexpected or missing generated files in version one package")
+        allocation, requested = document["maximum_allocation"], request["resources"]
+        if allocation["cpu_cores"] < requested["cpus"] or allocation["gpu_devices"] < requested["gpus"]:
+            raise ValueError("Allocation envelope is below requested resources")
+        if allocation["gpu_devices"] and not requested.get("gpu_type"):
+            raise ValueError("GPU allocation requires an explicit GPU type")
+        if allocation["time_limit_seconds"] != requested["time_limit_seconds"]:
+            raise ValueError("Walltime changed after request preparation")
+        duration = requested["time_limit_seconds"]
+        if document["reservation"] != {"cpu_core_seconds": allocation["cpu_cores"] * duration,
+                                       "gpu_device_seconds": allocation["gpu_devices"] * duration}:
+            raise ValueError("Reservation must cover allocated resources multiplied by requested walltime")
+    elif schema_name == "project-policy.schema.json":
+        if document["per_job_limits"]["gpu_devices"] and not document["allowed_gpu_types"]:
+            raise ValueError("GPU-enabled policy needs explicit GPU types")
 
 
 def relative_path(value):

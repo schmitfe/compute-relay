@@ -15,6 +15,7 @@ import subprocess
 import sys
 from uuid import uuid4
 import zipfile
+from unittest.mock import AsyncMock
 
 from django.test import Client
 from django.utils import timezone
@@ -97,7 +98,7 @@ def test_agent_inspects_builds_and_updates_usable_environment_without_per_build_
         return {"returncode": 0, "stdout": "42\n", "stderr": ""}
     monkeypatch.setattr(helper, "scheduler", scheduler)
     class Transport:
-        def call_helper(self, source, request):
+        async def call_helper(self, source, request):
             if source == REMOTE_SOURCE:
                 result = subprocess.run([sys.executable, "-I", "-c", source], input=json.dumps(request),
                     text=True, capture_output=True, check=True, timeout=30)
@@ -105,15 +106,17 @@ def test_agent_inspects_builds_and_updates_usable_environment_without_per_build_
             return helper.execute(request["config"], request)
     connection = {**c.connection.configuration, "backend": "slurm", "revision_sha256": c.connection.revision_sha256}
     backend = SlurmBackend(connection, transport=Transport())
-    worker = Worker(HTTP("environment-worker"), {str(c.connection.id): connection}, Journal(tmp_path / "journal"),
-        backend_factory=lambda _: backend, extensions=["environments"])
-    backend.observe = lambda *a, **kw: {"state": "completed", "terminal": True,
-        "accounting": {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}}
+    worker_client = HTTP("environment-worker")
+    worker_client.request = AsyncMock(side_effect=worker_client.request)
+    worker = Worker(worker_client, {str(c.connection.id): connection}, Journal(tmp_path / "journal"),
+        backend_factory=lambda _: backend, extensions=["environments"], owner_id=str(uuid4()))
+    backend.observe = AsyncMock(return_value={"state": "completed", "terminal": True,
+        "accounting": {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}})
 
     def compute(attempt_id):
         lease = core.lease_work(c.worker)["lease"]
         assert lease["attempt_id"] == attempt_id and lease["operation"] == "submit"
-        worker.execute(lease)
+        asyncio.run(worker.execute(lease))
         attempt = Attempt.objects.get(id=attempt_id)
         directory = Path(attempt.native_identity["work_dir"])
         script = attempt.job.request["command"]["script"]
@@ -133,7 +136,7 @@ def test_agent_inspects_builds_and_updates_usable_environment_without_per_build_
         (directory / "stdout.log").write_bytes(result.stdout)
         (directory / "stderr.log").write_bytes(result.stderr)
         Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
-        worker.execute(core.lease_work(c.worker)["lease"])
+        asyncio.run(worker.execute(core.lease_work(c.worker)["lease"]))
         return Attempt.objects.get(id=attempt.id)
 
     first_inspection = invoke(server, "inspect_environment", {"environment_id": str(c.base.id), "idempotency_key": "initial-inventory"})

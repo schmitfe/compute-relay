@@ -154,11 +154,6 @@ def lease_extension_work(worker):
     return None
 
 
-def execute_extension_work(worker, lease):
-    """Worker entry point: only operator-configured modules can be imported."""
-    return _worker_for_lease(worker, lease).execute(worker, lease)
-
-
 def _worker_for_lease(worker, lease):
     """Share the enabled-module and bounded maintenance-lease import fence."""
     import json
@@ -180,33 +175,24 @@ def async_worker_names(names):
         except ImportError:
             raise ValueError("An enabled extension has no installed async worker hooks") from None
         if not any(inspect.iscoroutinefunction(getattr(module, hook, None))
-                   for hook in ("execute_async", "after_observation_async")):
+                   for hook in ("execute", "after_observation")):
             raise ValueError("An enabled extension has no native async worker hooks")
     return names
 
 
-async def execute_extension_work_async(worker, lease):
-    """Async maintenance uses the same protected lease fence as sync workers."""
+async def execute_extension_work(worker, lease):
+    """Await maintenance only after checking the protected lease fence."""
     module = _worker_for_lease(worker, lease)
-    handler = getattr(module, "execute_async", None)
+    handler = getattr(module, "execute", None)
     if handler is None:
         raise ValueError("This extension has no async maintenance operation")
     return await handler(worker, lease)
 
 
-def worker_after_observation(names, backend, native, manifest, contexts):
-    name = manifest.get("extension_name", "")
-    if not name or name not in names:
-        return {}
-    module = import_module(EXTENSIONS[name][0] + ".worker")
-    handler = getattr(module, "after_observation", None)
-    return {name: handler(backend, native, manifest, contexts.get(name, {}))} if handler else {}
-
-
-async def worker_after_observation_async(names, backend, native, manifest, contexts):
+async def worker_after_observation(names, backend, native, manifest, contexts):
     name = manifest.get("extension_name", "")
     if not name or name not in names or name not in EXTENSIONS:
         return {}
     module = import_module(EXTENSIONS[name][0] + ".worker")
-    handler = getattr(module, "after_observation_async", None)
+    handler = getattr(module, "after_observation", None)
     return {name: await handler(backend, native, manifest, contexts.get(name, {}))} if handler else {}

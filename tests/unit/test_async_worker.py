@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 
 from compute_relay.backends import canonical_json_bytes, prepare
-from compute_relay.worker.async_runner import AsyncWorker
+from compute_relay.worker.runner import Worker
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.concurrency import PrincipalScheduler, WorkerCapacityError
 from compute_relay.worker.journal import Journal
@@ -201,8 +201,8 @@ def test_async_journal_lock_keeps_cross_process_fence_without_blocking_loop(conf
     asyncio.run(scenario())
 
 
-def test_async_runner_advertises_only_installed_native_async_extension_hooks(configured):
-    worker = AsyncWorker(configured.control, {}, configured.journal, owner_id=uuid4(), extensions=["storage", "environments", "workflows"])
+def test_runner_advertises_only_installed_native_async_extension_hooks(configured):
+    worker = Worker(configured.control, {}, configured.journal, owner_id=uuid4(), extensions=["storage", "environments", "workflows"])
     asyncio.run(worker.publish_profiles())
     assert configured.control.calls[-1][2] == {"profiles": [], "extensions": ["storage", "environments", "workflows"], "execution_features": ["availability_v1"]}
 
@@ -215,7 +215,7 @@ def extension_worker(configured, name, *, enabled=True):
     connection = c.worker.connections[c.lease["connection_id"]]
     connection.update(backend="slurm", remote_root="/trusted/project/jobs")
     c.backend.connection = connection
-    c.worker = AsyncWorker(c.control, {c.lease["connection_id"]: connection}, c.journal,
+    c.worker = Worker(c.control, {c.lease["connection_id"]: connection}, c.journal,
         owner_id=uuid4(), backend_factory=lambda _: c.backend, extensions=[name] if enabled else [])
     return c
 
@@ -279,7 +279,7 @@ def test_async_environment_finalization_failure_preserves_core_accounting_and_ou
     elif failure == "hook-failure":
         async def failed_hook(*args):
             raise OSError("synthetic-private-extension-error")
-        monkeypatch.setattr(extensions, "worker_after_observation_async", failed_hook)
+        monkeypatch.setattr(extensions, "worker_after_observation", failed_hook)
     asyncio.run(c.worker.execute(c.lease))
     report = c.control.calls[-1][2]
     assert report["observation"]["accounting"]["final"] is True and report["stdout"] == "synthetic result"
@@ -333,7 +333,7 @@ def test_disabled_async_maintenance_is_rejected_before_import(configured, monkey
 def test_two_hundred_jobs_dispatch_with_four_bounded_same_owner_operations(configured):
     from collections import deque
     from copy import deepcopy
-    from compute_relay.worker.async_runner import serve_workers
+    from compute_relay.worker.runner import serve_workers
     async def scenario():
         c = configured
         leases = deque({**deepcopy(c.lease), "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(200))
@@ -401,7 +401,7 @@ def test_same_attempt_concurrency_cannot_duplicate_submission(configured):
 def test_parallel_shutdown_preserves_every_intent_and_resume_only_reconciles(configured):
     from collections import deque
     from copy import deepcopy
-    from compute_relay.worker.async_runner import serve_workers
+    from compute_relay.worker.runner import serve_workers
     async def scenario():
         c = configured
         proposals = [{**deepcopy(c.lease), "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(4)]
@@ -470,7 +470,7 @@ def test_explicit_remote_concurrency_is_bounded(value):
 def test_two_hundred_observations_use_four_batches_and_preserve_each_terminal_report(configured):
     from collections import deque
     from copy import deepcopy
-    from compute_relay.worker.async_runner import serve_workers
+    from compute_relay.worker.runner import serve_workers
     async def scenario():
         c = configured
         c.worker.observation_batch = 64
@@ -548,7 +548,7 @@ def test_completed_batch_item_stops_renewing_while_other_items_collect(configure
 
 def test_new_cancellation_lease_survives_older_batch_cleanup(configured):
     from copy import deepcopy
-    from compute_relay.worker.async_runner import serve_workers
+    from compute_relay.worker.runner import serve_workers
     async def scenario():
         c = configured
         c.worker.observation_batch = 2

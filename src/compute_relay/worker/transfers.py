@@ -1,4 +1,4 @@
-"""Finite transfer steps shared by synchronous and asynchronous workers."""
+"""Finite transfer steps for the asynchronous execution worker."""
 
 import base64
 
@@ -40,25 +40,7 @@ def output_entries(inventory, manifest):
     return files
 
 
-def stage_inputs(client, backend, lease, manifest, files):
-    for path, source in files.items():
-        if not isinstance(source, FileReference):
-            continue
-        reply = backend.stage_input(lease["attempt_id"], manifest, path)
-        offset = check_offset(reply, source.size_bytes)
-        while not reply["complete"]:
-            chunk = client.request("POST", f"/internal/v1/attempts/{lease['attempt_id']}/input-chunk",
-                {**authority(lease), "path": path, "offset": offset})
-            content = check_chunk(chunk, offset, source.size_bytes)
-            reply = backend.stage_input(lease["attempt_id"], manifest, path, offset=offset,
-                content_base64=chunk["content_base64"], finish=offset + len(content) == source.size_bytes)
-            new_offset = check_offset(reply, source.size_bytes)
-            if new_offset != offset + len(content):
-                raise ValueError("Invalid input acknowledgement")
-            offset = new_offset
-
-
-async def stage_inputs_async(client, backend, lease, manifest, files):
+async def stage_inputs(client, backend, lease, manifest, files):
     for path, source in files.items():
         if not isinstance(source, FileReference):
             continue
@@ -76,27 +58,7 @@ async def stage_inputs_async(client, backend, lease, manifest, files):
             offset = new_offset
 
 
-def collect_outputs(client, backend, lease, native, manifest):
-    inventory = backend.output_manifest(native, manifest=manifest)
-    for entry in output_entries(inventory, manifest):
-        endpoint = f"/internal/v1/attempts/{lease['attempt_id']}/output-chunk"
-        common = {**authority(lease), "path": entry["path"]}
-        reply = client.request("POST", endpoint, {**common, "sha256": entry["sha256"], "size_bytes": entry["size_bytes"]})
-        offset = check_offset(reply, entry["size_bytes"])
-        while not reply["complete"]:
-            chunk = backend.output_chunk(native, manifest=manifest, path=entry["path"], offset=offset, version=entry["version"])
-            content = check_chunk(chunk, offset, entry["size_bytes"])
-            reply = client.request("POST", endpoint, {**common, "transfer_id": reply["transfer_id"], "offset": offset,
-                "content_base64": chunk["content_base64"], "finish": offset + len(content) == entry["size_bytes"]})
-            new_offset = check_offset(reply, entry["size_bytes"])
-            if new_offset != offset + len(content):
-                raise ValueError("Invalid output acknowledgement")
-            offset = new_offset
-    return {"artifacts": {}, "collection_state": "failed" if inventory.get("missing") else "complete",
-        **({"error_code": "OUTPUT_MISSING"} if inventory.get("missing") else {})}
-
-
-async def collect_outputs_async(client, backend, lease, native, manifest):
+async def collect_outputs(client, backend, lease, native, manifest):
     inventory = await backend.output_manifest(native, manifest=manifest)
     for entry in output_entries(inventory, manifest):
         endpoint = f"/internal/v1/attempts/{lease['attempt_id']}/output-chunk"

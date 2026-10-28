@@ -42,12 +42,11 @@ receives no SSH key or MFA response.
 ## Backend registration and remote components
 
 Workers select their implementation through `backends/registry.py`. Its explicit
-registrations pair an identifier with synchronous and optional asynchronous
-factories. The registry rejects duplicate definitions and keeps the factory map
+registrations pair an identifier with one asynchronous implementation.
+The registry rejects duplicate definitions and keeps the factory map
 read-only. Configuration selects a registered identifier; it cannot supply an
 import path, discover installed entry points or register code through an API.
-The current entries are the synchronous simulation and Slurm implementations,
-with a native asynchronous implementation for Slurm.
+The current entries are the simulation and native asynchronous Slurm implementations.
 
 This centralizes construction without making backend registration an execution
 permission. A future scheduler also needs reviewed configuration validation,
@@ -111,8 +110,7 @@ Multiple projects using one remote Unix account do not gain filesystem isolation
 | WorkItem | Typed operation, attempt, lease owner/expiry, generation, attempts; durable outbox |
 | Artifact | Project, attempt/revision, logical path, content digest, size, media type, retention and visibility |
 | StorageQuota and UploadReservation | Project/global byte and object limits, in-flight reservations, upload expiry; atomic accounting before writes |
-| StoragePool / StorageTarget / ProjectStoragePolicy / StorageObservation | Backing filesystem identity; protected connection/root/capabilities; advisory project byte/inode budgets and placement; timestamped filesystem/quota measurements |
-| ArtifactReplica / StorageHold | Digest-bound location/receipt; advisory peak-space estimate, target, expiry and consuming attempt |
+| StorageCapacityPool / StorageTarget / ProjectStorageBudget / ProjectStorageBinding | Backing filesystem identity; protected connection/root/capabilities; advisory project byte/inode budgets and placement; timestamped filesystem/quota measurements |
 | AuditEvent | Actor, project, action, object, decision, timestamp, request ID; no credential contents |
 
 Use database foreign keys and uniqueness constraints in addition to application validation. The control database stores credential references rather than cluster private keys. Protect backups of the database and objects as service data; project tokens are hashed, while privileged service keys are stored separately.
