@@ -13,8 +13,8 @@ from compute_relay.control.forms import ProjectForm
 from compute_relay.control.models import (ClusterRegistration, Connection, Environment, Grant,
     Project, ProjectCredential, WorkerIdentity)
 from compute_relay.control.services import digest
-from test_cluster_setup import registration_data
-from test_management import management, human, form_post
+from test_support.unit_test_cluster_setup import registration_data
+from test_support.unit_test_management import management, human, form_post
 
 
 def test_same_cluster_host_retains_distinct_remote_users_workers_accounts_and_key_scope(management):

@@ -3,6 +3,7 @@
 All identities, credentials, objects, and fake cluster profiles are synthetic.
 No test opens a host SSH key, invokes a cluster, or talks to the portal process.
 """
+from test_support.unit_test_management import agent_get, discovery_report, form_post, human, issued, key_data, management, prepared, queued_discovery
 
 import json
 from datetime import timedelta
@@ -30,65 +31,10 @@ from compute_relay.control.storage import store_blob, store_uploaded_blob
 SCOPES = ["objects:write", "jobs:read", "jobs:write", "jobs:execute", "jobs:cancel", "artifacts:read"]
 
 
-@pytest.fixture
-def management(db, settings, tmp_path):
-    settings.ARTIFACT_ROOT = tmp_path / "objects"
-    owner = User.objects.create_user(username="management-owner", password=None)
-    outsider = User.objects.create_user(username="management-outsider", password=None)
-    worker = WorkerIdentity.objects.create(name="management-worker", owner=owner,
-                                           token_hash=token_hash("synthetic-management-worker"),
-                                           profiles=[{"alias": "synthetic-profile", "backend": "fake",
-                                                      "allowed_hosts": ["fixture.invalid"], "allowed_users": ["fixtureuser"],
-                                                      "allowed_ports": [22], "remote_root_prefixes": ["/fixture/jobs"]}])
-    profile = {"partitions": ["debug"], "accounts": ["broker"], "qos": [],
-               "maximum_cpus": 2, "maximum_gpus": 1, "maximum_memory_mib": 1024,
-               "maximum_time_limit_seconds": 600, "automatic_execution_allowed": True}
-    worker.profiles[0].update({"revision_sha256": "a" * 64, "site_profile": profile})
-    worker.save(update_fields=["profiles"])
-    connections = []
-    for index in range(2):
-        config = {"backend": "fake", "profile_revision": 1, "site_profile": profile,
-                  "state_directory": str(tmp_path / f"fake-{index}")}
-        connections.append(Connection.objects.create(owner=owner, worker=worker, name=f"owned-{index}",
-                                                     backend="fake", configuration=config,
-                                                     revision_sha256=services.digest(config)))
-    foreign = Connection.objects.create(owner=outsider, worker=worker, name="private-outsider-cluster",
-                                         backend="fake", configuration={}, revision_sha256="f" * 64)
-    environment = Environment.objects.create(owner=owner, connection=connections[0], name="management Python", configuration={"interpreter": "/usr/bin/python3", "modules": []},
-                                              revision_sha256="e" * 64)
-    secondary_environment = Environment.objects.create(owner=owner, connection=connections[1], name="second cluster Python",
-        configuration={"interpreter": "/usr/bin/python3", "modules": []}, revision_sha256="e" * 64)
-    project = Project.objects.create(name="managed project", owner=owner)
-    project.connections.set(connections)
-    project.environments.add(environment, secondary_environment)
-    policy = {"schema_version": "1.0", "project_id": str(project.id), "revision": 1,
-              "mode": "approval_required", "allowed_connection_ids": [str(c.id) for c in connections],
-              "allowed_environment_revision_sha256": [environment.revision_sha256],
-              "allowed_gpu_types": ["a100"], "per_job_limits": {
-                  "cpu_cores": 2, "gpu_devices": 1, "memory_mib": 512,
-                  "time_limit_seconds": 600},
-              "max_active_jobs": 2, "allowance": {"cpu_core_seconds": 7200, "gpu_device_seconds": 3600},
-              "admission_expires_at": (timezone.now() + timedelta(days=3)).isoformat()}
-    grant = Grant.objects.create(project=project, policy=policy)
-    token = new_token()
-    credential = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="original agent", prefix=token[:12],
-                                                   token_hash=token_hash(token), scopes=SCOPES,
-                                                   expires_at=timezone.now() + timedelta(days=1))
-    return SimpleNamespace(owner=owner, outsider=outsider, worker=worker, connections=connections,
-                           foreign=foreign, environment=environment, secondary_environment=secondary_environment, project=project, grant=grant,
-                           credential=credential, token=token)
 
 
-def human(user):
-    client = Client(enforce_csrf_checks=True)
-    client.force_login(user)
-    client.get("/login/")
-    assert "csrftoken" in client.cookies
-    return client
 
 
-def form_post(client, path, data=None):
-    return client.post(path, data or {}, HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value)
 
 
 def project_data(context, **changes):
@@ -101,22 +47,8 @@ def project_data(context, **changes):
     return data
 
 
-def key_data(context, **changes):
-    data = {"name": "separate agent", "expires_at": (timezone.now() + timedelta(days=2)).isoformat(),
-            "scopes": SCOPES, "cluster_access": "inherit", "allowed_connections": [], "execution_mode": "inherit", "submission_id": str(uuid4())}
-    data.update(changes)
-    return data
 
 
-def issued(response):
-    assert response.status_code in {200, 201}
-    secret = response.context["secret"]
-    credential = response.context["credential"]
-    assert secret.startswith("cbp_") and len(secret) >= 40
-    assert "no-store" in response.headers.get("Cache-Control", "").lower()
-    assert credential.token_hash == token_hash(secret)
-    assert credential.prefix != secret[:len(credential.prefix)]
-    return secret, credential
 
 
 def assert_not_persisted(secret):
@@ -127,27 +59,8 @@ def assert_not_persisted(secret):
         assert secret not in json.dumps(session.get_decoded(), default=str)
 
 
-def agent_get(token, path):
-    return Client().get(path, HTTP_AUTHORIZATION="Bearer " + token)
 
 
-def prepared(context, connection=None, outputs=None, *, name="management-test"):
-    source = b"raise RuntimeError('management tests must never execute uploaded source')\n"
-    blob = store_uploaded_blob(context.project, source)
-    connection = connection or context.connections[0]
-    environment = context.secondary_environment if connection.id == context.connections[1].id else context.environment
-    document = {"schema_version": "1.0", "project_id": str(context.project.id), "connection_id": str(connection.id),
-                "name": name, "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
-                "environment": {"id": str(environment.id), "revision_sha256": environment.revision_sha256},
-                "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},
-                "slurm": {"partition": "debug", "account": "broker"},
-                "files": [{"path": "main.py", "sha256": blob.sha256, "size_bytes": blob.size_bytes, "executable": False}],
-                "outputs": outputs or []}
-    created, _ = services.create_job(context.credential, document)
-    job = Job.objects.get(id=created["id"])
-    services.prepare_job(job)
-    job.refresh_from_db()
-    return job
 
 
 def execution(context, job):
@@ -639,105 +552,18 @@ def test_effective_job_state_tracks_review_and_latest_attempt(management):
     assert services.serialize_job(job)["state"] == "awaiting_approval"
 
 
-def queued_discovery(context):
-    config = {"backend": "fake", "credential_profile": "synthetic-profile",
-              "ssh": {"host": "fixture.invalid", "user": "fixtureuser", "port": 22},
-              "remote_root": "/fixture/jobs/project"}
-    return Connection.objects.create(owner=context.owner, worker=context.worker, name="discovery fixture", backend="fake",
-                                     configuration=config, revision_sha256=services.digest(config), discovery_state="queued")
-
-
-def discovery_report(connection, worker, lease, **changes):
-    config = {**connection.configuration, "profile_revision": 1,
-              "site_profile": worker.profiles[0]["site_profile"],
-              "credential_profile_revision_sha256": worker.profiles[0]["revision_sha256"]}
-    report = {"lease_id": lease["id"], "generation": lease["generation"], "outcome": "discovered",
-              "configuration": config, "connection_revision_sha256": services.digest(config),
-              "discovery_snapshot": {"scope": "synthetic", "partitions": [{"name": "debug"}],
-                                     "software": {"scope": "login_node", "verified_on_compute": False}}}
-    report.update(changes)
-    return report
 
 
 
 
-def test_discovery_lease_is_worker_scoped_and_replay_is_rejected(management):
-    from compute_relay.control.cluster_services import lease_discovery, report_discovery
-    context = management
-    connection = queued_discovery(context)
-    stranger = WorkerIdentity.objects.create(name="unrelated worker", owner=context.outsider,
-                                             token_hash=token_hash("unrelated-discovery-worker"))
-    assert lease_discovery(stranger) is None
-    lease = lease_discovery(context.worker)["lease"]
-    assert lease["operation"] == "discover"
-    assert lease["connection_id"] == str(connection.id)
-    report = discovery_report(connection, context.worker, lease)
-    with pytest.raises(BrokerError) as denied:
-        report_discovery(stranger, connection.id, report)
-    assert denied.value.status == 404
-    with pytest.raises(BrokerError) as stale:
-        report_discovery(context.worker, connection.id, {**report, "generation": lease["generation"] - 1})
-    assert stale.value.status == 409
-    assert report_discovery(context.worker, connection.id, report)["accepted"] is True
-    connection.refresh_from_db()
-    assert connection.discovery_state == "ready"
-    assert connection.discovery_snapshot["software"]["verified_on_compute"] is False
-    with pytest.raises(BrokerError) as duplicate:
-        report_discovery(context.worker, connection.id, report)
-    assert duplicate.value.status == 409
 
 
-def test_rediscovery_fences_old_lease_and_failure_preserves_last_good_snapshot(management):
-    from compute_relay.control.cluster_services import lease_discovery, report_discovery
-    context = management
-    connection = queued_discovery(context)
-    connection.discovery_snapshot = {"last_good": "preserve this synthetic metadata"}
-    connection.save(update_fields=["discovery_snapshot"])
-    old = lease_discovery(context.worker)["lease"]
-    response = form_post(human(context.owner), f"/clusters/{connection.id}/discover/")
-    assert response.status_code == 302
-    with pytest.raises(BrokerError) as stale:
-        report_discovery(context.worker, connection.id, discovery_report(connection, context.worker, old))
-    assert stale.value.status == 409
-    new = lease_discovery(context.worker)["lease"]
-    report_discovery(context.worker, connection.id, {"lease_id": new["id"], "generation": new["generation"],
-                                                    "outcome": "discovery_failed", "error_code": "AUTH_REQUIRED"})
-    connection.refresh_from_db()
-    assert connection.discovery_state == "failed"
-    assert connection.discovery_snapshot == {"last_good": "preserve this synthetic metadata"}
-    assert connection.discovery_error == "AUTH_REQUIRED"
 
 
-def test_discovery_report_rejects_secret_fields_and_changed_targets(management):
-    from compute_relay.control.cluster_services import lease_discovery, report_discovery
-    context = management
-    connection = queued_discovery(context)
-    lease = lease_discovery(context.worker)["lease"]
-    report = discovery_report(connection, context.worker, lease)
-    bad_config = {**report["configuration"], "identity_file": "/private/worker/key"}
-    with pytest.raises(BrokerError):
-        report_discovery(context.worker, connection.id, {**report, "configuration": bad_config})
-    changed = {**report["configuration"], "ssh": {"host": "different.invalid", "user": "fixtureuser", "port": 22}}
-    with pytest.raises(BrokerError) as target:
-        report_discovery(context.worker, connection.id, {**report, "configuration": changed})
-    assert target.value.status == 409
-    connection.refresh_from_db()
-    assert connection.discovery_snapshot == {}
 
 
-def test_expired_discovery_report_cannot_replace_last_good_snapshot(management):
-    from compute_relay.control.cluster_services import lease_discovery, report_discovery
-    context = management
-    connection = queued_discovery(context)
-    connection.discovery_snapshot = {"last_good": True}
-    connection.save(update_fields=["discovery_snapshot"])
-    lease = lease_discovery(context.worker)["lease"]
-    Connection.objects.filter(id=connection.id).update(discovery_lease_expires_at=timezone.now() - timedelta(seconds=1))
-    with pytest.raises(BrokerError) as expired:
-        report_discovery(context.worker, connection.id, discovery_report(connection, context.worker, lease))
-    assert expired.value.status == 409
-    connection.refresh_from_db()
-    assert connection.discovery_snapshot == {"last_good": True}
+
+
 
 
 def outstanding_discovery_attempt(context, connection):
@@ -746,160 +572,3 @@ def outstanding_discovery_attempt(context, connection):
     request = ExecutionRequest.objects.create(job=job, credential=context.credential, state="approved")
     return Attempt.objects.create(job=job, execution_request=request, connection=connection, grant=context.grant,
                                   state="succeeded", accounting_state="settlement_pending", reservation_cpu=95, reservation_gpu=0)
-
-
-def test_discovery_cannot_change_execution_profile_until_existing_accounting_settles(management):
-    from compute_relay.control.cluster_services import lease_discovery, report_discovery
-    context = management
-    connection = queued_discovery(context)
-    initial = lease_discovery(context.worker)["lease"]
-    report_discovery(context.worker, connection.id, discovery_report(connection, context.worker, initial))
-    connection.refresh_from_db()
-    original_revision, original_snapshot = connection.revision_sha256, connection.discovery_snapshot
-    attempt = outstanding_discovery_attempt(context, connection)
-    form_post(human(context.owner), f"/clusters/{connection.id}/discover/")
-    lease = lease_discovery(context.worker)["lease"]
-    context.worker.profiles[0]["revision_sha256"] = "b" * 64
-    context.worker.profiles[0]["site_profile"] = {**context.worker.profiles[0]["site_profile"], "maximum_cpus": 1}
-    context.worker.save(update_fields=["profiles"])
-    report = discovery_report(connection, context.worker, lease, discovery_snapshot={"updated": True})
-    with pytest.raises(BrokerError) as busy:
-        report_discovery(context.worker, connection.id, report)
-    assert busy.value.code == "CONNECTION_BUSY" and busy.value.status == 409
-    connection.refresh_from_db()
-    assert connection.revision_sha256 == original_revision
-    assert connection.discovery_snapshot == original_snapshot
-    attempt.accounting_state = "settled"
-    attempt.save(update_fields=["accounting_state"])
-    assert report_discovery(context.worker, connection.id, report)["accepted"]
-    connection.refresh_from_db()
-    assert connection.revision_sha256 != original_revision
-    assert connection.discovery_snapshot == {"updated": True}
-
-
-def test_discovery_can_refresh_snapshot_without_changing_unsettled_execution_profile(management):
-    from compute_relay.control.cluster_services import lease_discovery, report_discovery
-    context = management
-    connection = queued_discovery(context)
-    initial = lease_discovery(context.worker)["lease"]
-    report_discovery(context.worker, connection.id, discovery_report(connection, context.worker, initial))
-    connection.refresh_from_db()
-    original_revision = connection.revision_sha256
-    outstanding_discovery_attempt(context, connection)
-    form_post(human(context.owner), f"/clusters/{connection.id}/discover/")
-    lease = lease_discovery(context.worker)["lease"]
-    report = discovery_report(connection, context.worker, lease, discovery_snapshot={"new_inventory_only": True})
-    assert report_discovery(context.worker, connection.id, report)["accepted"]
-    connection.refresh_from_db()
-    assert connection.revision_sha256 == original_revision
-    assert connection.discovery_snapshot == {"new_inventory_only": True}
-
-
-def test_profile_advertisement_requires_worker_and_rejects_secret_fields(management):
-    context = management
-    endpoint = "/internal/v1/worker/profiles"
-    payload = {"profiles": [{**context.worker.profiles[0], "private_key": "SYNTHETIC_PRIVATE_KEY_SENTINEL"}]}
-    agent = Client().post(endpoint, data=json.dumps(payload), content_type="application/json",
-                          HTTP_AUTHORIZATION="Bearer " + context.token)
-    assert agent.status_code == 401
-    response = Client().post(endpoint, data=json.dumps(payload), content_type="application/json",
-                             HTTP_AUTHORIZATION="Bearer synthetic-management-worker")
-    assert response.status_code == 400
-    context.worker.refresh_from_db()
-    assert "SYNTHETIC_PRIVATE_KEY_SENTINEL" not in json.dumps(context.worker.profiles)
-    assert b"SYNTHETIC_PRIVATE_KEY_SENTINEL" not in response.content
-
-
-def test_saved_discovery_is_escaped_when_rendered_in_cluster_portal(management):
-    context = management
-    connection = context.connections[0]
-    payload = "<script>syntheticSnapshotAttack()</script>"
-    connection.discovery_snapshot = {"notice": payload, "software": {"scope": "login_node", "verified_on_compute": False}}
-    connection.save(update_fields=["discovery_snapshot"])
-    response = human(context.owner).get(f"/clusters/{connection.id}/")
-    assert response.status_code == 200
-    assert payload.encode() not in response.content
-    assert b"&lt;script&gt;" in response.content
-
-
-@pytest.mark.parametrize("kind,details", [
-    ("system", {"interpreter": "/usr/bin/python3"}),
-    ("modules", {"interpreter": "python3", "modules": "python/3.12", "module_init": "/etc/profile.d/modules.sh"}),
-    ("venv", {"interpreter": "/opt/venvs/test/bin/python", "prefix": "/opt/venvs/test"}),
-    ("conda", {"interpreter": "/opt/conda/envs/test/bin/python", "prefix": "/opt/conda/envs/test", "conda_executable": "/opt/conda/bin/conda"}),
-    ("poetry", {"interpreter": "/opt/poetry/test/bin/python", "prefix": "/opt/poetry/test"}),
-])
-def test_environment_recipe_is_stored_immutably_without_local_execution(management, kind, details):
-    context = management
-    data = {"name": f"existing {kind}", "connection": str(context.connections[0].id), "kind": kind, **details}
-    with patch("subprocess.run", side_effect=AssertionError("environment enrollment must not execute software locally")):
-        response = form_post(human(context.owner), f"/clusters/{context.connections[0].id}/environments/new/", data)
-    assert response.status_code == 302
-    environment = Environment.objects.get(name=data["name"])
-    assert environment.owner_id == context.owner.id
-    assert environment.connection_id == context.connections[0].id
-    assert environment.revision_sha256 == services.digest(environment.configuration)
-    assert environment.configuration["kind"] == kind
-
-
-def test_modules_recipe_saves_exact_search_paths_in_immutable_digest(management):
-    context = management
-    data = {"name": "module search path recipe", "connection": str(context.connections[0].id),
-            "kind": "modules", "interpreter": "python3", "modules": "Python/3.12\nSciPy/1.14",
-            "module_init": "/etc/profile.d/z00_lmod.sh", "module_paths": "/opt/site/modules\n/opt/shared/modulefiles"}
-    with patch("subprocess.run", side_effect=AssertionError("saving paths must not execute module hooks")):
-        response = form_post(human(context.owner), f"/clusters/{context.connections[0].id}/environments/new/", data)
-    assert response.status_code == 302
-    environment = Environment.objects.get(name=data["name"])
-    assert environment.configuration["module_paths"] == ["/opt/site/modules", "/opt/shared/modulefiles"]
-    assert environment.configuration["modules"] == ["Python/3.12", "SciPy/1.14"]
-    assert environment.revision_sha256 == services.digest(environment.configuration)
-    changed = {**environment.configuration, "module_paths": ["/opt/other/modulefiles"]}
-    assert services.digest(changed) != environment.revision_sha256
-
-
-def test_modules_environment_form_prefills_paths_and_defaults_to_cluster_command(management):
-    context = management
-    connection = context.connections[0]
-    connection.discovery_snapshot = {"software": {"modules": {
-        "init_path": "/etc/profile.d/z00_lmod.sh", "module_paths": ["/opt/site/modules", "/opt/shared/modulefiles"]}}}
-    connection.save(update_fields=["discovery_snapshot"])
-    page = human(context.owner).get(f"/clusters/{connection.id}/environments/new/", {"kind": "modules"})
-    assert page.status_code == 200
-    form = page.context["form"]
-    assert form.initial["interpreter"] == "python3"
-    assert form.initial["module_init"] == ""
-    assert "/etc/profile.d/z00_lmod.sh" in dict(form.fields["module_init"].choices)
-    assert form.initial["module_paths"] == "/opt/site/modules\n/opt/shared/modulefiles"
-    connection.owner = context.outsider
-    connection.save(update_fields=["owner"])
-    private = human(context.owner).get(f"/clusters/{connection.id}/environments/new/", {"kind": "modules"})
-    assert private.status_code == 404
-    assert b"/opt/site/modules" not in private.content
-
-
-
-
-@pytest.mark.parametrize("kind,details", [
-    ("system", {"interpreter": "/usr/bin/python3"}),
-])
-def test_nonmodule_environment_rejects_module_search_paths(management, kind, details):
-    from compute_relay.control.forms import EnvironmentForm
-    context = management
-    form = EnvironmentForm({"name": "inconsistent environment", "connection": str(context.connections[0].id),
-                            "kind": kind, **details, "module_paths": "/opt/site/modules"}, user=context.owner)
-    assert not form.is_valid()
-    assert "module_paths" in form.errors
-
-
-@pytest.mark.parametrize("path", ["/opt/site/../escape", "/opt//modules", "/opt/modules/", "/opt/modules:/other", "$(touch injected)"])
-def test_module_search_path_enrollment_rejects_noncanonical_or_shell_paths(management, path):
-    context = management
-    before = Environment.objects.count()
-    response = form_post(human(context.owner), f"/clusters/{context.connections[0].id}/environments/new/", {
-        "name": "bad module search path", "connection": str(context.connections[0].id), "kind": "modules",
-        "interpreter": "python3", "modules": "Python/3.12", "module_init": "/etc/profile.d/modules.sh",
-        "module_paths": path})
-    assert response.status_code == 200
-    assert response.context["form"].errors
-    assert Environment.objects.count() == before

@@ -16,7 +16,7 @@ from compute_relay.control.models import Attempt, ExecutionRequest, Job, Project
 from compute_relay.extensions.workflows import services
 from compute_relay.extensions.workflows.models import WorkflowRevision, WorkflowRun
 from compute_relay.extensions.workflows.validation import validate_workflow
-from test_control import broker, budgeted, decide, prepared_job, submit_receipt
+from test_support.unit_test_control import broker, budgeted, decide, prepared_job, submit_receipt
 
 
 @pytest.fixture

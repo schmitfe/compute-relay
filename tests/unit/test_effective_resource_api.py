@@ -11,7 +11,7 @@ from django.test import Client
 
 from compute_relay.control import services
 from compute_relay.control.models import Attempt, Connection, Environment, ExecutionRequest, Job, LedgerEntry
-from test_control import broker, prepared_job
+from test_support.unit_test_control import broker, prepared_job
 
 
 def client(context):

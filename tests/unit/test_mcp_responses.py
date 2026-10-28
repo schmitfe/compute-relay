@@ -15,7 +15,7 @@ from compute_relay.mcp.facade import ProjectFacade, create_server
 from compute_relay.mcp import implementation
 from compute_relay.mcp.requests import JobRequest, client_job_schema
 from compute_relay.mcp.responses import compact_allowance, compact_job
-from test_mcp import ClientSpy
+from test_support.unit_test_mcp import ClientSpy
 
 
 @pytest.fixture

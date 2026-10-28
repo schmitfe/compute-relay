@@ -1,4 +1,8 @@
 """Recovery neither leaks reservations on mkdir failure nor releases live writes."""
+from unittest.mock import patch
+from compute_relay.control.storage import begin_transfer, blob_path, transfer_chunk
+from compute_relay.backends.preparation import sha256
+
 import hashlib
 import os
 import stat
@@ -12,7 +16,7 @@ from django.utils import timezone
 from compute_relay.control.models import Blob, StoragePool, UploadGrant, UploadReservation
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.storage import _writer_lock, read_blob, reconcile_uploads, store_blob
-from test_control import broker
+from test_support.unit_test_control import broker
 
 
 def reserve(context, data, *, expired=True):
@@ -194,3 +198,33 @@ def test_io_failures_before_and_after_publication_preserve_exact_charges(broker,
     assert row.state == ("finalized" if published else "aborted")
     if published:
         assert read_blob(Blob.objects.get()) == data
+
+
+def test_bad_transfer_releases_capacity_and_can_restart(broker, settings):
+    binding = "upload:" + str(broker.credential.id)
+    first = begin_transfer(broker.project, sha256(b"ok"), 2, binding, uploaded=True)
+    with pytest.raises(BrokerError, match="checksum"):
+        transfer_chunk(broker.project, first["transfer_id"], binding, 0, b"no", finish=True, uploaded=True)
+    row = UploadReservation.objects.get(id=first["transfer_id"])
+    broker.project.refresh_from_db()
+    assert row.state == "aborted" and broker.project.storage_reserved == 0
+    assert StoragePool.objects.get(id=1).reserved == 0
+    assert not (settings.ARTIFACT_ROOT / str(broker.project.id) / ("upload-" + str(row.id))).exists()
+    restarted = begin_transfer(broker.project, sha256(b"ok"), 2, binding, uploaded=True)
+    assert restarted["offset"] == 0 and restarted["transfer_id"] != first["transfer_id"]
+    assert transfer_chunk(broker.project, restarted["transfer_id"], binding, 0, b"ok", finish=True, uploaded=True)["complete"]
+
+
+def test_transfer_hashes_once_and_cached_verification_detects_changes(broker):
+    from compute_relay.control import storage
+    content = b"original bytes"
+    first = begin_transfer(broker.project, sha256(content), len(content), "test")
+    with patch.object(storage, "fingerprint", wraps=storage.fingerprint) as hashed:
+        transfer_chunk(broker.project, first["transfer_id"], "test", 0, content, finish=True)
+        blob = storage.Blob.objects.get(project=broker.project, sha256=sha256(content))
+        storage.verify_blob(blob)
+        storage.verify_blob(blob)
+        assert hashed.call_count == 1
+        blob_path(blob).write_bytes(b"changed! bytes")
+        with pytest.raises(BrokerError, match="verification"):
+            storage.verify_blob(blob)

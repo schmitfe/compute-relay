@@ -1,4 +1,5 @@
 """The authenticated HTTP poll path prioritizes live jobs over setup work."""
+from test_support.unit_test_lease_priority_http import worker_client
 
 import json
 from unittest.mock import patch
@@ -9,11 +10,9 @@ from django.utils import timezone
 
 from compute_relay.control import services
 from compute_relay.control.models import Attempt
-from test_control import broker, budgeted, execution, prepared_job  # noqa: F401
+from test_support.unit_test_control import broker, budgeted, execution, prepared_job
 
 
-def worker_client():
-    return Client(HTTP_AUTHORIZATION="Bearer synthetic-worker-token")
 
 
 def test_pending_cancel_bypasses_old_paused_submissions_and_setup_queues(broker):

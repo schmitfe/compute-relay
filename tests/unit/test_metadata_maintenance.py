@@ -13,7 +13,7 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.maintenance import compact_draft_jobs
 from compute_relay.control.metadata import metadata_usage, retire_metadata
 from compute_relay.control.models import Blob, Job, MetadataUsage
-from test_control import broker, budgeted, execution, prepared_job  # noqa: F401
+from test_support.unit_test_control import broker, budgeted, execution, prepared_job
 
 
 def old(job):
@@ -182,3 +182,13 @@ def test_fresh_locked_child_check_protects_parent_selected_before_child_creation
     assert compact(broker, apply=True, limit=1) == {"candidates": 0, "archived": 0, "skipped": 1}
     parent.refresh_from_db()
     assert parent.state == "prepared" and parent.files.exists()
+
+
+def test_compacted_keys_do_not_exhaust_active_key_quota(broker, settings):
+    from compute_relay.control.metadata import compact_idempotency
+    settings.MAX_PROJECT_IDEMPOTENCY_KEYS = 1
+    action = lambda: ({"ok": True}, 200)
+    services.idempotent(broker.project, "test", "first", {}, action)
+    compact_idempotency(before=timezone.now() + timedelta(seconds=1))
+    assert services.idempotent(broker.project, "test", "second", {}, action)[1] == 200
+    assert services.idempotent(broker.project, "test", "first", {}, action)[0]["error"]["code"] == "IDEMPOTENCY_RETIRED"

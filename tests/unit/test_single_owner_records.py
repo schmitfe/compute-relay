@@ -4,7 +4,7 @@ from django.db import IntegrityError, transaction
 import pytest
 
 from compute_relay.control.models import Environment, ProjectCredential, WorkerIdentity
-from test_management import management
+from test_support.unit_test_management import management
 
 
 @pytest.mark.parametrize("model,field,attribute", [

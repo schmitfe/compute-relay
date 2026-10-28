@@ -21,8 +21,8 @@ from compute_relay.worker.runner import Worker
 from compute_relay.worker.async_runner import AsyncWorker
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.client import JsonClient
-from test_control import broker, budgeted, dispatched, prepared_job
-from test_remote_bundles import LocalFixedTransport, AsyncLocalFixedTransport
+from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job
+from test_support.unit_test_remote_bundles import LocalFixedTransport, AsyncLocalFixedTransport
 
 
 RAW = {"nodes": {"returncode": 0, "stdout": (
@@ -260,3 +260,10 @@ def test_public_snapshots_round_trip_through_official_strict_client(broker, cach
     client.request("GET", "/api/v1/connections")
     c.connection.refresh_from_db()
     assert c.connection.availability_snapshot == snapshot  # Reading does not rewrite cached evidence.
+
+
+@pytest.mark.parametrize("partitions", [[None, "bad", 7], None, "bad"])
+def test_old_malformed_availability_remains_readable(broker, partitions):
+    from compute_relay.control.availability import public_availability
+    broker.connection.availability_snapshot = {"partitions": partitions, "observed_at": 17}
+    assert public_availability(broker.connection)["partitions"] == []

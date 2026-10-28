@@ -1,4 +1,5 @@
 """Explicit workspace transfers through project-owned APIs, never source execution."""
+from test_support.unit_test_workspace import workspace
 
 import argparse
 import base64
@@ -21,24 +22,14 @@ from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Jo
 from compute_relay.control.storage import store_blob, store_uploaded_blob
 from compute_relay import workspace as workspace_module
 from compute_relay.workspace import WorkspaceClient, MAX_SOURCE_BYTES, main
-from test_control import broker, budgeted, execution, prepared_job  # noqa: F401
-from test_project_context import context_live_server  # noqa: F401
+from test_support.unit_test_control import broker, budgeted, execution, prepared_job
+from test_support.unit_test_project_context import context_live_server
 
 
 TOKEN = "cbp_" + "synthetic_workspace_only_" * 2
 PROJECT = str(uuid4())
 
 
-def workspace(path, url="http://127.0.0.1:8768", token=TOKEN):
-    path.mkdir(exist_ok=True)
-    private = path / ".compute-relay"
-    private.mkdir(mode=0o700)
-    (private / "project.key").write_text(token)
-    (private / "project.key").chmod(0o600)
-    (private / "connection.json").write_text(json.dumps({"schema_version": "1.0", "broker_url": url,
-        "workspace_root": str(path)}))
-    (private / "connection.json").chmod(0o600)
-    return path
 
 
 class TransferClient:

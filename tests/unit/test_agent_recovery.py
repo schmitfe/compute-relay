@@ -11,7 +11,7 @@ from django.utils import timezone
 from compute_relay.control import services
 from compute_relay.control.auth import token_hash
 from compute_relay.control.models import Attempt, Project, ProjectCredential
-from test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
+from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
 
 
 def api(broker, token=None):

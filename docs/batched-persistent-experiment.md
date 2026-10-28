@@ -1,8 +1,9 @@
 # Batched status and persistent helper experiment
 
-This work lives on `codex/batched-persistent-helper`. Both switches default off.
-The stable `main` branch remains the comparison baseline. No database migration,
-cluster daemon installation, listening port or new agent tool is required.
+The optional batching and persistent-helper implementation is included here for
+evaluation; both switches default off. Default settings retain the standard path
+as the comparison baseline. No database migration, cluster daemon installation,
+listening port or new agent tool is required.
 
 ## Enable explicitly
 
@@ -166,7 +167,7 @@ settled budgets and queue fairness without relying on wall-clock assertions.
 
 ## Promotion criteria and remaining work
 
-Both options remain off by default, and `main` is unchanged. The tests cover
+Both options remain off by default. The tests cover
 hundreds of admitted jobs; a two-CPU fixture does not establish behavior with
 hundreds of simultaneously executing scientific allocations. Before promotion,
 repeat the comparison on a permitted cluster, vary latency, artifact sizes and

@@ -34,7 +34,7 @@ compute_relay = ["schemas/*.json", "control/templates/broker/*.html", "extension
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "compute_relay.control.test_settings"
-pythonpath = ["src", "tools"]
+pythonpath = ["src", "tools", "tests"]
 testpaths = ["tests"]
 markers = [
   "real_cluster: opt-in operator acceptance, never selected by default",

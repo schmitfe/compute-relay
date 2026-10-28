@@ -1,4 +1,5 @@
 """Permanent corrected regressions for review A01; no external execution."""
+from test_support.unit_test_input_provenance import artifact_input
 from copy import deepcopy
 import base64
 from datetime import timedelta
@@ -13,26 +14,9 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.input_sources import authorize_job_inputs
 from compute_relay.control.models import Artifact, Connection, Environment, Job, ProjectCredential, UploadGrant
 from compute_relay.control.storage import store_blob, store_uploaded_blob
-from test_control import broker, budgeted, execution, prepared_job
+from test_support.unit_test_control import broker, budgeted, execution, prepared_job
 
 
-def artifact_input(context):
-    producer = prepared_job(context)
-    budgeted(context)
-    attempt = execution(context, producer).attempt
-    blob = store_blob(context.project, b"synthetic private artifact\n")
-    artifact = Artifact.objects.create(attempt=attempt, path="private.txt", blob=blob)
-    target = Connection.objects.create(owner=context.owner, worker=context.worker, name="second", backend="fake",
-        configuration={"site_profile": {"automatic_execution_allowed": True}}, revision_sha256="d" * 64)
-    environment = Environment.objects.create(owner=context.owner, connection=target, name="second-python",
-        configuration={"interpreter": "/usr/bin/python3"}, revision_sha256="f" * 64)
-    context.project.connections.add(target)
-    context.project.environments.add(environment)
-    request = deepcopy(producer.request)
-    request["connection_id"] = str(target.id)
-    request["environment"] = {"id": str(environment.id), "revision_sha256": environment.revision_sha256}
-    request["files"] = [{"path": "main.py", "sha256": blob.sha256, "size_bytes": blob.size_bytes, "executable": False}]
-    return artifact, target, request
 
 
 def narrow(context, target, *, artifacts=False):

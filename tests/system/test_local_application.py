@@ -1,4 +1,5 @@
 """A real local command starts, stops and reuses its own SQLite installation."""
+from test_support.system_test_local_application import environment
 
 import http.cookiejar
 import json
@@ -19,11 +20,6 @@ import pytest
 from container_smoke import Client
 
 
-def environment():
-    result = {key: value for key, value in os.environ.items()
-        if not key.startswith("BROKER_") and key not in {"DJANGO_SETTINGS_MODULE", "PYTHONPATH"}}
-    result["PYTHONUNBUFFERED"] = "1"
-    return result
 
 
 def free_port():

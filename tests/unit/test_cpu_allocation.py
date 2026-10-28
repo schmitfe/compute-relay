@@ -10,9 +10,9 @@ from compute_relay.control.resource_api import planned_allocation
 from compute_relay.domain.allocation import allocated_cpus, cpu_allocation_candidate
 from compute_relay.domain.cluster_configuration import validate_cluster_configuration, ClusterConfigurationError
 from compute_relay.domain.resource_limits import effective_resource_limits
-from test_backends import sample, REVISION  # noqa: F401
-from test_control import broker, prepared_job  # noqa: F401
-from test_connector_setup import personal, configuration_fields, lease, reply  # noqa: F401
+from test_support.unit_test_backends import sample, REVISION
+from test_support.unit_test_control import broker, prepared_job
+from test_support.unit_test_connector_setup import personal, configuration_fields, lease, reply
 
 
 def topology(*threads, parameters="CR_CORE_MEMORY"):

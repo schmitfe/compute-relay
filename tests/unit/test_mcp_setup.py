@@ -12,6 +12,7 @@ import warnings
 import pytest
 
 from compute_relay.mcp import setup
+from compute_relay.local_config import broker_url
 
 
 TOKEN = "cbp_" + "synthetic_project_credential_" * 2
@@ -183,7 +184,7 @@ def test_invalid_origin_does_not_create_project(tmp_path, url):
 
 @pytest.mark.parametrize("url", ["http://localhost:8768", "http://[::1]:8768", "http://127.0.0.1:8768", "https://broker.example"])
 def test_loopback_http_and_https_origins_are_accepted(url):
-    assert setup._broker_url(url) == url
+    assert broker_url(url) == url
 
 
 @pytest.mark.parametrize("relative", [".compute-relay/project.key", ".compute-relay/other-private-file", ".codex/config.toml"])

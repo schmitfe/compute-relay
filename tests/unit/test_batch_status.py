@@ -8,7 +8,7 @@ import pytest
 
 from compute_relay.backends.slurm import parse_observation
 from compute_relay.remote.bundles import bundle_source
-from test_remote_bundles import prepared, site  # noqa: F401
+from test_support.unit_test_remote_bundles import prepared, site
 
 
 def namespace():

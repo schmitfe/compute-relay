@@ -6,8 +6,8 @@ import pytest
 
 from compute_relay.control.cluster_setup import RegistrationForm, owned_registrations
 from compute_relay.control.models import ClusterRegistration, User
-from test_management import management, human, form_post
-from test_cluster_setup import registration_data
+from test_support.unit_test_management import management, human, form_post
+from test_support.unit_test_cluster_setup import registration_data
 
 
 @pytest.mark.parametrize("field", ["identity_file", "known_hosts"])

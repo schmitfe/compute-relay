@@ -9,9 +9,9 @@ from compute_relay.control.storage import store_blob, store_uploaded_blob
 from compute_relay.extensions.environments.models import EnvironmentBuild
 from compute_relay.extensions.workflows.models import WorkflowRevision
 from compute_relay.extensions.workflows import services as workflows
-from test_control import broker
-from test_environment_extension import context as environment_context
-from test_input_provenance import artifact_input
+from test_support.unit_test_control import broker
+from test_support.unit_test_environment_extension import context as environment_context
+from test_support.unit_test_input_provenance import artifact_input
 
 
 def wheel_artifact(context):

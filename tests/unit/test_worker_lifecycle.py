@@ -14,7 +14,7 @@ from compute_relay.worker.async_runner import AsyncWorker
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.runner import Worker
-from test_async_worker import configured  # noqa: F401
+from test_support.unit_test_async_worker import configured
 
 
 class InterruptedCollection(BaseException):

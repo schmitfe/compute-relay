@@ -8,7 +8,7 @@ import pytest
 from compute_relay.control import services
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Attempt, ExecutionRequest, Job
-from test_control import broker, budgeted, dispatched, prepared_job, submit_receipt  # noqa: F401
+from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
 
 
 def settle(context, job, *, cpu_seconds):

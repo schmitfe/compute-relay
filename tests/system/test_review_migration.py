@@ -3,7 +3,7 @@
 import subprocess
 import sys
 
-from .test_local_application import environment
+from test_support.system_test_local_application import environment
 
 
 def test_populated_v1_migration_preserves_accounting_and_seals_only_evidenced_sources(tmp_path):

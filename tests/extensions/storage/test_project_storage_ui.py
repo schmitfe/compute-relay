@@ -8,8 +8,8 @@ from django.test import Client
 from compute_relay.control.models import ConnectorTask, Project
 from compute_relay.extensions.storage import services
 from compute_relay.extensions.storage.models import StorageTarget, StorageTargetRegistration
-from test_personal_storage_targets import complete, document, personal, queue, target_path
-from test_storage_control import enroll
+from test_support.extensions_storage_test_personal_storage_targets import complete, document, personal, queue, target_path
+from test_support.extensions_storage_test_storage_control import enroll
 
 
 def human(user, *, csrf=False):

@@ -1,3 +1,4 @@
+from test_support.unit_test_mcp import ClientSpy
 import asyncio
 import base64
 import unittest
@@ -8,21 +9,6 @@ from mcp.server.fastmcp.exceptions import ToolError
 from compute_relay.mcp.facade import ProjectFacade, create_server
 
 
-class ClientSpy:
-    def __init__(self):
-        self.calls = []
-        self.job_id = str(uuid4())
-        self.project_id = str(uuid4())
-
-    def request(self, method, path, body=None, **kwargs):
-        self.calls.append((method, path, body, kwargs))
-        if path == "/api/v1/context":
-            return {"schema_version": "1.0", "project": {"id": self.project_id, "name": "synthetic"}}
-        return {"id": self.job_id}
-
-    def get_bytes(self, path, limit):
-        self.calls.append(("GET_BYTES", path, None, {"limit": limit}))
-        return b"<script>untrusted</script>", "text/html"
 
 
 class FacadeTests(unittest.TestCase):
@@ -113,3 +99,14 @@ class FacadeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_default_execution_key_survives_facade_restart():
+    from compute_relay.mcp.facade import ProjectFacade
+    from test_mcp import ClientSpy
+    client = ClientSpy()
+    ProjectFacade(client, client.project_id).request_execution(client.job_id)
+    ProjectFacade(client, client.project_id).request_execution(client.job_id)
+    assert client.calls[0][3]["idempotency_key"] == client.calls[1][3]["idempotency_key"]
+    ProjectFacade(client, client.project_id).request_execution(client.job_id, "deliberate-repeat")
+    assert client.calls[-1][3]["idempotency_key"] == "deliberate-repeat"

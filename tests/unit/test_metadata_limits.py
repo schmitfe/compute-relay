@@ -8,7 +8,7 @@ from compute_relay.control import services
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.metadata import compact_idempotency, metadata_usage, reserve_metadata
 from compute_relay.control.models import AuditEvent, Blob, IdempotencyRecord, Job, MetadataUsage, Project
-from test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
+from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
 
 
 def test_duplicate_blob_drafts_have_independent_count_and_byte_charges(broker, settings):

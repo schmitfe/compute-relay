@@ -16,7 +16,7 @@ from compute_relay.control.models import (Artifact, Attempt, ClusterCheckConfigu
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.storage import read_blob, store_blob
 from compute_relay.control.urls import urlpatterns as core_urls
-from test_management import management, human, form_post
+from test_support.unit_test_management import management, human, form_post
 
 
 urlpatterns = [*core_urls, path("clusters/<uuid:connection_id>/test/", cluster_checks.check)]

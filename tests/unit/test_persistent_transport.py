@@ -16,7 +16,7 @@ from compute_relay.backends.preparation import helper_source
 from compute_relay.remote.bundles import bundle_source
 from compute_relay.transports.openssh import OpenSSHTransport, TransportError
 from compute_relay.transports.persistent_openssh import PersistentHelperPool, PersistentOpenSSHTransport
-from test_remote_bundles import prepared, site  # noqa: F401
+from test_support.unit_test_remote_bundles import prepared, site
 
 
 @pytest.fixture

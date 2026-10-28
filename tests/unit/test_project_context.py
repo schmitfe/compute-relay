@@ -1,4 +1,5 @@
 """API-key identity discovery and a real stdio client against a disposable broker."""
+from test_support.unit_test_project_context import context_live_server
 
 import asyncio
 import base64
@@ -16,13 +17,9 @@ from compute_relay.control.models import Job, Project, ProjectCredential
 from compute_relay.control.auth import token_hash
 from compute_relay.mcp.facade import ProjectFacade
 from compute_relay.worker.client import ControlError, JsonClient
-from test_control import broker  # noqa: F401
+from test_support.unit_test_control import broker
 
 
-@pytest.fixture
-def context_live_server(settings, request):
-    settings.STATIC_URL = "/static/"
-    return request.getfixturevalue("live_server")
 
 
 def test_context_returns_only_current_keys_project_and_public_metadata(broker):

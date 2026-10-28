@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from compute_relay.control.auth import connection_allowed, token_hash
 from compute_relay.control.models import Connection, ProjectCredential, WorkerIdentity
-from test_management import management, human, form_post, key_data, issued
+from test_support.unit_test_management import management, human, form_post, key_data, issued
 
 
 def foreign_key(context):

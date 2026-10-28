@@ -6,7 +6,7 @@ import os
 import re
 from uuid import UUID, uuid4
 
-from .mcp.setup import _check_path, _ensure_directory, _parent_descriptor
+from .local_filesystem import check_path, ensure_directory, parent_descriptor
 from .workspace import _directory, _digest, _encoded, _logical, _read_published
 
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
@@ -84,11 +84,11 @@ def finish(workspace, *, job_id=None, investigation_id=None, output, resume=Fals
     if len(identifiers) > 128 or len(set(identifiers)) != len(identifiers):
         raise ValueError("Invalid investigation membership")
     destination = workspace.root / output
-    _check_path(destination, directory=True)
+    check_path(destination, directory=True)
     if destination.exists() and not resume:
         raise ValueError("Choose a new manifest directory or use --resume for this export")
-    _ensure_directory(destination.parent, [])
-    with _parent_descriptor(destination) as parent:
+    ensure_directory(destination.parent, [])
+    with parent_descriptor(destination) as parent:
         with _directory(parent, destination.name, create=True) as folder:
             # Bind resumed artifact writes before touching an existing directory.
             plan = {"schema_version": "1.0", "broker_url": workspace.broker_url, "project_id": facade.project_id, "subject": subject}
@@ -104,7 +104,7 @@ def finish(workspace, *, job_id=None, investigation_id=None, output, resume=Fals
                         fingerprint = _digest(_encoded(artifacts))[:16]
                         relative = output + "/" + attempt_id + "/" + fingerprint
                         fetched = workspace.fetch(attempt_id, relative, resume=resume)
-                        with _parent_descriptor(workspace.root / fetched["receipt"]) as receipt_parent:
+                        with parent_descriptor(workspace.root / fetched["receipt"]) as receipt_parent:
                             receipt = json.loads(_read_published(receipt_parent, ".compute-relay-receipt.json", 1024 * 1024))
                         if (receipt.get("attempt_id") != attempt_id or receipt.get("integrity") != "verified"
                                 or receipt.get("files") != artifacts):

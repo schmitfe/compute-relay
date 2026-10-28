@@ -12,7 +12,7 @@ import pytest
 
 from compute_relay.control import services
 from compute_relay.control.models import ApprovalDecision, Attempt, Connection, ExecutionRequest, Job, ProjectCredential
-from test_control import broker, execution, prepared_job
+from test_support.unit_test_control import broker, execution, prepared_job
 
 
 def human(user):
@@ -277,3 +277,19 @@ def test_pages_enable_fragment_polling_without_marking_settings_or_package_as_re
     assert "Your unsent comment is preserved" in review
     assert "event.persisted" in review and "document.hidden" in review
     assert 'redirect: \'error\'' in review and "cache: 'no-store'" in review
+
+
+def test_review_exposes_invisible_characters_and_omitted_files(broker):
+    from compute_relay.control.storage import store_uploaded_blob
+    from compute_relay.control.models import Blob, JobFile
+    job = prepared_job(broker)
+    blob = store_uploaded_blob(broker.project, "print('safe') #\u202eevil\u2066\u200b\ufeff\n".encode())
+    job.files.filter(path="main.py").update(blob=blob)
+    oversized = Blob.objects.create(project=broker.project, sha256="f" * 64, size_bytes=1024 * 1024 + 1)
+    JobFile.objects.create(job=job, path="helper.py", blob=oversized)
+    client = Client();client.force_login(broker.owner)
+    page = client.get(f"/review/{job.id}/")
+    assert page.status_code == 200
+    assert all(f"U+{code}".encode() in page.content for code in ("202E", "2066", "200B", "FEFF"))
+    assert b"Not shown" in page.content and b"1 MiB" in page.content
+    assert "\u202e".encode() not in page.content

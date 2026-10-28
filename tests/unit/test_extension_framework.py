@@ -9,7 +9,7 @@ from compute_relay import extensions
 from compute_relay.control import services
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Job
-from test_control import broker, budgeted, execution, prepared_job
+from test_support.unit_test_control import broker, budgeted, execution, prepared_job
 
 
 @pytest.mark.parametrize("value", ["unknown", "environments,environments", "../storage", "storage:run", []])

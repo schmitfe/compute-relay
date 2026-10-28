@@ -1,4 +1,7 @@
 """Controller fairness, payload bounds and independent batch receipts."""
+from unittest.mock import patch
+from compute_relay.control.errors import BrokerError
+
 
 from datetime import timedelta
 import json
@@ -8,8 +11,8 @@ from django.utils import timezone
 
 from compute_relay.control import services
 from compute_relay.control.models import Attempt
-from test_control import broker, budgeted, execution, prepared_job  # noqa: F401
-from test_lease_priority_http import worker_client
+from test_support.unit_test_control import broker, budgeted, execution, prepared_job
+from test_support.unit_test_lease_priority_http import worker_client
 
 
 def running(attempt, when):
@@ -95,3 +98,42 @@ def test_cancellation_arriving_during_observation_does_not_inherit_poll_backoff(
         "outcome": "observed", "native_identity": lease["native_identity"],
         "observation": {"state": "running", "terminal": False}})
     assert services.lease_work(broker.worker)["lease"]["operation"] == "cancel"
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError(), BrokerError("OBJECT_INTEGRITY", "corrupt", 409),
+    RuntimeError("Unexpected extension failure")])
+def test_bad_first_candidate_does_not_starve_worker(broker, failure):
+    budgeted(broker)
+    broken_job, healthy_job = prepared_job(broker), prepared_job(broker)
+    broken = execution(broker, broken_job).attempt
+    healthy = execution(broker, healthy_job).attempt
+    missing = broken_job.files.get(path="main.py").blob_id
+    original = services.read_blob
+    def read(blob):
+        if blob.id == missing:
+            raise failure
+        return original(blob)
+    # These jobs deliberately share content; make only the first candidate fail.
+    original_lease = services._lease_attempt
+    def lease(attempt, entries, now):
+        if attempt.id == broken.id:
+            with patch.object(services, "read_blob", side_effect=read):
+                return original_lease(attempt, entries, now)
+        return original_lease(attempt, entries, now)
+    with patch.object(services, "_lease_attempt", side_effect=lease):
+        result = services.lease_work(broker.worker)
+    assert result["lease"]["attempt_id"] == str(healthy.id)
+    broken.refresh_from_db()
+    assert broken.error_code and broken.next_poll_at > timezone.now()
+    assert broken.lease_expires_at is None and broken.generation == 0
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_management_lease_does_not_read_inputs(broker, cancel):
+    budgeted(broker)
+    attempt = execution(broker, prepared_job(broker)).attempt
+    Attempt.objects.filter(id=attempt.id).update(dispatch_started=True, native_identity={"job_id": "17"}, cancel_requested=cancel)
+    with patch.object(services, "read_blob", side_effect=FileNotFoundError()):
+        lease = services.lease_work(broker.worker)["lease"]
+    assert lease["operation"] == ("cancel" if cancel else "observe")
+    assert lease["prepared"]["files"] == {}

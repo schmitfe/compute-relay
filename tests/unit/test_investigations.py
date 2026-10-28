@@ -19,8 +19,8 @@ from compute_relay.mcp.facade import ProjectFacade, create_server
 from compute_relay.worker.client import ControlError
 from compute_relay.workspace import WorkspaceClient
 from compute_relay.workspace_completion import finish
-from test_control import broker, budgeted, dispatched, execution, prepared_job, submit_receipt
-from test_workspace import workspace
+from test_support.unit_test_control import broker, budgeted, dispatched, execution, prepared_job, submit_receipt
+from test_support.unit_test_workspace import workspace
 
 
 @pytest.fixture

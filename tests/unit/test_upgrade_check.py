@@ -11,7 +11,7 @@ import pytest
 from compute_relay.backends import prepare
 from compute_relay.local_state import LocalState
 from compute_relay.upgrade_check import inspect_database, run
-from test_backends import sample  # noqa: F401
+from test_support.unit_test_backends import sample
 
 
 def installation(tmp_path, manifests):

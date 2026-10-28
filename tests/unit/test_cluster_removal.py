@@ -15,7 +15,7 @@ from compute_relay.control import services
 from compute_relay.control.auth import token_hash
 from compute_relay.control.models import (Artifact, Attempt, AuditEvent, ClusterRegistration,
     Connection, ConnectorEnrollment, ExecutionRequest, Job, LedgerEntry, User, WorkerIdentity)
-from test_management import management, prepared
+from test_support.unit_test_management import management, prepared
 
 
 urlpatterns = [

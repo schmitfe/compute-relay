@@ -40,9 +40,9 @@ def _password_file(filename):
     from .connector_profiles import _path
     path = _path(filename)
     # Reuse descriptor traversal, without requiring the file's parent to be 0700.
-    from .mcp.setup import _read_regular
+    from .local_filesystem import read_regular
     try:
-        raw = _read_regular(path, private=True)
+        raw = read_regular(path, private=True)
         if raw is None or len(raw) > 16384:
             raise ValueError
         value = raw.decode("utf-8").rstrip("\r\n")

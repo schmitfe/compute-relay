@@ -1,4 +1,5 @@
 """Async owner lanes and durable submission fencing without remote execution."""
+from test_support.unit_test_async_worker import configured
 
 import asyncio
 import base64
@@ -62,27 +63,6 @@ class Backend:
         return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}
 
 
-@pytest.fixture
-def configured(tmp_path):
-    control, backend = Control(), Backend()
-    connection_id, owner_id = str(uuid4()), str(uuid4())
-    connection = {"backend": "fake", "revision_sha256": "c" * 64}
-    journal = Journal(tmp_path / "journal")
-    worker = AsyncWorker(control, {connection_id: connection}, journal, owner_id=owner_id,
-                         backend_factory=lambda _: backend, extensions=[])
-    source = b"raise RuntimeError('must never execute in a connector')\n"
-    request = {"schema_version": "1.0", "project_id": str(uuid4()), "connection_id": connection_id, "name": "async-test",
-        "command": {"interpreter": "python3", "script": "main.py", "arguments": []},
-        "environment": {"id": str(uuid4()), "revision_sha256": "b" * 64},
-        "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},
-        "slurm": {"partition": "debug", "account": "broker"}, "outputs": [],
-        "files": [{"path": "main.py", "sha256": hashlib.sha256(source).hexdigest(), "size_bytes": len(source), "executable": False}]}
-    package = prepare(request, {**request["environment"], "interpreter": "/usr/bin/python3"}, connection, str(uuid4()))
-    files = {"main.py": source, **{path: text.encode() for path, text in package["generated_files"].items()}}
-    lease = {"id": str(uuid4()), "operation": "submit", "attempt_id": str(uuid4()), "generation": 1,
-        "connection_id": connection_id, "native_identity": None, "prepared": {"manifest": package["manifest"],
-        "manifest_sha256": package["manifest_sha256"], "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}}
-    return SimpleNamespace(worker=worker, lease=lease, control=control, backend=backend, journal=journal)
 
 
 def test_cancelled_submission_preserves_intent_and_only_reconciles_on_resume(configured):

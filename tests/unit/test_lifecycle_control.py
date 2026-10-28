@@ -1,4 +1,8 @@
 """Scheduler management remains reachable and accounting survives lease recovery."""
+from unittest.mock import patch
+from django.test import Client
+from test_support.unit_test_control import submit_receipt
+
 
 import base64
 from copy import deepcopy
@@ -13,7 +17,7 @@ from compute_relay.control import services
 from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Attempt, Grant, LedgerEntry, Project, ProjectCredential, WorkerReport
-from test_control import broker, budgeted, dispatched, execution, prepared_job  # noqa: F401
+from test_support.unit_test_control import broker, budgeted, dispatched, execution, prepared_job
 
 
 def another_project(broker):
@@ -345,3 +349,44 @@ def test_continuous_submissions_cannot_starve_overdue_observation_or_older_submi
                 observation={"state": "running", "terminal": False}))
     assert str(waiting.id) in submitted and len(submitted) > 4
     assert observed.count(str(running.id)) >= 2
+
+
+@pytest.mark.parametrize("fields", [
+    {"error_code": None}, {"observation": []}, {"observation": {"accounting": []}},
+    {"observation": {"state": "completed", "terminal": True, "accounting": {"final": True}}},
+])
+def test_invalid_report_is_client_error_and_preserves_lease(broker, fields):
+    import json
+    budgeted(broker)
+    attempt, lease = dispatched(broker, prepared_job(broker))
+    native, lease = submit_receipt(broker, attempt, lease)
+    data = {"lease_id": lease["id"], "generation": lease["generation"], "outcome": "observed",
+        "native_identity": native, "observation": {"state": "running"}, **fields}
+    response = Client(HTTP_AUTHORIZATION="Bearer synthetic-worker-token").post(
+        f"/internal/v1/attempts/{attempt.id}/report", data=json.dumps(data), content_type="application/json")
+    assert response.status_code == 400
+    attempt.refresh_from_db()
+    assert attempt.lease_expires_at is not None and attempt.accounting_state == "reserved"
+
+
+def test_duplicate_report_committed_during_storage_replays_receipt(broker):
+    import base64
+    from compute_relay.control.models import LedgerEntry, WorkerReport
+    budgeted(broker)
+    attempt, lease = dispatched(broker, prepared_job(broker, outputs=["result.txt"]))
+    native, lease = submit_receipt(broker, attempt, lease)
+    data = {"lease_id": lease["id"], "generation": lease["generation"], "outcome": "observed", "native_identity": native,
+        "artifacts": {"result.txt": base64.b64encode(b"done").decode()},
+        "observation": {"state": "completed", "terminal": True,
+            "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}}}
+    responses = []
+    original = services.store_blob
+    def commit_other_report(*args, **kwargs):
+        with patch.object(services, "store_blob", original):
+            responses.append(services.report(broker.worker, attempt.id, data))
+        return original(*args, **kwargs)
+    with patch.object(services, "store_blob", side_effect=commit_other_report):
+        result = services.report(broker.worker, attempt.id, data)
+    assert result == responses[0]
+    assert WorkerReport.objects.filter(lease_id=lease["id"]).count() == 1
+    assert LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1

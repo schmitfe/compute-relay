@@ -10,7 +10,7 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.management import issue_key, rotate_key
 from compute_relay.control.metadata import compact_idempotency, json_size, metadata_usage
 from compute_relay.control.models import IdempotencyRecord, MetadataUsage, ProjectCredential
-from test_control import broker
+from test_support.unit_test_control import broker
 
 
 def data():

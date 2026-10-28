@@ -29,9 +29,9 @@ from compute_relay.worker.async_runner import AsyncWorker
 from compute_relay.worker.transfers import collect_outputs, collect_outputs_async, stage_inputs, stage_inputs_async
 from compute_relay.worker.client import ControlError
 from compute_relay.workspace import WorkspaceClient
-from test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
-from test_workspace import workspace
-from test_backends import sample, ATTEMPT, REVISION
+from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
+from test_support.unit_test_workspace import workspace
+from test_support.unit_test_backends import sample, ATTEMPT, REVISION
 
 
 class HTTP:

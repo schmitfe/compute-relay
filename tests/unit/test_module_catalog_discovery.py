@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from compute_relay.remote import helper
-from test_backends import metadata_module_catalog
+from test_support.unit_test_backends import metadata_module_catalog
 
 
 def system_configuration(monkeypatch, documents):
@@ -390,3 +390,193 @@ def test_site_initializer_candidate_keeps_strict_availability_initializer(metada
     assert m["observed_init_path"] == "/etc/profile.d/z00_lmod.sh" and not m["initializer_verified_on_compute"]
     assert m["availability_init_path"] == "/usr/share/lmod/lmod/init/bash"
     assert ". /usr/share/lmod/lmod/init/bash " in calls[0] and "/site/lmod/9/init/bash" not in calls[0]
+
+
+def test_metadata_module_catalog_never_reads_or_executes_module_files(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    (root / "python3").mkdir()
+    (root / "gcc").mkdir()
+    (root / "python3/3.12.2.lua").write_text("os.execute('must-not-execute')")
+    (root / "gcc/13.2.tcl").write_text("exec must-not-execute")
+    (root / "gcc/12.1").write_text("#%Module\nexec must-not-execute")
+    (root / "julia.lua").write_text("error('must-not-read')")
+    for name in (".modulerc.lua", "modulerc.lua", "aliases.tcl", "default", "README", "notes.txt", "setup.py"):
+        (root / name).write_text("must-not-read")
+    monkeypatch.setattr(helper, "software_command", lambda *_args, **_kwargs: pytest.fail("metadata invoked command"))
+    monkeypatch.setattr(helper, "read_file", lambda *_args, **_kwargs: pytest.fail("metadata read file content"))
+    monkeypatch.setattr(helper, "trusted_module_tree", lambda *_args, **_kwargs: pytest.fail("metadata used availability audit"))
+    # Only initializer metadata is checked; the reference can prefill a recipe.
+    monkeypatch.setattr(helper, "trusted_system_path", lambda *_args, **_kwargs: None)
+    result = helper.software_discovery({"environment_discovery": {"module_inventory_mode": "metadata",
+        "module_paths": [str(root)], "module_init": "/usr/share/lmod/lmod/init/bash", "python_executables": []}})
+    modules = result["modules"]
+    assert modules["status"] == "available"
+    assert modules["available"] == ["gcc/12.1", "gcc/13.2", "julia", "python3/3.12.2"]
+    assert modules["inventory_mode"] == "metadata" and modules["provisional"] is True
+    assert modules["source"] == "configured_module_file_metadata"
+    assert "were not evaluated" in modules["explanation"]
+    assert modules["init_path"] == "/usr/share/lmod/lmod/init/bash"
+    assert modules["initializer_status"] == "metadata_verified"
+
+
+def test_metadata_catalog_skips_symlinks_and_writable_subtrees(metadata_module_catalog, tmp_path):
+    root = metadata_module_catalog
+    (root / "safe.lua").write_text("no reading")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.lua").write_text("must not inspect")
+    (root / "directory_link").symlink_to(outside, target_is_directory=True)
+    (root / "file_link.lua").symlink_to(outside / "private.lua")
+    unsafe = root / "unsafe"
+    unsafe.mkdir()
+    unsafe.chmod(0o777)
+    (unsafe / "injected.lua").write_text("no reading")
+    writable = root / "writable.lua"
+    writable.write_text("no reading")
+    writable.chmod(0o666)
+    result = helper.metadata_module_inventory({"module_paths": [str(root)]})
+    assert result["available"] == ["safe"]
+    assert result["visited_directories"] == 1
+    assert result["skipped"]["symlinks"] == 2
+    assert result["skipped"]["unsafe_permissions"] == 2
+    assert result["partial"] is True and result["warnings"]
+
+
+def test_metadata_root_rejects_symlink_alias_even_when_target_is_readable(metadata_module_catalog, tmp_path):
+    alias = tmp_path / "module-alias"
+    alias.symlink_to(metadata_module_catalog, target_is_directory=True)
+    result = helper.metadata_module_inventory({"module_paths": [str(alias)]})
+    assert result["status"] == "unavailable" and result["module_paths"] == []
+    assert result["roots"][0]["status"] == "unsafe_or_inaccessible"
+
+
+def test_metadata_mode_rejects_writable_ancestor_without_opening_contents(tmp_path):
+    parent = tmp_path / "shared-parent"
+    parent.mkdir()
+    parent.chmod(0o777)
+    root = parent / "modulefiles"
+    root.mkdir(mode=0o755)
+    with pytest.raises(ValueError, match="allows unsupported group/world writes"):
+        helper.open_metadata_module_root(str(root))
+
+
+@pytest.mark.parametrize("options", [
+    {"module_inventory_mode": "metadata"}, {"module_inventory_mode": "metadata", "module_paths": []},
+    {"module_inventory_mode": "shell"}, {"module_inventory_mode": []},
+    {"module_inventory_mode": "metadata", "module_paths": ["relative/modules"]},
+])
+def test_metadata_configuration_requires_an_explicit_bounded_path_list(options):
+    assert helper.software_discovery({"environment_discovery": options})["status"] == "invalid_configuration"
+
+
+def test_default_module_inventory_keeps_availability_audit_and_semantics(monkeypatch):
+    calls = []
+    monkeypatch.setattr(helper, "effective_module_paths", lambda options: (calls.append(options["module_inventory_mode"]) or ([], [])))
+    monkeypatch.setattr(helper, "metadata_module_inventory", lambda *_args: pytest.fail("default unexpectedly became metadata mode"))
+    monkeypatch.setattr(helper, "MODULE_INITIALIZERS", ())
+    result = helper.software_discovery({"environment_discovery": {"python_executables": []}})
+    assert calls == ["availability"]
+    assert result["modules"]["inventory_mode"] == "availability"
+    assert result["modules"]["provisional"] is False
+
+
+def test_metadata_catalog_bounds_names_and_leaves_later_roots_unopened(metadata_module_catalog, tmp_path, monkeypatch):
+    root = metadata_module_catalog
+    for number in range(520):
+        (root / f"module{number}.lua").touch()
+    later = tmp_path / "later-modules"
+    later.mkdir()
+    opened = []
+    real_open = helper.open_metadata_module_root
+
+    def record(path, **kwargs):
+        opened.append(path)
+        return real_open(path, **kwargs)
+
+    monkeypatch.setattr(helper, "open_metadata_module_root", record)
+    result = helper.metadata_module_inventory({"module_paths": [str(root), str(later)]})
+    assert len(result["available"]) == 512
+    assert result["truncated"] is True and result["partial"] is True
+    assert result["roots"][1]["status"] == "not_scanned_limit"
+    assert opened == [str(root)]
+
+
+def test_metadata_catalog_checks_wallclock_inside_directory_iteration(metadata_module_catalog, monkeypatch):
+    root = metadata_module_catalog
+    (root / "a.lua").touch()
+    (root / "b.lua").touch()
+    clock = iter([0, 0, 0, 0, 0, 0, 0, 0, 3])
+    monkeypatch.setattr(helper.time, "monotonic", lambda: next(clock, 3))
+    result = helper.metadata_module_inventory({"module_paths": [str(root)]})
+    assert result["truncated"] is True
+    assert result["visited_entries"] <= 1
+
+
+def test_metadata_catalog_limits_entry_and_directory_counts(metadata_module_catalog):
+    root = metadata_module_catalog
+    # Housekeeping never populates the name set, so the entry bound is exercised.
+    for number in range(4100):
+        (root / f".ignored{number}").touch()
+    result = helper.metadata_module_inventory({"module_paths": [str(root)]})
+    assert result["visited_entries"] <= 4096
+    assert result["truncated"] is True
+
+
+@pytest.mark.parametrize("uid,mode,final,permitted,warned", [
+    (0, 0o1777, False, True, True), (0, 0o775, False, True, True),
+    (0, 0o755, True, True, False), (1000004, 0o755, True, True, False),
+    (0, 0o777, False, False, False), (1000004, 0o775, False, False, False),
+    (1000004, 0o1777, False, False, False), (0, 0o1777, True, False, False),
+    (0, 0o775, True, False, False), (1000004, 0o775, True, False, False),
+])
+def test_metadata_shared_ancestor_exceptions_are_narrow_and_reported(uid, mode, final, permitted, warned):
+    import stat
+    from types import SimpleNamespace
+
+    info = SimpleNamespace(st_uid=uid, st_mode=stat.S_IFDIR | mode)
+    warnings = []
+    if permitted:
+        helper.metadata_module_directory_permissions(info, "/projects", final=final, ancestor_warnings=warnings)
+        assert bool(warnings) is warned
+        if warned:
+            assert warnings[0]["path"] == "/projects"
+            assert (warnings[0]["uid"], warnings[0]["mode"]) == (0, oct(mode))
+    else:
+        with pytest.raises(ValueError):
+            helper.metadata_module_directory_permissions(info, "/projects", final=final, ancestor_warnings=warnings)
+        assert warnings == []
+
+
+def test_availability_mode_does_not_inherit_metadata_sticky_ancestor_exception(monkeypatch):
+    import stat
+    from types import SimpleNamespace
+
+    info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o1777)
+    monkeypatch.setattr(helper.os, "lstat", lambda *_args, **_kwargs: info)
+    monkeypatch.setattr(helper.os.path, "realpath", lambda path: path)
+    with pytest.raises(ValueError, match="root-owned and non-writable"):
+        helper.trusted_system_path("/projects/modulefiles", directory=True)
+
+
+def test_metadata_catalog_bounds_pending_handles_and_directory_depth(metadata_module_catalog):
+    root = metadata_module_catalog
+    for number in range(270):
+        directory = root / f"directory{number}"
+        directory.mkdir()
+        (directory / "version.lua").touch()
+    result = helper.metadata_module_inventory({"module_paths": [str(root)]})
+    assert result["visited_directories"] <= 256
+    assert result["truncated"] is True
+
+
+def test_metadata_shared_ancestor_warning_evidence_is_bounded():
+    import stat
+    from types import SimpleNamespace
+
+    info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o775)
+    warnings = []
+    for number in range(64):
+        helper.metadata_module_directory_permissions(info, f"/shared/{number}", final=False, ancestor_warnings=warnings)
+    with pytest.raises(ValueError, match="warning bound"):
+        helper.metadata_module_directory_permissions(info, "/shared/extra", final=False, ancestor_warnings=warnings)
+    assert len(warnings) == 64

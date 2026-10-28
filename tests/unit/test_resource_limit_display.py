@@ -9,7 +9,7 @@ from django.test import Client
 
 from compute_relay.control.models import Connection
 from compute_relay.control.templatetags.broker_resource_limits import effective_resource_rows
-from test_control import broker, prepared_job
+from test_support.unit_test_control import broker, prepared_job
 
 
 def owner_client(context):

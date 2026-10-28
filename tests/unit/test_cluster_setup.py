@@ -1,4 +1,5 @@
 """Cluster drafts remain inert until personal setup identifies and confirms them."""
+from test_support.unit_test_cluster_setup import registration_data
 
 from unittest.mock import patch
 
@@ -10,12 +11,9 @@ from compute_relay.control.auth import connection_allowed
 from compute_relay.control.cluster_services import lease_discovery, report_discovery
 from compute_relay.control.forms import ProjectForm
 from compute_relay.control.models import ClusterRegistration, Connection, User, WorkerIdentity
-from test_management import management, human, form_post, discovery_report, agent_get, queued_discovery
+from test_support.unit_test_management import management, human, form_post, discovery_report, agent_get, queued_discovery
 
 
-def registration_data(**changes):
-    return {"name": "New science cluster", "backend": "slurm", "host": "fixture.invalid", "user": "fixtureuser",
-        "port": 22, "remote_root": "/fixture/jobs/new-science", **changes}
 
 
 def register(context, **changes):

@@ -13,8 +13,8 @@ from uuid import UUID, uuid4
 from jsonschema import ValidationError
 
 from compute_relay.domain.validation import relative_path, strict_json, validate
-from compute_relay.mcp.setup import (_absolute_path, _broker_url, _check_path, _ensure_directory,
-    _parent_descriptor, _read_regular, _validate_key)
+from compute_relay.local_config import broker_url, validate_key
+from compute_relay.local_filesystem import absolute_path, check_path, ensure_directory, parent_descriptor, read_regular
 from compute_relay.worker.client import ControlError, JsonClient
 from compute_relay.transfer import CHUNK_BYTES, INLINE_BYTES, MAX_FILE_BYTES, MAX_BUNDLE_BYTES, fingerprint
 
@@ -104,28 +104,28 @@ def _write_relative(directory, path, content, *, accept_identical=False):
 
 class WorkspaceClient:
     def __init__(self, directory=".", *, client=None):
-        self.root = _absolute_path(directory)
-        _check_path(self.root, directory=True)
+        self.root = absolute_path(directory)
+        check_path(self.root, directory=True)
         private = self.root / ".compute-relay"
-        _check_path(private, directory=True, private=True)
-        config_bytes = _read_regular(private / "connection.json", private=True)
+        check_path(private, directory=True, private=True)
+        config_bytes = read_regular(private / "connection.json", private=True)
         if config_bytes is None:
             raise ValueError("Initialize this workspace with init-mcp first; existing setups can use --reuse-key.")
         config = strict_json(config_bytes)
         if (not isinstance(config, dict) or set(config) != {"schema_version", "broker_url", "workspace_root"}
                 or config["schema_version"] != "1.0" or config["workspace_root"] != str(self.root)):
             raise ValueError("The saved connection does not belong to this workspace.")
-        self.broker_url = _broker_url(config["broker_url"])
-        key = _read_regular(private / "project.key", private=True)
+        self.broker_url = broker_url(config["broker_url"])
+        key = read_regular(private / "project.key", private=True)
         if key is None:
             raise ValueError("The workspace project key is missing.")
-        token = _validate_key(key.decode().strip())
+        token = validate_key(key.decode().strip())
         self.client = client if client is not None else JsonClient(self.broker_url, token)
 
     def _source(self, name, maximum=MAX_SOURCE_BYTES):
         path = self.root / _logical(name)
-        _check_path(path)
-        with _parent_descriptor(path) as parent:
+        check_path(path)
+        with parent_descriptor(path) as parent:
             descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             with os.fdopen(descriptor, "rb") as stream:
                 before = os.fstat(stream.fileno())
@@ -152,8 +152,8 @@ class WorkspaceClient:
     @contextmanager
     def _open_large_source(self, name):
         path = self.root / _logical(name)
-        _check_path(path)
-        with _parent_descriptor(path) as parent:
+        check_path(path)
+        with parent_descriptor(path) as parent:
             descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             with os.fdopen(descriptor, "rb") as stream:
                 before = os.fstat(stream.fileno())
@@ -249,16 +249,16 @@ class WorkspaceClient:
         identity = _digest(content)
         directory = self.root / ".compute-relay" / "bundles"
         try:
-            _ensure_directory(directory, [])
+            ensure_directory(directory, [])
         except FileExistsError:
             # A simultaneous stage may have created this same private folder.
             if not directory.is_dir():
                 raise
-        _check_path(directory, directory=True, private=True)
+        check_path(directory, directory=True, private=True)
         destination = directory / (identity + ".json")
-        with _parent_descriptor(directory) as parent:
+        with parent_descriptor(directory) as parent:
             os.fsync(parent)
-        with _parent_descriptor(destination) as parent:
+        with parent_descriptor(destination) as parent:
             _write_relative(parent, destination.name, content, accept_identical=True)
         return {"bundle_id": identity, "file_count": len(sources), "size_bytes": total,
                 "uploaded_objects": uploaded, "reused_objects": reused,
@@ -268,9 +268,9 @@ class WorkspaceClient:
         if not isinstance(bundle_id, str) or not re.fullmatch(r"[0-9a-f]{64}", bundle_id):
             raise ValueError("Choose a valid saved bundle identifier.")
         bundle_path = self.root / ".compute-relay/bundles" / (bundle_id + ".json")
-        _check_path(bundle_path, private=True)
+        check_path(bundle_path, private=True)
         try:
-            with _parent_descriptor(bundle_path) as parent:
+            with parent_descriptor(bundle_path) as parent:
                 content = _read_published(parent, bundle_path.name, MAX_SOURCE_BYTES)
         except FileNotFoundError:
             content = None
@@ -318,11 +318,11 @@ class WorkspaceClient:
         if any("/".join(path.split("/")[:index]) in paths for path in paths for index in range(1, len(path.split("/")))):
             raise ValueError("Artifact file and directory paths conflict.")
         destination = self.root / output
-        _check_path(destination, directory=True)
+        check_path(destination, directory=True)
         if destination.exists() and not resume:
             raise ValueError("Choose a new result directory; existing paths are never overwritten.")
-        _ensure_directory(destination.parent, [])
-        with _parent_descriptor(destination) as parent:
+        ensure_directory(destination.parent, [])
+        with parent_descriptor(destination) as parent:
             if not destination.exists():
                 os.mkdir(destination.name, 0o700, dir_fd=parent)
             os.fsync(parent)

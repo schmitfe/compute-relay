@@ -1,4 +1,5 @@
 """Storage extension authorization, project boundaries and cached planning."""
+from test_support.extensions_storage_test_storage_control import enroll
 
 import json
 from datetime import timedelta
@@ -16,8 +17,6 @@ from compute_relay.extensions.storage.models import ProjectStorageBinding, Proje
 from compute_relay.extensions.storage.planning import ROLES
 
 
-def enroll(resources):
-    return services.register_target(resources.owner, resources.connection, "staging-root-0", "Approved data", project=resources.project)
 
 
 def select(resources, target, **changes):

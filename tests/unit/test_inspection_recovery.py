@@ -13,7 +13,7 @@ from compute_relay.control.models import Attempt, ExecutionRequest, Job
 from compute_relay.extensions.environments import inspection, requests
 from compute_relay.extensions.environments.models import EnvironmentInspection
 from compute_relay.worker.client import strict_json
-from test_environment_extension import context
+from test_support.unit_test_environment_extension import context
 
 
 RESOURCES = {"nodes": 1, "cpus": 2, "gpus": 1, "gpu_type": "h200", "memory_mib": 2048, "time_limit_seconds": 120}

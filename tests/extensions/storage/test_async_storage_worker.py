@@ -10,7 +10,7 @@ from compute_relay.extensions.storage import services
 from compute_relay.extensions.storage.remote import REMOTE_SOURCE
 from compute_relay.worker.async_runner import AsyncWorker
 from compute_relay.worker.journal import Journal
-from test_storage_probes import lease, probes, sample
+from test_support.extensions_storage_test_storage_probes import lease, probes, sample
 
 
 class AsyncControl:

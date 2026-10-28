@@ -32,7 +32,7 @@ from compute_relay.remote import helper
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.client import strict_json
 from compute_relay.worker.runner import Worker
-from test_environment_extension import context
+from test_support.unit_test_environment_extension import context
 
 
 class HTTP:

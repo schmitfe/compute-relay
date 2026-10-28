@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 
 from compute_relay.control.models import ClusterRegistration, Connection
-from test_cluster_setup import registration_data
-from test_management import management, human, form_post
+from test_support.unit_test_cluster_setup import registration_data
+from test_support.unit_test_management import management, human, form_post
 
 
 @pytest.mark.parametrize("path", [

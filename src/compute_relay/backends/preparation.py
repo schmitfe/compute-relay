@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 import re
 import shlex
 from typing import Mapping
 from uuid import UUID
+
+import rfc8785
 
 from .environments import EnvironmentProfileError, render_environment
 from compute_relay.domain.allocation import allocated_cpus
@@ -60,7 +61,7 @@ def canonical_json_bytes(value: object) -> bytes:
         raise BackendError("Manifest supports only JSON objects, arrays, strings and integers")
 
     check(value)
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+    return rfc8785.dumps(value)
 
 
 def sha256(data: bytes) -> str:

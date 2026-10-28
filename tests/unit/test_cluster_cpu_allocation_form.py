@@ -9,7 +9,7 @@ from django.template.loader import render_to_string
 import pytest
 
 from compute_relay.control import cluster_configuration as configuration
-from test_cluster_configuration import form_data, snapshot
+from test_support.unit_test_cluster_configuration import form_data, snapshot
 
 
 @pytest.fixture

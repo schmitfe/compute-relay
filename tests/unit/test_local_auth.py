@@ -1,4 +1,6 @@
 """One local owner, ordinary passwords, and explicitly password-free sessions."""
+from test_support.unit_test_control import broker
+
 
 from uuid import uuid4
 
@@ -173,3 +175,13 @@ def test_password_free_configuration_rejects_unfenced_origins(changes):
         "BROKER_LOCAL_OWNER_ID": str(uuid4()), "BROKER_LOCAL_ORIGIN": "http://127.0.0.1:8765", **changes}
     with pytest.raises(ImproperlyConfigured):
         local_auth_configuration(environment)
+
+
+def test_passwordless_loopback_requires_owner_launch_token(broker, settings):
+    settings.BROKER_LOCAL_AUTH_MODE = "none"
+    settings.BROKER_LOCAL_RUNTIME = "1"
+    settings.BROKER_LOCAL_OWNER_ID = broker.owner.id
+    settings.BROKER_LOCAL_ORIGIN = "http://127.0.0.1:8765"
+    client = Client()
+    client.get("/", HTTP_HOST="127.0.0.1:8765", HTTP_ACCEPT="text/html")
+    assert "_auth_user_id" not in client.session

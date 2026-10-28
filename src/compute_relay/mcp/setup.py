@@ -1,18 +1,19 @@
 """Create a private, project-local stdio MCP connection without contacting a broker."""
 
 import getpass
-from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import subprocess
 import sys
 import tomllib
-from urllib.parse import urlsplit
 from uuid import uuid4
 import warnings
+
+from compute_relay.local_config import broker_url as validate_broker_url, validate_key
+from compute_relay.local_filesystem import (MAX_FILE_BYTES, absolute_path, check_path, ensure_directory,
+    parent_descriptor, read_regular)
 
 
 DEFAULT_BROKER_URL = "http://127.0.0.1:8768"
@@ -21,7 +22,6 @@ CONFIG_PATH = Path(".codex/config.toml")
 CLAUDE_CONFIG_PATH = Path(".mcp.json")
 CONNECTION_PATH = Path(".compute-relay/connection.json")
 IGNORE_PATHS = ("/.compute-relay/", "/.compute-relay/project.key", "/.codex/config.toml")
-MAX_FILE_BYTES = 1024 * 1024
 
 
 def register_parser(subparsers):
@@ -37,104 +37,11 @@ def register_parser(subparsers):
     return parser
 
 
-def _broker_url(value):
-    if not isinstance(value, str) or any(char.isspace() or ord(char) < 32 for char in value):
-        raise ValueError("Use a credential-free HTTPS broker origin, or HTTP on loopback.")
-    try:
-        parsed = urlsplit(value)
-        port = parsed.port
-    except ValueError:
-        raise ValueError("Use a broker origin with a valid hostname and port.") from None
-    loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-    if (parsed.scheme not in {"https", "http"} or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None
-            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
-            or (parsed.scheme == "http" and not loopback)
-            or port == 0):
-        raise ValueError("Use a credential-free HTTPS broker origin, or HTTP on loopback.")
-    return value.rstrip("/")
-
-
-def _absolute_path(value):
-    path = Path(value).expanduser()
-    if ".." in path.parts or any(ord(char) < 32 for char in str(path)):
-        raise ValueError("Choose a path without parent traversal or control characters.")
-    return path.absolute()
-
-
-def _check_path(path, *, directory=False, private=False):
-    """Check every existing ancestor, including dangling symbolic links."""
-    current = Path(path.anchor)
-    for component in path.parts[1:]:
-        current /= component
-        try:
-            info = current.lstat()
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError("Symbolic links are not allowed in setup paths.")
-        is_directory = current != path or directory
-        if (is_directory and not stat.S_ISDIR(info.st_mode)) or (not is_directory and not stat.S_ISREG(info.st_mode)):
-            raise ValueError("A setup path has an unexpected file type.")
-        if current == path and private and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077):
-            raise ValueError("Existing private broker files and directories must belong to you and exclude group/other access.")
-
-
-@contextmanager
-def _parent_descriptor(path):
-    """Traverse with no-follow directory descriptors, also during the write itself."""
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path.anchor, flags)
-    try:
-        for component in path.parent.parts[1:]:
-            child = os.open(component, flags, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        yield descriptor
-    finally:
-        os.close(descriptor)
-
-
-def _read_regular(path, *, private=False):
-    _check_path(path, private=private)
-    try:
-        with _parent_descriptor(path) as parent:
-            descriptor = os.open(path.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=parent)
-    except FileNotFoundError:
-        return None
-    with os.fdopen(descriptor, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
-            raise ValueError("Setup files must be ordinary files owned by you, without hard links.")
-        if private and stat.S_IMODE(info.st_mode) & 0o077:
-            raise ValueError("The imported API-key file must exclude group/other access (use chmod 600).")
-        value = stream.read(MAX_FILE_BYTES + 1)
-        if len(value) > MAX_FILE_BYTES:
-            raise ValueError("A setup file exceeds the size limit.")
-        return value
-
-
-def _validate_key(value):
-    if not isinstance(value, str) or not re.fullmatch(r"cbp_[A-Za-z0-9_-]{16,200}", value):
-        raise ValueError("Enter a project API key created in the broker portal, without a Bearer prefix.")
-    return value
-
-
-def _ensure_directory(path, created):
-    if path.is_dir():
-        _check_path(path, directory=True)
-        return
-    _ensure_directory(path.parent, created)
-    with _parent_descriptor(path) as parent:
-        os.mkdir(path.name, mode=0o700, dir_fd=parent)
-    created.append(path)
-
-
 def _write(path, original, content, created):
     """Checked atomic replacement, or exclusive creation of a new private file."""
-    _check_path(path)
+    check_path(path)
     if original is not None:
-        with _parent_descriptor(path) as parent:
+        with parent_descriptor(path) as parent:
             temporary = ".compute-relay-init-" + uuid4().hex
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=parent)
             try:
@@ -142,7 +49,7 @@ def _write(path, original, content, created):
                     stream.write(content)
                     stream.flush()
                     os.fsync(stream.fileno())
-                if _read_regular(path) != original:
+                if read_regular(path) != original:
                     raise ValueError("A setup file changed during initialization; retry after reviewing it.")
                 mode = stat.S_IMODE(os.stat(path.name, dir_fd=parent, follow_symlinks=False).st_mode) & 0o777
                 os.chmod(temporary, mode, dir_fd=parent, follow_symlinks=False)
@@ -154,7 +61,7 @@ def _write(path, original, content, created):
                     pass
         return
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    with _parent_descriptor(path) as parent:
+    with parent_descriptor(path) as parent:
         descriptor = os.open(path.name, flags, 0o600, dir_fd=parent)
     created.append(path)
     with os.fdopen(descriptor, "wb") as stream:
@@ -257,16 +164,16 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
     if client not in {"codex", "claude", "both"}:
         raise ValueError("Choose codex, claude or both for the project client.")
     clients = ("codex", "claude") if client == "both" else (client,)
-    project = _absolute_path(directory)
-    broker_url = _broker_url(broker_url)
-    _check_path(project, directory=True)
-    _check_path(project / ".compute-relay", directory=True, private=True)
+    project = absolute_path(directory)
+    broker_url = validate_broker_url(broker_url)
+    check_path(project, directory=True)
+    check_path(project / ".compute-relay", directory=True, private=True)
     key_path, ignore_path = project / KEY_PATH, project / ".gitignore"
     for path in (key_path, ignore_path, project / CONNECTION_PATH):
-        _check_path(path)
+        check_path(path)
     if key_path.exists() and not reuse_key:
         raise ValueError("This project already has a broker API key; existing keys are never overwritten.")
-    interpreter = str(_absolute_path(python or sys.executable))
+    interpreter = str(absolute_path(python or sys.executable))
     server = {"command": interpreter, "args": ["-m", "compute_relay.mcp"],
               "env": {"BROKER_CONTROL_URL": broker_url, "BROKER_PROJECT_TOKEN_FILE": str(key_path)}}
     changes = []
@@ -274,8 +181,8 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
     for selected in clients:
         relative = CONFIG_PATH if selected == "codex" else CLAUDE_CONFIG_PATH
         path = project / relative
-        _check_path(path)
-        before = _read_regular(path)
+        check_path(path)
+        before = read_regular(path)
         after = _configuration(selected, before, server if selected == "codex" else {"type": "stdio", **server}, reuse_key)
         changes.append((path, before, after))
         private_paths.append(relative)
@@ -283,7 +190,7 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
         # Both clients share one credential. Changing the selected client must
         # never send that key to another origin configured for the same file.
         for selected, relative in (("codex", CONFIG_PATH), ("claude", CLAUDE_CONFIG_PATH)):
-            before = _read_regular(project / relative)
+            before = read_regular(project / relative)
             if before is None:
                 continue
             if selected == "codex":
@@ -300,13 +207,13 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
                     and prior_env.get("BROKER_CONTROL_URL") != broker_url):
                 raise ValueError("The existing project's API key is configured for a different broker origin. Reuse it only with that broker URL.")
     metadata = {"schema_version": "1.0", "broker_url": broker_url, "workspace_root": str(project)}
-    metadata_before = _read_regular(project / CONNECTION_PATH, private=True)
+    metadata_before = read_regular(project / CONNECTION_PATH, private=True)
     if metadata_before is not None and _json_document(metadata_before, "broker workspace metadata") != metadata:
         raise ValueError("The existing broker workspace metadata belongs to another location or broker; review it before initializing.")
     changes.append((project / CONNECTION_PATH, metadata_before, metadata_before or (json.dumps(metadata, indent=2) + "\n").encode()))
     from .workflow import USAGE_PATH, usage_guide
     usage_path = project / USAGE_PATH
-    usage_before = _read_regular(usage_path)
+    usage_before = read_regular(usage_path)
     usage_after = usage_guide(project, interpreter)
     if usage_before is not None and usage_before != usage_after:
         raise ValueError("The existing local helper guide differs; initialization never overwrites a user guide.")
@@ -317,16 +224,16 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
         for selected in clients:
             skill_relative, instruction_relative = CLIENTS[selected]
             path = project / skill_relative
-            before = _read_regular(path)
+            before = read_regular(path)
             if before is not None and before != source:
                 raise ValueError("An existing compute skill differs; initialization never overwrites a skill.")
             if before is None:
                 private_paths.append(skill_relative)
             changes.append((path, before, source))
             instructions = project / instruction_relative
-            before = _read_regular(instructions)
+            before = read_regular(instructions)
             changes.append((instructions, before, _workflow_instructions(before, selected)))
-    ignore_before = _read_regular(ignore_path)
+    ignore_before = read_regular(ignore_path)
     ignore_text = (ignore_before or b"").decode("utf-8")
     ignore_paths = ["/.compute-relay/", "/.compute-relay/project.key",
                     *["/" + (CONFIG_PATH if selected == "codex" else CLAUDE_CONFIG_PATH).as_posix() for selected in clients]]
@@ -339,12 +246,12 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
     if key_file is not None and api_key is not None:
         raise ValueError("Choose a private key file or an interactive API key, not both.")
     if reuse_key:
-        imported = _read_regular(key_path, private=True)
+        imported = read_regular(key_path, private=True)
         if imported is None:
             raise ValueError("This project has no existing private API key to reuse.")
         api_key = imported.decode("utf-8").strip()
     elif key_file is not None:
-        imported = _read_regular(_absolute_path(key_file), private=True)
+        imported = read_regular(absolute_path(key_file), private=True)
         if imported is None:
             raise ValueError("The API-key import file does not exist.")
         api_key = imported.decode("utf-8").strip()
@@ -352,13 +259,13 @@ def initialize(directory=".", *, broker_url=DEFAULT_BROKER_URL, api_key=None, ke
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
             api_key = getpass.getpass("Project API key (hidden; created in the broker portal): ").strip()
-    api_key = _validate_key(api_key)
+    api_key = validate_key(api_key)
     created, modified = [], []
     try:
-        _ensure_directory(project, created)
-        _ensure_directory(key_path.parent, created)
+        ensure_directory(project, created)
+        ensure_directory(key_path.parent, created)
         for path, _before, _after in changes:
-            _ensure_directory(path.parent, created)
+            ensure_directory(path.parent, created)
         # Install exclusions before a credential can appear in the project directory.
         for path, before, after in [(ignore_path, ignore_before, ignore_after), *changes]:
             if before != after:
