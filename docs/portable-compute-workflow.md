@@ -24,7 +24,7 @@ Pass the same `--broker-url https://broker.example.org` used at initialization
 when upgrading a remote setup. The default remains loopback port 8768. Keys are
 entered through a hidden terminal prompt, stored in a private ignored file, and
 never embedded in client configurations or skill content. No project UUID is
-needed. See [setup details](mcp-setup.md) for preservation, conflict and rollback
+needed. See [setup details](local-client-setup.md) for preservation, conflict and rollback
 behavior.
 
 | Client | Generated project configuration | Optional skill |
@@ -164,26 +164,10 @@ recovery, aggregate ledger accounting and scope closeout. See
 
 ## Remaining efficiency work
 
-The feedback is separated into these follow-up units so it does not become a
-client-specific rewrite or weaken admission controls:
-
-1. **Explainable placement plan.** Add a bounded local capability report produced
-   where code actually runs, a workload estimate with uncertainty, and a
-   deterministic recommendation. Distinguish a sandbox, laptop and broker host.
-   The initial skill already asks for local pilots and justified local/hybrid/
-   cluster placement, but no enforced placement planner exists yet.
-2. **Enforced investigation sub-budgets.** Investigation plan limits currently
-   guide agents and flag exhaustion. Any future hard cap must reserve under the
-   same project transaction and preserve outstanding uncertain reservations.
-3. **Multi-job progress.** Job and investigation waits are implemented; richer
-   progress still needs structured, rate-limited, allowlisted observations.
-4. **Larger summary pagination.** Per-job completion paginates attempts and
-   bounded groups expose completion summaries. Further response-size optimization
-   must preserve explicit detail access and original evidence.
-5. **Optional large-data transport and packed environments.** Keep site-specific
-   storage/migration mechanisms outside core submission, configurable for blocked
-   ports and filesystem byte/inode quotas. Never infer a quota guarantee from
-   advisory free-space information.
+There is no client-specific implementation backlog. Conditional improvements
+and their priority are tracked in the single [roadmap](roadmap.md); current
+placement advice, investigation limits and response bounds remain advisory and
+bounded as documented here.
 
 Acceptance should run the same scientific prompt and assertions through each
 client: local derivation/small test, hybrid pilot/sweep, cluster multi-stage

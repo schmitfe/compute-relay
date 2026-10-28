@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Compute Relay</title>
+  <desc id="desc">An AI agent sends a reviewed job to a Slurm server rack.</desc>
+  <rect width="160" height="160" rx="34" fill="#12233f"/>
+  <path d="M49 78h17m28 0h9" fill="none" stroke="#63e6c6" stroke-linecap="round" stroke-width="5"/>
+  <path d="m62 72 7 6-7 6m34-12 7 6-7 6" fill="none" stroke="#63e6c6" stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+  <circle cx="32" cy="58" r="12" fill="#d9f7ff"/>
+  <path d="M13 112v-8c0-13 8-22 19-22s19 9 19 22v8" fill="#d9f7ff"/>
+  <circle cx="28" cy="58" r="1.8" fill="#12233f"/>
+  <circle cx="36" cy="58" r="1.8" fill="#12233f"/>
+  <path d="M29 64q3 3 6 0" fill="none" stroke="#12233f" stroke-linecap="round" stroke-width="1.7"/>
+  <rect x="67" y="61" width="27" height="34" rx="5" fill="#f4f8ff"/>
+  <path d="M74 72h13M74 79h13M74 86h8" fill="none" stroke="#6c7c9a" stroke-linecap="round" stroke-width="2.5"/>
+  <rect x="108" y="38" width="39" height="84" rx="7" fill="#e9f0fb"/>
+  <rect x="114" y="46" width="27" height="19" rx="3" fill="#253e62"/>
+  <rect x="114" y="70" width="27" height="19" rx="3" fill="#253e62"/>
+  <rect x="114" y="94" width="27" height="19" rx="3" fill="#253e62"/>
+  <circle cx="120" cy="55.5" r="2.4" fill="#63e6c6"/>
+  <circle cx="120" cy="79.5" r="2.4" fill="#63e6c6"/>
+  <circle cx="120" cy="103.5" r="2.4" fill="#63e6c6"/>
+  <path d="M127 55.5h9m-9 24h9m-9 24h9" stroke="#90a6c4" stroke-linecap="round" stroke-width="2.2"/>
+</svg>

@@ -58,10 +58,9 @@ quota capabilities.
 The plugin also validates an optional `storage_roots` metadata contract for a
 future generic worker metadata extension: each entry has an `alias`, canonical
 absolute `path`, supported `roles`, optional `filesystem_id`, and restricted
-capabilities (`visibility`, `formats`, `quota_reporting`). Current core profile
-publication does not yet advertise that optional field. Do not broaden SSH roots
-just to enable unrelated storage: a protected storage metadata hook is the next
-integration step.
+capabilities (`visibility`, `formats`, `quota_reporting`). Current core profile publication does not advertise that optional field. Do not
+broaden SSH roots to enable unrelated storage. Any worker metadata integration
+is tracked in the [roadmap](roadmap.md).
 
 Targets bind their project, exact worker profile fingerprint and connection revision.
 Changing those bindings makes old targets unavailable for new plans. Enroll the
@@ -219,9 +218,9 @@ wire contract and otherwise fail closed to unavailable. The reported identity
 combines the device and filesystem IDs; without an operator-pinned expected
 identity it remains explicitly unverified. Current staging-prefix compatibility
 metadata has no identity pin, so a successful reading alone does not establish
-that the intended NAS is mounted. User/group/project quota adapters remain
-site-specific future work; global free space does not establish a user's
-remaining quota. The fixed probe always reports native quota as unknown.
+that the intended NAS is mounted. The fixed probe always reports native quota as unknown; global free space does
+not establish a user's remaining quota. Add a site-specific quota adapter only
+when a deployment requires one; see the [roadmap](roadmap.md).
 
 Default health policy warns below the greater of 10% or 1 TiB free, stops planned
 new growth below 5% or 500 GiB, and marks emergency pressure below 2% or 200 GiB.
@@ -232,25 +231,19 @@ operator-tunable starting values, not universal storage guarantees. No job
 dispatch gate is connected in this implementation.
 
 `reserve_estimate` / `release_estimate` provide an internal, idempotent advisory
-ledger for future integration. No agent endpoint creates these records. A caller
-must prove its actual write path is derived from the selected target first. In
-particular, the current environment-build attempt directory must not be charged
-to an unrelated environment location selected in this UI. Shared remote Unix
-UIDs and external writes remain outside the broker's isolation/enforcement.
+ledger. No agent endpoint creates these records. A caller must prove its actual
+write path is derived from the selected target first; environment builds must
+not charge an unrelated selected location. Shared remote Unix UIDs and external
+writes remain outside the broker's isolation/enforcement. See the
+[roadmap](roadmap.md) for storage integration work.
 
-## Further implementation
+## Current limits
 
-Wire job write-path derivation before treating locations as execution
-destinations. Add authenticated streaming transfer and
-explicit storage quotas appropriate for large scientific package/data objects.
-On inode-limited PFS, an operator-verified read-only SIF/SquashFS execution profile
-can retain environments as single files while builds use node-local scratch.
-Archives alone do not make virtual environments relocatable, prevent expanded
-inode use, or protect against decompression bombs. Safe extraction, packed-image
-builds, retention policies, pinned-object garbage collection, and storage secret
-profiles remain future features. Changing an object's mode does not make it
-immutable against its owning remote UID. A read-only execution mount also does
-not prevent that UID from modifying an image through another writable path.
+No storage target is a job destination until its write path is derived and
+authorized. Large-data transfer, enforced quota adapters, packed images,
+retention and garbage collection are not implemented; see the
+[roadmap](roadmap.md). Archives and file permissions do not make data immutable
+against the owning remote UID.
 
 ## Disposable acceptance test
 

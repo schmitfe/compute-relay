@@ -143,7 +143,7 @@ home directory. Missing catalog entries mean undiscovered, not necessarily
 unavailable.
 
 In a cluster's **Environments** page, save an immutable cluster-bound recipe.
-Choose module names from the searchable catalog or enter exact names in order. Use **Inspect selection** with a running personal connector to populate Python and existing Conda/Poetry/venv dropdowns. Conda and virtual-environment recipes can retain module loads; manual paths remain available. See [Python environments](python-environments.md) for discovery, trust boundaries and agent build requests.
+Choose module names from the searchable catalog or enter exact names in order. Use **Inspect selection** with a running personal connector to populate Python and existing Conda/Poetry/venv dropdowns. Conda and virtual-environment recipes can retain module loads; manual paths remain available. See [Cluster environments](environment-builds.md) for discovery, trust boundaries and agent build requests.
 Projects must grant that exact recipe; identical paths on another cluster do not
 substitute for its connection binding.
 

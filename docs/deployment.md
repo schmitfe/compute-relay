@@ -157,7 +157,7 @@ database/object-store backup together. Do not run an older binary against a
 migrated database or restore only the database while keeping a different object
 store. A backup predating cluster submissions cannot establish that those jobs
 never ran; reconcile them before reopening admission. See the
-[review-fix notes](review-fixes-2026-10-24.md) for compatibility and test coverage.
+the [test guide](testing.md) for compatibility and recovery coverage.
 
 ## Inspect and compact local metadata
 

@@ -1,4 +1,4 @@
-# Optional reusable environment builds
+# Cluster environments
 
 The `environments` extension provides one implemented builder: a Python virtual environment created as an ordinary scheduled Slurm job. A recipe can contain an empty standard-library closure or uploaded wheels with exact distribution versions and SHA-256 hashes. Conda, micromamba and Poetry builders are rejected explicitly. Existing manually enrolled recipes for those managers remain core functionality; this extension does not install them.
 
@@ -89,7 +89,13 @@ Core `WorkerReport.extension_data` durably retains the finalization metadata bef
 
 Byte/file estimates, `statvfs` headroom checks and timestamped measured bytes/files are advisory planning information. They are not an operating-system quota, a concurrent storage reservation, exact allocated filesystem blocks, or a guarantee that a shared NAS cannot fill during installation. A build can consume space before its post-install cap check fails. Operators should set conservative policy limits and reserve headroom for institutional services outside this broker.
 
-The implemented prefix is under the protected attempt staging root. It does not yet route to an enrolled environment storage target, claim that an unrelated selected target reserved its space, or use the optional storage extension's reservations. Retain this attempt directory and the trusted bootstrap runtime for as long as jobs use its environment. Automatic cleanup, reference-counted leases, deletion, dependency repair, packed/relocatable archives, node-local staging, Apptainer images and migration across storage roots are future work. Python venv prefixes generally cannot be assumed relocatable. Conda/micromamba/Poetry builds need separate tested lock/source validation and validation receipts before being enabled.
+The implemented prefix is under the protected attempt staging root. It is not
+routed through an enrolled environment storage target and does not use the
+optional storage extension's reservations. Retain the prefix and trusted
+bootstrap runtime for as long as jobs use the environment. There is no automatic
+cleanup, repair or cross-root migration. Python venv prefixes generally cannot
+be assumed relocatable. Other package managers need tested lock/source
+validation before builds are enabled; see the [roadmap](roadmap.md).
 
 The test suite verifies renderer purity, pinned wheel validation, ordinary approvals and budgets/caps, generic-route and dispatch fencing, explicit/automatic permission, conservative cache reuse, fake/failed/stale/mismatched publication denial, durable metadata recovery, typed MCP tools, and a synthetic metadata finalizer whose sentinel interpreter would reveal accidental execution. A separate MCP integration test runs the exact first-party inventory/build scripts in disposable compute directories, installs real fixture wheels, updates version 1 to version 2 while preserving version 1, and detects changed package metadata. It does not execute an installer inside control or a credential worker. Actual Slurm acceptance is a separate disposable-cluster test.
 
@@ -106,3 +112,104 @@ BROKER_TEST_PORT=18767 docker compose -p cb-environment-acceptance -f deploy/com
 ```
 
 The overlay enables `environments` for the fixture and mounts the test client read-only. It passes `--module-bootstrap` to build from `fixture-python/1.0` and asserts that module remains loaded in the second job. The first command also starts the disposable Slurm dependency; all installer/interpreter execution remains on its compute job. This empty closure deliberately does not require pip bootstrap. The default pinned target matches the Debian Bookworm fixture (`linux-x86_64`, Python `3.11`); on another architecture, explicitly pass the fixture target options to the smoke client. The cleanup command applies only to that named synthetic Compose project. A successful unit test or Compose configuration check is not evidence that this native acceptance has run; record the actual smoke JSON and final accounting separately.
+
+## Cluster recipes and inspection
+
+Open **Clusters → your cluster → Environments → Add environment**. Recipes belong
+to one cluster connection (including its SSH account), and projects explicitly
+grant the recipes they may execute. Registering the same host under another
+account therefore gives it its own observations and recipes.
+
+1. Choose **Existing Python**, **Environment Modules / Lmod**, **Conda / Anaconda /
+   Miniforge**, **Existing Poetry virtual environment**, or **Existing Python
+   virtual environment**.
+2. Select exact modules from that cluster's saved catalog, or enter exact names
+   manually in load order. Selecting modules while using the default system
+   recipe automatically selects Modules/Lmod and resolves the default interpreter
+   through the loaded PATH. Conda, Poetry and venv recipes can retain these module
+   loads, for example a Miniforge module or the compiler/Python providing runtime
+   libraries. Module initialization stays optional and uses the cluster-provided
+   command by default.
+3. Keep the personal connector running and press **Inspect selection**. This is
+   an explicit human action, with CSRF and current connection-revision checks.
+   The updated connector must advertise `personal_environments_v1`; restart it
+   after upgrading the package. Merely opening or saving the page does not run
+   discovery commands.
+4. Select **Detected Python** or **Detected environment** from the returned
+   dropdowns. A Conda prefix fills its interpreter, prefix and Conda executable.
+   Alternatively choose the manual option and enter existing absolute paths.
+   Changing selected modules requires a new inspection before reusing detected
+   paths. Saving creates an immutable recipe; grant it in project settings.
+
+Inspection runs a fixed, bounded program through the existing authenticated SSH
+session. It uses the remote login shell, loads only the selected modules, resolves
+Python/Conda/Poetry paths, and uses executable/file metadata instead of executing
+discovered Python interpreters. Where Conda is available it runs
+`conda info --envs --json` with plugins/config disabled and an isolated HOME;
+bounded metadata from the user's `.conda/environments.txt` also contributes
+prefixes. Existing Poetry environments are observed beneath the standard
+`~/.cache/pypoetry/virtualenvs` directory; custom Poetry locations can be entered
+manually. It does not run Poetry in a project or install software on a login node.
+
+Results carry a timestamp, belong to the requesting human and cluster revision,
+and are **login-node observations, not compute-node validation**. A cluster test
+or normal scheduled job verifies compute-node availability. Missing paths,
+truncated results or unusual site setups can still be configured manually.
+Conda activation hooks run later inside the authorized compute job, through
+`conda run --prefix`; Poetry recipes use their existing venv interpreter directly.
+
+### Agents requesting a new environment
+
+The bundled optional environment-build extension already exposes typed MCP tools
+for this workflow, identically to compatible OpenAI and Claude MCP clients:
+
+1. A human grants the base recipe to the project, enables environment builds in
+   its environment-build policy, and grants the agent key `environments:build`
+   plus the normal job scopes. Source uploads also need `objects:write`.
+2. The agent calls `get_environment_build_policy`. Its response includes the
+   approved bootstrap recipe references, cluster connection IDs and configurations,
+   supported managers, target Python/platform and resource/storage limits.
+3. The agent checks `get_environment_inventory` for the actual Python version,
+   package versions and observation time. `inspect_environment` schedules a
+   bounded probe when this is missing or needs refreshing; it returns an existing
+   pending probe when resumed. The registered environment name is descriptive.
+   Omitted resources retain a pending probe's saved request. Sole configured
+   partition, account and QOS choices are filled even when `slurm` supplies only
+   some fields; choose ambiguous options from `list_compute_targets`. A failed
+   preparation stays a draft. Resume it with `inspect_environment`, supplying
+   corrected resources or scheduler options and a new idempotency key when the
+   arguments change. Corrections create an immutable job revision before an
+   execution request exists, retaining the original job in its history. Generated
+   probe inputs cannot be revised through the ordinary `revise_job` upload path.
+   Once execution is requested, retries reuse it; poll inventory or cancel the
+   existing job before requesting different settings with a new key.
+4. The agent can call `request_environment_packages` with uploaded pinned wheel
+   descriptors. This creates, prepares and requests a normal build. For a managed
+   environment, the same tool creates an updated immutable revision, preserving
+   the original prefix and retaining pinned packages except names explicitly
+   replaced. The complete dependency closure must be provided; no package-name
+   resolver is included. Alternatively `create_environment_build` accepts
+   a pinned `venv` recipe using
+   an approved system or module-provided Python. It can request a standard-library
+   environment or a hash-pinned uploaded-wheel closure.
+5. For the granular recipe API, `prepare_environment_build` creates a normal reviewable job package.
+   `request_environment_build` follows the project's approval/budget policy and
+   consumes its ordinary compute allowance and submission slot. Installation and
+   verification run in the scheduled compute job.
+6. `get_environment_build` returns status and a ready environment reference after
+   settled accounting and receipt verification. If the administrator enabled
+   `auto_permit_builds`, a complete verified runtime inventory and current key
+   authority allow ordinary jobs to use the revision automatically. Otherwise
+   the human explicitly permits it. Compute review/budget rules still apply.
+
+Built environments include their actual runtime inventory in the immutable
+receipt. Later compute-node inspection can flag package/version drift from that
+receipt. Python is the only supported build language. Other languages are
+tracked in the [roadmap](roadmap.md).
+
+A venv built from module Python retains the base module names, module paths and
+optional initializer when reused. Retain its prefix and base runtime on that
+cluster. Existing Conda/Poetry environments are selectable, but installation
+builders are unsupported. See the [roadmap](roadmap.md) before proposing them.
+
+The fixed Conda query follows the [official Conda info interface](https://docs.conda.io/projects/conda/en/stable/commands/info.html). The standard Poetry cache and prefix behavior follow [Poetry configuration](https://python-poetry.org/docs/configuration/).

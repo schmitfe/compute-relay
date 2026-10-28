@@ -20,8 +20,8 @@ violated boundary, with a minimal synthetic reproduction. Do not probe real
 clusters, access another person's data, launch jobs or extract live secrets
 without the operator's explicit authorization.
 
-The [2026-10-24 fix notes](docs/review-fixes-2026-10-24.md) document the integrated
-authorization, recovery and maintainability changes and their validation scope.
-They are not a claim of a complete external security audit. Host-administrator
-or Docker-daemon access, same-account credential access, and hostile jobs sharing
-a remote cluster UID remain outside the isolation the local package provides.
+The automated security and recovery checks are described in
+[testing guidance](docs/testing.md). They are not a complete external security
+audit. Host-administrator or Docker-daemon access, same-account credential
+access, and hostile jobs sharing a remote cluster UID remain outside the
+isolation the local package provides.

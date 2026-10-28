@@ -1,8 +1,9 @@
 # Contributing
 
-Start with [implemented runtime scope](docs/runtime.md),
-[implementation milestones](docs/implementation.md),
-[decision records](docs/adr/README.md), and [the security model](docs/security.md).
+Start with the [documentation guide](docs/README.md),
+[implemented runtime scope](docs/runtime.md), [decision records](docs/adr/README.md),
+and [the security model](docs/security.md). Accepted open work is listed in
+[the roadmap](docs/roadmap.md).
 Preserve the distinction between current behavior and target requirements.
 
 This is a development alpha. Changes should identify concrete behavior, its

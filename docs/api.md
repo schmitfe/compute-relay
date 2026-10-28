@@ -1,6 +1,6 @@
 # API and implementation contracts
 
-This is the target API contract, including future management endpoints and protocol limits. The [runtime guide](runtime.md) lists the implemented alpha endpoints and its narrower upload/storage limits. OpenAPI generation, request IDs, and the complete administration API remain planned.
+This is a target contract, not an inventory of shipped routes. The [runtime guide](runtime.md) is authoritative for implemented endpoints and limits. Optional API expansion is listed in the [roadmap](roadmap.md).
 
 ## Versioning and authorization
 

@@ -186,5 +186,5 @@ tables, scopes and lifecycle hooks remain separate from core admission:
   budget and submission limits; see [workflows](workflows.md).
 
 Direct cluster-to-client artifact transfer, packed environment migration, native
-arrays and alternate schedulers remain planned. The local process/account
-boundary and same-UID cluster limits are described in [security](security.md).
+arrays and alternate schedulers are unsupported; see the [roadmap](roadmap.md).
+The local process/account boundary and same-UID cluster limits are described in [security](security.md).

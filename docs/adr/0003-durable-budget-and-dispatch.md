@@ -1,6 +1,6 @@
 # Durable budgets and dispatch
 
-Status: proposed. Date: 2026-10-21.
+Status: accepted. Date: 2026-10-21.
 
 Concurrent agents, queued jobs and connection loss make a read-then-decrement balance unsafe. Slurm submission cannot be atomically committed with a local database record.
 

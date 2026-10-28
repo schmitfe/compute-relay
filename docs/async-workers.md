@@ -50,7 +50,8 @@ identity checks still apply.
 
 The synchronous runner remains a lower-level developer/test implementation.
 It is not required to run the local package's bundled capabilities. This
-release supports Slurm; alternate schedulers remain planned.
+release supports Slurm. Other schedulers are unsupported; see the
+[roadmap](roadmap.md) before adding one.
 
 ## Bounds and durable recovery
 

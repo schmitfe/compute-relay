@@ -1,6 +1,6 @@
 # First release execution scope
 
-Status: proposed. Date: 2026-10-21.
+Status: accepted. Date: 2026-10-21.
 
 Arrays, automatic requeue, elastic allocations and persistent worker pools can make both review and resource accounting ambiguous. The first release must establish a small dependable lifecycle on the two existing clusters.
 
