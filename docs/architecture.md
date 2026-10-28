@@ -1,9 +1,7 @@
 # Compute Relay architecture
 
-This describes the local package and its execution boundaries. See [runtime](runtime.md)
+This describes the package boundaries and execution flow. See [runtime](runtime.md)
 for supported behavior and [installation](deployment.md) for startup and recovery.
-The prior hosted/multi-user design is archived on `codex/archive-multi-user-server`
-at `520effc`.
 
 ## Local scope
 
@@ -39,8 +37,7 @@ The launcher supervises the web service and saved connectors. SSH passphrase and
 MFA prompts remain in its terminal and are serialized. Connectors use scoped
 HTTP credentials and their own durable journals rather than accessing controller
 tables directly. The official MCP stdio process has a project credential; it
-receives no SSH key or MFA response. No Redis, Celery, directory service or
-separate database is required.
+receives no SSH key or MFA response.
 
 ## Backend registration and remote components
 

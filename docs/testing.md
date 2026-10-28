@@ -1,8 +1,8 @@
 # Testing the local package
 
-Default checks use SQLite, temporary directories and synthetic identities. They
-do not require Docker, a database server, LDAP, institutional connectivity or a
-real cluster. Run from a source checkout with Python 3.12 or 3.13:
+Default checks use temporary directories and synthetic identities. They do
+not connect to an institutional cluster. Run from a source checkout with Python
+3.12 or 3.13:
 
 ```sh
 python -m pip install -c requirements.lock '.[test]'
@@ -42,11 +42,10 @@ settlement correctness must not depend solely on a process-local mutex.
 
 ## CI
 
-The default runtime workflow runs Python 3.12/3.13 on hosted Linux runners. It
-installs the complete package plus the test extra, runs SQLite and contract
-checks, verifies all bundled migrations, exercises synthetic workflows and
-performs the clean-wheel acceptance. No default job starts Docker, PostgreSQL or
-LDAP. Planning contracts can also run independently.
+CI runs Python 3.12/3.13 on Linux. The runtime workflow installs the test extra,
+checks SQLite and contracts, verifies bundled migrations, exercises synthetic
+workflows, and performs clean-wheel acceptance. Planning contracts also run
+independently.
 
 The manual `Optional disposable Slurm acceptance` workflow builds a synthetic
 SSH/Slurm/accounting cluster and runs the personal-connector smoke test. See
@@ -67,7 +66,4 @@ The separate [investigation acceptance](investigations.md#verification) runs one
 reviewed job on the disposable Slurm fixture, closes unused packages/reviews,
 and exercises the installed export CLI, resume, hashes and shared accounting.
 
-The prior PostgreSQL/LDAP fixtures and migration-transfer tests are available on
-`codex/archive-multi-user-server` at `520effc`, not supported by this local
-package. Schema/data migrations preserving local job and budget history remain
-part of the SQLite suite.
+Schema migrations preserving job and budget history are covered by the suite.

@@ -218,8 +218,8 @@ This convenience flow does not establish protected installation isolation. An
 agent running as your Unix user may read that user's files or use its active
 session capabilities. Use a separately protected identity or device when that
 boundary is required. Root/administrator compromise is outside this protection.
-Automatic worker enrollment does not provide a central key vault, an isolated
-multi-user supervisor or site approval for SSH session reuse.
+Automatic worker enrollment does not change the local account boundary or
+institutional SSH/MFA requirements.
 
 The connector starts conservatively with human review required. Discovery alone
 does not verify a worst-case cleanup bound or justify unattended execution.

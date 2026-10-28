@@ -4,8 +4,7 @@ Compute Relay is a single-user Python package. The normal command is
 `compute-relay` (equivalently `compute-relay start`). It runs a Django portal
 through Waitress on loopback, maintains a durable SQLite ledger and local object
 store, and supervises saved SSH connectors in the foreground. It requires
-Python 3.12/3.13 and system OpenSSH for real cluster access. Docker, PostgreSQL,
-LDAP and a separately managed control service are unnecessary.
+Python 3.12/3.13 and system OpenSSH for real cluster access.
 
 ## Startup and persistent state
 
@@ -41,9 +40,8 @@ project API key. The local facade holds that project key; cluster keys and MFA
 remain in the connector. Source staging and artifact downloads use bounded APIs
 and verify checksums. See [client setup](local-client-setup.md).
 
-The package exposes neither an HTTP MCP endpoint nor an OAuth authorization
-server. The prior multi-user identity/database runtime is retained only on
-`codex/archive-multi-user-server` at `520effc`.
+The package exposes project-local stdio MCP clients. Remote HTTP MCP and OAuth
+are not provided; see the [roadmap](roadmap.md).
 
 ## Preparation, approval, and accounting
 

@@ -1,6 +1,6 @@
 # Version one planning contracts
 
-These JSON Schema 2020-12 contracts define the first supported request surface. They are planning artifacts, not generated runtime schemas. Runtime serializers must later be checked against them. The `.invalid` schema identifiers are stable local identifiers, not hosted endpoints; tests resolve references entirely offline.
+These JSON Schema 2020-12 contracts define the first supported request surface. They are planning artifacts, not generated runtime schemas. Runtime serializers must later be checked against them. The `.invalid` schema identifiers are stable local identifiers; tests resolve references entirely offline.
 
 | Contract | Meaning |
 | --- | --- |

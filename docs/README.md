@@ -1,7 +1,7 @@
 # Documentation guide
 
-Start here when maintaining Compute Relay. This repository documents the
-single-user local package; it does not describe a supported hosted service.
+Start here when maintaining Compute Relay. This guide describes the current
+package and links to its operational and development documentation.
 
 | Need | Read |
 | --- | --- |

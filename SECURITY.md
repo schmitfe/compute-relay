@@ -1,11 +1,10 @@
 # Security reporting and support
 
-Compute Relay is a development alpha for a single person running a local portal,
-SQLite ledger and personal SSH connectors. It includes project-scoped agent
-keys, reviewed execution, constrained Slurm operations and compute/storage
-admission controls. It does not isolate credentials from another process with
-the same local account's access. No hosted multi-user or protected service
-deployment is supported by the current package. See the
+Compute Relay is a development alpha with a local portal and personal SSH
+connectors. It includes project-scoped agent keys, reviewed execution,
+constrained Slurm operations and compute/storage admission controls. It does not
+isolate credentials from another process with the same local account's access.
+See the
 [security boundaries](docs/security.md) and [runtime limits](docs/runtime.md).
 
 Use the repository's private vulnerability-reporting feature if the maintainer

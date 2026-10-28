@@ -189,7 +189,7 @@ Local stdio MCP is a facade under the agent account calling the authenticated se
 
 Use correct read/write annotations, output schemas, bounded outputs and stable IDs. Do not expose `approve_job`, `increase_budget`, generic shell execution, arbitrary URLs, SSH options, or unrestricted file download. An upstream MCP server may contribute tool designs but is not placed directly in the agent's path with privileged credentials.
 
-Tool calls return quickly with durable IDs. Neither HTTP nor stdio waits for an hours-long scheduler job. Completion notifications and agent resumption are separate optional orchestration, never assumed to be supplied by MCP alone. Hosted HTTP MCP adds a standards-compliant OAuth resource-server flow and cross-client conformance tests; browser OIDC login does not automatically implement that protocol. [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
+Tool calls return quickly with durable IDs. Neither HTTP nor stdio waits for an hours-long scheduler job. Completion notifications and agent resumption are separate optional orchestration, never assumed to be supplied by MCP alone. A remote HTTP MCP client requires a standards-compliant OAuth resource-server flow and cross-client conformance tests; browser OIDC login alone does not provide that protocol. [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
 
 ## Internal worker API
 

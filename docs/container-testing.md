@@ -126,11 +126,8 @@ submission, outputs, accounting and cleanup using only synthetic credentials.
 The fixture's MariaDB belongs to Slurm accounting; it is not a separate broker
 database requirement.
 
-Historical acceptance logs for the former PostgreSQL/LDAP/shared-server design
-are preserved on `codex/archive-multi-user-server` at `520effc`. Their old counts
-are not evidence that the new single-user package passed current acceptance.
-Run the default SQLite suite and `tools/package_smoke.py` for the local package,
-and run this fixture explicitly when native Slurm acceptance is required.
+Run the default test suite and `tools/package_smoke.py`; run this fixture
+explicitly when native Slurm acceptance is required.
 
 The SQLite tests additionally cover input provenance, upload-crash recovery,
 logical metadata limits/maintenance, management priority, lease renewal and

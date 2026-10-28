@@ -24,10 +24,7 @@ project API key is never a substitute for the human session used to approve
 jobs or change configuration.
 
 Do not expose the local portal through a public listener, reverse proxy or
-forwarding tunnel and treat it as a shared service. Multi-user membership,
-LDAP login and PostgreSQL server deployment were removed from this runtime;
-the prior implementation is archived on `codex/archive-multi-user-server` at
-`520effc`.
+forwarding tunnel. The portal and its sessions are intended for the local owner.
 
 ## Credentials and connectors
 

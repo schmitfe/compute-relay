@@ -176,10 +176,10 @@ compute-relay init-mcp --client both --with-workflow
 
 Paste the key at the hidden terminal prompt. The command uses `http://127.0.0.1:8768` by default. A project UUID is unnecessary: the API key identifies its project and permissions when the MCP adapter connects.
 
-For a broker hosted elsewhere or another destination directory:
+To initialize a different project directory, pass its path explicitly:
 
 ```bash
-compute-relay init-mcp --directory /path/to/science-project --broker-url https://broker.example.org
+compute-relay init-mcp --directory /path/to/science-project
 ```
 
 Initialization creates the destination if needed and writes one `.compute-relay/project.key` with owner-only access. Codex uses `.codex/config.toml`; Claude Code uses project `.mcp.json` with `mcpServers.compute_relay`. Each selected client runs the installed Python interpreter with `-m compute_relay.mcp`, using the same broker address and absolute key-file path. No project UUID or key contents appear in these configurations. `.compute-relay/connection.json` records the broker origin and absolute workspace root for the local file helper; it contains no credential contents. Newly created directories are private. Git exclusions cover the private broker directory and every generated client configuration. These locations follow the clients' project MCP conventions: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), [Claude Code MCP configuration](https://code.claude.com/docs/en/mcp).

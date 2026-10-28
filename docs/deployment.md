@@ -1,10 +1,7 @@
 # Local installation and recovery
 
-The supported package runs for one person on one device. `compute-relay`
-starts its loopback portal, SQLite database, and saved SSH connectors together.
-The former shared-server deployment is archived on
-`codex/archive-multi-user-server` at `520effc`; LDAP, PostgreSQL, central worker
-hosting, and server database-transfer tools are outside the current runtime.
+`compute-relay` starts the loopback portal and saved SSH connectors together.
+The local installation retains its configuration and job state between runs.
 
 ## Install
 
@@ -19,8 +16,8 @@ compute-relay
 
 The distribution has not been published yet. Until publication, use
 `python -m pip install .` from the checkout or install a built wheel instead.
-All ordinary runtime dependencies are included. Docker is used only by optional
-Slurm acceptance fixtures and is unnecessary for normal operation.
+All ordinary runtime dependencies are included. Docker is only needed for
+optional Slurm acceptance fixtures.
 
 ## First launch
 

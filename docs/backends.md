@@ -30,7 +30,7 @@ partitions or accounts are not proof that a user may submit to them.
 
 Arrays, heterogeneous or multi-node allocations, interactive jobs, arbitrary
 remote commands, agent-controlled retries/requeue, alternate schedulers and
-hosted HTTP MCP are unsupported. Direct or object-store artifact delivery is
+remote HTTP MCP and OAuth clients are unsupported. Direct or object-store artifact delivery is
 also unsupported; current files and logs use bounded broker relay. See the
 [roadmap](roadmap.md) before proposing new support.
 

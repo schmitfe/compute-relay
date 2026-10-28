@@ -269,12 +269,3 @@ It pauses the pool afterward. The client never reads SSH credentials or requests
 a remote file write, job, directory listing or retained-usage scan. Small fixture
 filesystems may correctly produce a blocked planning assessment under the
 default operational free-space floors.
-
-### Historical acceptance
-
-The earlier shared-server/PostgreSQL ownership acceptance and its exact counts
-are archived on `codex/archive-multi-user-server` at `520effc`. Current storage
-checks use the local owner and SQLite while preserving project/key isolation,
-exact directory receipts, advisory planning, schema migrations and bounded
-capacity probes. Run the current suite rather than treating historical server
-results as local-package acceptance.

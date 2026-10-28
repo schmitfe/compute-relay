@@ -32,7 +32,7 @@ behavior.
 | Codex CLI / desktop sessions using project configuration | `.codex/config.toml` | `.agents/skills/compute/SKILL.md`, small managed `AGENTS.md` block |
 | Claude Code | `.mcp.json` | `.claude/skills/compute/SKILL.md`, small managed `CLAUDE.md` block |
 | Claude Desktop with local stdio support | Manual application configuration using the same command/env | No automatic skill installation |
-| Hosted ChatGPT / Claude connectors requiring HTTP MCP | Not implemented | Requires HTTP transport and authentication work first |
+| Browser-based MCP integrations | Not implemented | This package configures project-local stdio clients only |
 
 Client trust prompts and tool availability remain client-controlled. Delegates
 do not necessarily inherit their parent's MCP tools. The skill tells the parent
