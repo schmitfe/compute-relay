@@ -3,7 +3,7 @@
 import re
 
 from .jobs import own_record
-from .protocol import JOB_PROTOCOL
+from .protocol import JOB_PROTOCOL, STATUS_BATCH_SIZE
 from .scheduler import scheduler
 
 
@@ -13,15 +13,15 @@ def status_rows(response, job_ids):
         job_id = line.split("|", 1)[0].strip()
         if job_id in grouped:
             grouped[job_id].append(line)
-    return {job_id: {"returncode": 0 if lines else response["returncode"],
+    return {job_id: {"returncode": response["returncode"],
         "stdout": "\n".join(lines), "stderr": ""} for job_id, lines in grouped.items()}
 
 
-def observe_many(config, request):
-    if request.get("operation") != "observe_many" or request.get("protocol") != JOB_PROTOCOL:
-        raise ValueError("Unsupported batch status protocol")
+def observe(config, request):
+    if request.get("operation") != "observe" or request.get("protocol") != JOB_PROTOCOL:
+        raise ValueError("Unsupported status protocol")
     items = request.get("items")
-    if not isinstance(items, list) or not 1 <= len(items) <= 64:
+    if not isinstance(items, list) or not 1 <= len(items) <= STATUS_BATCH_SIZE:
         raise ValueError("Invalid status batch size")
     results, valid = {}, {}
     for item in items:
@@ -36,7 +36,7 @@ def observe_many(config, request):
             continue
         valid[attempt_id] = (job_id, record["manifest"]["maximum_allocation"]["gpu_devices"])
     if not valid:
-        return {"items": results, "scheduler_queries": 0}
+        return {"items": results}
     job_ids = sorted({job_id for job_id, _ in valid.values()})
     queue = status_rows(scheduler(config, "squeue", ["-h", "-j", ",".join(job_ids), "-o", "%i|%T|%k|%V"]), job_ids)
     missing = [job_id for job_id in job_ids if not queue[job_id]["stdout"]]
@@ -47,4 +47,4 @@ def observe_many(config, request):
     for attempt_id, (job_id, gpus) in valid.items():
         results[attempt_id] = {"queue": queue[job_id],
             "accounting": accounting.get(job_id, {"returncode": 0, "stdout": "", "stderr": ""}), "expected_gpus": gpus}
-    return {"items": results, "scheduler_queries": 1 + bool(missing)}
+    return {"items": results}

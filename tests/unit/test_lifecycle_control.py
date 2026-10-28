@@ -295,7 +295,8 @@ def test_two_hundred_admitted_jobs_get_native_ids_while_running_checks_stay_due(
     submitted = []
     observed = set()
     for _ in range(240):
-        lease = services.lease_work(broker.worker)["lease"]
+        response = services.lease_work(broker.worker)
+        lease = response["lease"]
         assert lease is not None
         clock[0] += timedelta(seconds=3)
         identity = lease["native_identity"]
@@ -307,9 +308,10 @@ def test_two_hundred_admitted_jobs_get_native_ids_while_running_checks_stay_due(
             submitted.append(lease["attempt_id"])
         else:
             assert lease["operation"] == "observe"
-            observed.add(lease["attempt_id"])
-            services.report(broker.worker, lease["attempt_id"], payload(lease, "observed", identity,
-                observation={"state": "running", "terminal": False}))
+            for item in [lease, *response.get("observations", [])]:
+                observed.add(item["attempt_id"])
+                services.report(broker.worker, item["attempt_id"], payload(item, "observed", item["native_identity"],
+                    observation={"state": "running", "terminal": False}))
         if len(submitted) == 160:
             break
     assert len(submitted) == len(set(submitted)) == 160

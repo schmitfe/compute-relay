@@ -108,7 +108,7 @@ def test_async_submission_transport_failure_is_uncertain_without_retry_and_cance
         backend = SlurmBackend(connection, transport=failure)
         assert (await backend.submit(str(uuid4()), manifest, files))["outcome"] == "submission_uncertain"
         assert failure.calls == 1
-        assert (await backend.observe({"job_id": "42"}, manifest=manifest))["accounting"] == {"final": False}
+        assert (await backend.observe([{"native_identity": {"attempt_id": "attempt", "job_id": "42"}, "manifest": manifest}]))["attempt"]["accounting"] == {"final": False}
 
         class Cancelled:
             async def call_helper(self, source, request):

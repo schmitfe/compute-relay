@@ -149,6 +149,21 @@ fixed scheduler operations; it exposes no arbitrary shell RPC. The worker
 reuses its authenticated SSH master and does not fall back to a new unattended
 login when that master disappears.
 
+Status reads use one interface for one through 32 jobs. The controller groups
+consecutive due observations on the same connection, within an 8 MiB additional
+payload bound; it never skips older submission, cancellation or recovery work
+to fill a group. A single query reads the live jobs, followed by accounting for
+jobs absent from the queue. Every item retains its own verified journal binding,
+generation-fenced lease, heartbeat, accounting and output-recovery state.
+Invalid or uncertain status data never establishes completion or releases funds.
+
+Single-job and grouped work share the same package verification, durable report
+replay and per-job finalization. Completed items stop renewing and release their
+local in-progress slot independently. At most four remote operations run by
+default; `COMPUTE_RELAY_MAX_REMOTE_OPERATIONS` permits one through eight. Status
+grouping is always enabled and needs no experimental switches or persistent
+remote Python process. Discovery and optional modules use the same SSH transport.
+
 The fixed remote source is assembled from reviewed standard-library components
 into separate execution/management and discovery bundles. New prepared jobs bind
 `helper_protocol=slurm-jobs/v1` and the exact execution-bundle SHA-256. Management
@@ -169,6 +184,33 @@ arbitrary scheduler directives, other schedulers and persistent interactive
 runtimes remain unsupported. Explicit retries create separate attempts and
 reservations. The fake backend simulates outcomes without executing uploaded
 code in the connector.
+
+## Acceptance evidence and remaining reliability work
+
+The 28 October 2026 acceptance on a shared four-node Slurm cluster verified
+1,144 unique native jobs, including four deliberate cancellations, with matching
+native/controller CPU accounting and no duplicates. Requests used one CPU,
+1 GiB and a one-minute limit; the site allocated two logical CPUs. The run used
+no GPUs or interactive partition and took approximately 82 minutes. Lost submit
+responses and SSH interruptions preserved durable job identity. A separate
+200-job test through the installed MCP stdio server passed 2,441 tool calls,
+200 idempotent preparation replays and result-artifact verification.
+
+The equal-sized comparison used 156 jobs per mode. Bounded status grouping
+reduced scheduler-status queries by 77.7%; keeping Python helpers alive reduced
+source transfers without establishing a clear throughput advantage. The chosen
+architecture keeps one SSH transport and bounded status grouping. Detailed
+experiment material is retained in Git history rather than maintained as a
+second implementation or benchmark framework.
+
+Four successful jobs required explicit output recovery after automatic retries
+were exhausted by publication contention. One portal stall during preparation
+remains unexplained. Object capacity was raised from 1,000 to 10,000 after the
+former limit was reached at only 506 KiB. The test also reached the normal
+32 MiB logical-metadata ceiling after 788 admissions; its temporary 64 MiB test
+override was removed afterward. These are admission/retention bounds, not burst
+rate controls. The [roadmap](roadmap.md) tracks collection backpressure, portal
+responsiveness, outstanding-work limits and local/remote artifact cleanup.
 
 ## Bundled modules
 

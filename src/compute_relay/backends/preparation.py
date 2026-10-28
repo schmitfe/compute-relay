@@ -104,8 +104,6 @@ def helper_source(operation: str = "submit") -> str:
         return bundle_source("availability")
     if operation == "discover":
         return bundle_source("discovery")
-    if operation == "observe_many":
-        return bundle_source("batch_status")
     if operation in JOB_OPERATIONS:
         return bundle_source("jobs")
     raise BackendError("Unsupported fixed helper operation")

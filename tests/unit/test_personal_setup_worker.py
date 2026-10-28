@@ -238,7 +238,7 @@ def test_verbose_job_progress_is_meaningful_without_repeating_observation_polls(
     from compute_relay.worker.connector_status import ConnectorStatus
     runtime.worker.status = ConnectorStatus(runtime.state, verbose=True)
     operations = []
-    async def execute(_worker, lease):
+    async def execute(_worker, lease, *, observations=()):
         operations.append(lease["operation"])
     monkeypatch.setattr(personal_setup.Worker, "_execute", execute)
     lease = {"operation": "observe", "attempt_id": str(uuid4()), "prepared": {"script": "private_script_body"}}
@@ -253,7 +253,7 @@ def test_verbose_job_progress_is_meaningful_without_repeating_observation_polls(
 
 
 def test_non_verbose_job_progress_is_quiet(runtime, monkeypatch, capsys):
-    async def execute(_worker, lease):
+    async def execute(_worker, lease, *, observations=()):
         pass
     monkeypatch.setattr(personal_setup.Worker, "_execute", execute)
     asyncio.run(runtime.worker._execute({"operation": "submit"}))

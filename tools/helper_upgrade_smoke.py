@@ -106,7 +106,7 @@ async def main():
                 raise RuntimeError("Current management did not acknowledge native cancellation")
             deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
-                observation = await backend.observe(native, manifest=manifest)
+                observation = (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]
                 if observation.get("terminal") is True and observation.get("accounting", {}).get("final") is True:
                     break
                 await asyncio.sleep(1)

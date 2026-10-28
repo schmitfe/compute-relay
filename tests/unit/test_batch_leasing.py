@@ -31,11 +31,11 @@ def test_five_hundred_attempts_lease_in_bounded_groups_and_settle_independently(
     client = worker_client()
     seen, groups = set(), 0
     while len(seen) < 500:
-        response = client.post("/internal/v1/lease", data=json.dumps({"observation_batch": 64}), content_type="application/json")
+        response = client.post("/internal/v1/lease", data=json.dumps({}), content_type="application/json")
         assert response.status_code == 200
         value = response.json()
         leases = [value["lease"], *value.get("observations", [])]
-        assert 1 <= len(leases) <= 64
+        assert 1 <= len(leases) <= 32
         assert len(response.content) <= 8 * 1024 * 1024
         groups += 1
         for lease in leases:
@@ -46,7 +46,7 @@ def test_five_hundred_attempts_lease_in_bounded_groups_and_settle_independently(
                     "accounting": {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}}}
             response = client.post(f"/internal/v1/attempts/{lease['attempt_id']}/report", data=json.dumps(report), content_type="application/json")
             assert response.status_code == 200, response.content
-    assert groups == 8
+    assert groups == 16
     broker.grant.refresh_from_db()
     assert broker.grant.reserved_cpu == 0 and broker.grant.spent_cpu == 500
 
@@ -59,9 +59,9 @@ def test_status_batch_stops_at_an_older_submission_and_does_not_delay_its_turn(b
     running(first, now - timedelta(seconds=3))
     Attempt.objects.filter(id=submission.id).update(next_poll_at=now - timedelta(seconds=2))
     running(last, now - timedelta(seconds=1))
-    value = services.lease_work(broker.worker, observation_batch=64)
+    value = services.lease_work(broker.worker)
     assert value["lease"]["attempt_id"] == str(first.id) and "observations" not in value
-    value = services.lease_work(broker.worker, observation_batch=64)
+    value = services.lease_work(broker.worker)
     assert value["lease"]["attempt_id"] == str(submission.id) and value["lease"]["operation"] == "submit"
 
 
@@ -73,12 +73,12 @@ def test_batch_refuses_to_skip_over_cancellation(broker):
     for index, attempt in enumerate((first, cancelling, last)):
         running(attempt, now - timedelta(seconds=3 - index))
     Attempt.objects.filter(id=cancelling.id).update(cancel_requested=True)
-    assert "observations" not in services.lease_work(broker.worker, observation_batch=64)
-    assert services.lease_work(broker.worker, observation_batch=64)["lease"]["operation"] == "cancel"
+    assert "observations" not in services.lease_work(broker.worker)
+    assert services.lease_work(broker.worker)["lease"]["operation"] == "cancel"
 
 
-@pytest.mark.parametrize("size", [0, 65, True, "32", 1.0])
-def test_invalid_batch_option_does_not_acquire_any_lease(broker, size):
+@pytest.mark.parametrize("size", [0, 1, 32, 65, True, "32", 1.0])
+def test_removed_batch_option_does_not_acquire_any_lease(broker, size):
     budgeted(broker)
     attempt = execution(broker, prepared_job(broker)).attempt
     response = worker_client().post("/internal/v1/lease", data=json.dumps({"observation_batch": size}), content_type="application/json")

@@ -380,8 +380,8 @@ def test_worker_streams_live_output_and_large_artifacts_through_broker(broker, t
     def invoke():
         Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
         lease = services.lease_work(broker.worker)["lease"]
-        async def observe(*a, **kw):
-            return deepcopy(observation)
+        async def observe(items):
+            return {item["native_identity"]["attempt_id"]: deepcopy(observation) for item in items}
         backend.observe = observe
         asyncio.run(worker.execute(lease))
     invoke()
@@ -477,8 +477,9 @@ def test_multigib_roundtrip_is_bounded_across_workspace_broker_and_worker(broker
     shutil.copyfile(directory / "input.bin", directory / "output.bin")
     with (directory / "output.bin").open("r+b") as stream:
         stream.write(b"different output\n")
-    backend.observe = AsyncMock(return_value= {"state": "completed", "terminal": True,
-        "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}})
+    backend.observe = AsyncMock(side_effect=lambda items: {item["native_identity"]["attempt_id"]:
+        {"state": "completed", "terminal": True,
+            "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}} for item in items})
     Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
     asyncio.run(worker.execute(services.lease_work(broker.worker)["lease"]))
     attempt.refresh_from_db()

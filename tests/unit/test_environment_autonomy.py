@@ -110,8 +110,9 @@ def test_agent_inspects_builds_and_updates_usable_environment_without_per_build_
     worker_client.request = AsyncMock(side_effect=worker_client.request)
     worker = Worker(worker_client, {str(c.connection.id): connection}, Journal(tmp_path / "journal"),
         backend_factory=lambda _: backend, extensions=["environments"], owner_id=str(uuid4()))
-    backend.observe = AsyncMock(return_value={"state": "completed", "terminal": True,
-        "accounting": {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}})
+    backend.observe = AsyncMock(side_effect=lambda items: {item["native_identity"]["attempt_id"]:
+        {"state": "completed", "terminal": True,
+            "accounting": {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}} for item in items})
 
     def compute(attempt_id):
         lease = core.lease_work(c.worker)["lease"]

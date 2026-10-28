@@ -1,14 +1,10 @@
-"""Pure compatibility rules for the fixed Slurm journal-management protocol.
-
-The original unversioned slurm-ssh/v1 manifest is deliberately supported for
-management. It has the same immutable package and journal identity format. This
-does not authorize submitting it under a different execution-helper hash.
-"""
+"""Fixed Slurm management protocol and durable journal binding."""
 
 import hashlib
 import json
 
 JOB_PROTOCOL = "slurm-jobs/v1"
+STATUS_BATCH_SIZE = 32
 MANAGEMENT_OPERATIONS = frozenset({"observe", "cancel", "reconcile", "collect", "logs", "output_manifest", "output_chunk"})
 JOB_OPERATIONS = MANAGEMENT_OPERATIONS | {"submit", "stage_input"}
 
@@ -21,7 +17,7 @@ def management_protocol_supported(manifest):
     return (isinstance(manifest, dict)
             and manifest.get("schema_version") == "1.0"
             and manifest.get("adapter_version") == "slurm-ssh/v1"
-            and manifest.get("helper_protocol", JOB_PROTOCOL) == JOB_PROTOCOL
+            and manifest.get("helper_protocol") == JOB_PROTOCOL
             and is_digest(manifest.get("helper_sha256"))
             and is_digest(manifest.get("connection_revision_sha256"))
             and manifest.get("batch_script") == "_broker/batch.sh"

@@ -119,7 +119,7 @@ def file_digest(fd):
 
 def file_version(info):
     # Nanosecond timestamps and some inode IDs exceed the exact JSON integer
-    # range used by persistent helper frames. Keep this opaque token lossless.
+    # range in JSON clients. Keep this opaque token lossless.
     return [str(value) for value in (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)]
 
 

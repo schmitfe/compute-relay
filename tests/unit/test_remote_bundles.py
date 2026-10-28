@@ -28,11 +28,9 @@ def digest(value):
 
 def test_fixed_bundles_are_deterministic_stdlib_programs_with_complete_sources():
     expected = {
-        "jobs": {"prelude.py", "filesystem.py", "scheduler.py", "protocol.py", "jobs.py", "collection.py", "job_dispatch.py", "entrypoint.py"},
+        "jobs": {"prelude.py", "filesystem.py", "scheduler.py", "protocol.py", "jobs.py", "collection.py", "status.py", "job_dispatch.py", "entrypoint.py"},
         "discovery": {"prelude.py", "filesystem.py", "scheduler.py", "discovery_config.py", "probes.py", "module_catalog.py", "software.py", "discovery.py", "entrypoint.py"},
     }
-    expected["batch_status"] = expected["jobs"] | {"batch_status.py"}
-    expected["stream_jobs"] = expected["batch_status"] | {"stream_entrypoint.py"}
     expected["availability"] = {"prelude.py", "filesystem.py", "scheduler.py", "availability.py", "entrypoint.py"}
     for kind, names in expected.items():
         source = bundles.bundle_source(kind)
@@ -116,6 +114,10 @@ def test_discovery_only_change_does_not_change_execution_identity(monkeypatch):
     assert helper_source("discover") != discovery
 
 
+def test_management_requires_an_explicit_current_protocol(site):
+    package, _ = prepared(site)
+    package["manifest"].pop("helper_protocol")
+    assert not management_protocol_supported(package["manifest"])
 
 
 
@@ -124,8 +126,9 @@ def test_discovery_only_change_does_not_change_execution_identity(monkeypatch):
 
 
 
-@pytest.mark.parametrize("legacy_protocol", [False, True])
-def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, monkeypatch, legacy_protocol):
+
+
+def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, monkeypatch):
     original = bundles._component
     transport = LocalFixedTransport()
     backend = SlurmBackend(site[0], transport=transport)
@@ -135,9 +138,6 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
     with monkeypatch.context() as old:
         old.setattr(bundles, "_component", lambda name: original(name) + ("# version N\n" if name == "jobs.py" else ""))
         package, files = prepared(site)
-        if legacy_protocol:
-            package["manifest"].pop("helper_protocol")
-            package["manifest_sha256"] = digest(canonical_json_bytes(package["manifest"]))
         native = asyncio.run(backend.submit(attempt, package["manifest"], files))["native_identity"]
     manifest = package["manifest"]
     assert management_protocol_supported(manifest)
@@ -147,9 +147,9 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
     for operation in ("observe", "cancel", "collect", "reconcile"):
         verify_package(manifest, package["manifest_sha256"], files, operation=operation)
     assert asyncio.run(backend.reconcile(attempt, manifest))["native_identity"] == native
-    assert asyncio.run(backend.observe(native, manifest=manifest))["state"] == "running"
+    assert asyncio.run(backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["state"] == "running"
     assert asyncio.run(backend.cancel(native, manifest=manifest))["outcome"] == "cancel_requested"
-    observation = asyncio.run(backend.observe(native, manifest=manifest))
+    observation = asyncio.run(backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]
     assert observation["terminal"] is True
     assert observation["accounting"] == {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}
     directory = Path(native["work_dir"])
@@ -187,9 +187,9 @@ def test_native_async_management_uses_current_bundle_after_upgrade_and_uncertain
             assert (await backend.submit(attempt, package["manifest"], files))["outcome"] == "submission_uncertain"
         manifest = package["manifest"]
         native = (await backend.reconcile(attempt, manifest))["native_identity"]
-        assert (await backend.observe(native, manifest=manifest))["state"] == "running"
+        assert (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["state"] == "running"
         assert (await backend.cancel(native, manifest=manifest))["outcome"] == "cancel_requested"
-        assert (await backend.observe(native, manifest=manifest))["accounting"]["final"] is True
+        assert (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["accounting"]["final"] is True
         assert (await backend.collect(native, manifest=manifest))["artifacts"] == {}
         assert (await backend.reconcile(attempt, manifest))["native_identity"] == native
         assert site[4].read_text().splitlines().count("sbatch") == 1

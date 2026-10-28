@@ -10,6 +10,7 @@ from uuid import UUID
 from compute_relay.transfer import FileReference
 
 from compute_relay.transports import OpenSSHTransport, TransportError
+from compute_relay.remote.protocol import STATUS_BATCH_SIZE
 
 from .discovery import parse_discovery
 from .preparation import (
@@ -182,20 +183,15 @@ class SlurmBackend:
         except TransportError:
             return {"outcome": "submission_uncertain", "detail": "Reconciliation unavailable"}
 
-    async def observe(self, native_identity: dict, *, manifest: dict) -> dict:
-        try:
-            response = await self._call("observe", native_identity=native_identity, **self._management(manifest))
-            return parse_observation(native_identity, response["queue"], response["accounting"], response.get("expected_gpus", 0))
-        except (TransportError, KeyError):
-            return {"state": "unknown", "native_state": "UNKNOWN", "terminal": False, "accounting": {"final": False}}
-
-    async def observe_many(self, items):
-        if not 1 <= len(items) <= 64:
+    async def observe(self, items: list[dict]) -> dict:
+        if not isinstance(items, list) or not 1 <= len(items) <= STATUS_BATCH_SIZE:
             raise ValueError("Invalid status batch size")
+        if len({item["native_identity"]["attempt_id"] for item in items}) != len(items):
+            raise ValueError("Duplicate status identity")
         requests = [{"native_identity": item["native_identity"], **self._management(item["manifest"])} for item in items]
         unknown = {"state": "unknown", "native_state": "UNKNOWN", "terminal": False, "accounting": {"final": False}}
         try:
-            response = await self._call("observe_many", items=requests)
+            response = await self._call("observe", items=requests)
             values = response["items"]
             if not isinstance(values, dict):
                 raise ValueError("Invalid batch status response")

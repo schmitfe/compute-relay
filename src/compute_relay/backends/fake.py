@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 from typing import Mapping, Sequence
 from uuid import UUID
+from compute_relay.remote.protocol import STATUS_BATCH_SIZE
 
 from .preparation import (BackendError, canonical_json_bytes, connection_revision_sha256,
                           management_protocol_supported, sha256, verify_package)
@@ -84,21 +85,30 @@ class FakeBackend:
             raise BackendError("Unknown simulated native identity")
         return record
 
-    async def observe(self, native_identity: dict, *, manifest: dict) -> dict:
-        record = self._owned(native_identity, manifest)
-        state = "cancelled" if record["cancelled"] else self.connection.get("fake_outcome", "completed")
-        if state not in ("completed", "failed", "cancelled"):
-            state = "running"
-        terminal = state in ("completed", "failed", "cancelled")
-        record["observations"] += 1
-        self._save(native_identity["attempt_id"], record)
-        resource = record["manifest"]["maximum_allocation"]
-        seconds = min(resource["time_limit_seconds"], max(0, int(self.connection.get("fake_elapsed_seconds", 1))))
-        if resource["cpu_cores"] > 0 or resource["gpu_devices"] > 0:
-            seconds = max(1, seconds)
-        return {"state": state, "native_state": state.upper(), "terminal": terminal, "simulation": True,
+    async def observe(self, items: list[dict]) -> dict:
+        if not isinstance(items, list) or not 1 <= len(items) <= STATUS_BATCH_SIZE:
+            raise ValueError("Invalid status batch size")
+        if len({item["native_identity"]["attempt_id"] for item in items}) != len(items):
+            raise ValueError("Duplicate status identity")
+        results = {}
+        for item in items:
+            native_identity = item["native_identity"]
+            record = self._owned(native_identity, item["manifest"])
+            state = "cancelled" if record["cancelled"] else self.connection.get("fake_outcome", "completed")
+            if state not in ("completed", "failed", "cancelled"):
+                state = "running"
+            terminal = state in ("completed", "failed", "cancelled")
+            record["observations"] += 1
+            self._save(native_identity["attempt_id"], record)
+            resource = record["manifest"]["maximum_allocation"]
+            seconds = min(resource["time_limit_seconds"], max(0, int(self.connection.get("fake_elapsed_seconds", 1))))
+            if resource["cpu_cores"] > 0 or resource["gpu_devices"] > 0:
+                seconds = max(1, seconds)
+            results[native_identity["attempt_id"]] = {
+                "state": state, "native_state": state.upper(), "terminal": terminal, "simulation": True,
                 "accounting": {"final": terminal, "cpu_core_seconds": resource["cpu_cores"] * seconds,
                                "gpu_device_seconds": resource["gpu_devices"] * seconds}}
+        return results
 
     async def cancel(self, native_identity: dict, *, manifest: dict) -> dict:
         record = self._owned(native_identity, manifest)

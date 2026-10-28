@@ -107,7 +107,7 @@ def test_running_polls_cannot_starve_eight_pending_submissions_under_ten_job_cap
 
 @pytest.mark.parametrize("document", [[], {"core_only": 1}, {"unknown": True},
     {"in_progress": "not-a-list"}, {"in_progress": [None]}, {"in_progress": [17]},
-    {"in_progress": ["invalid"]}, {"in_progress": ["0" * 32] * 9}])
+    {"in_progress": ["invalid"]}, {"in_progress": ["0" * 32] * 257}])
 def test_invalid_poll_options_do_not_acquire_a_lease(broker, document):
     budgeted(broker)
     attempt = execution(broker, prepared_job(broker)).attempt

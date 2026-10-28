@@ -22,6 +22,7 @@ from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Conn
                      WorkerIdentity)
 from .storage import read_blob, store_blob
 from compute_relay.transfer import FileReference, INLINE_BYTES
+from compute_relay.remote.protocol import STATUS_BATCH_SIZE
 
 TERMINAL = {"succeeded", "failed", "cancelled", "expired"}
 DEFAULT_MAX_TOTAL_JOBS = 1000
@@ -481,9 +482,7 @@ def serialize_job(job, *, package=False):
     return result
 
 
-def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observation_batch=1):
-    if type(observation_batch) is not int or not 1 <= observation_batch <= 64:
-        raise BrokerError("INVALID_REQUEST", "Observation batch must be from 1 through 64.")
+def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
     now = timezone.now()
     from compute_relay.extensions import control_names
     enabled_extensions = set(control_names()) & set(worker.supported_extensions)
@@ -514,12 +513,12 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=(), observa
                 _defer_lease(attempt, now)
                 continue
             result = {"lease": lease}
-            if observation_batch > 1 and lease["operation"] == "observe":
+            if lease["operation"] == "observe":
                 used = _lease_size_bound(attempt, entries)
                 observations = []
                 # Do not skip over an older submission, cancellation, recovery
                 # or another connection just to fill a batch.
-                for extra in candidates[:observation_batch - 1]:
+                for extra in candidates[:STATUS_BATCH_SIZE - 1]:
                     if not extra.native_identity or extra.cancel_requested or extra.connection_id != attempt.connection_id:
                         break
                     files = list(extra.job.files.select_related("blob"))

@@ -21,6 +21,7 @@ from jsonschema.exceptions import ValidationError as SchemaValidationError
 from compute_relay.domain.validation import strict_json, relative_path
 from . import services
 from .auth import human_permission, project_credential, worker_identity, require_connection, connection_allowed
+from compute_relay.remote.protocol import STATUS_BATCH_SIZE
 from .errors import BrokerError
 from .models import Artifact, Attempt, IdempotencyRecord, Job, Project
 from .storage import read_blob, store_blob
@@ -324,13 +325,10 @@ def artifact_content(request, artifact_id):
 def lease(request):
     worker = worker_identity(request)
     document = body(request, maximum=32768)
-    if not isinstance(document, dict) or set(document) - {"core_only", "in_progress", "observation_batch"} or type(document.get("core_only", False)) is not bool:
+    if not isinstance(document, dict) or set(document) - {"core_only", "in_progress"} or type(document.get("core_only", False)) is not bool:
         raise BrokerError("INVALID_REQUEST", "Invalid worker polling options.")
-    batch = document.get("observation_batch", 1)
-    if type(batch) is not int or not 1 <= batch <= 64:
-        raise BrokerError("INVALID_REQUEST", "Observation batch must be from 1 through 64.")
     excluded = document.get("in_progress", [])
-    if not isinstance(excluded, list) or len(excluded) > 8 * batch:
+    if not isinstance(excluded, list) or len(excluded) > 8 * STATUS_BATCH_SIZE:
         raise BrokerError("INVALID_REQUEST", "Too many in-progress operations.")
     try:
         excluded = [str(UUID(value)) for value in excluded]
@@ -340,7 +338,7 @@ def lease(request):
     observation = lease_availability(worker, exclude_attempt_ids=excluded)
     if observation:
         return observation
-    core = services.lease_work(worker, exclude_attempt_ids=excluded, observation_batch=batch)
+    core = services.lease_work(worker, exclude_attempt_ids=excluded)
     if core.get("lease") and core["lease"]["operation"] in {"cancel", "reconcile"}:
         return core
     try:
@@ -361,7 +359,7 @@ def lease(request):
             return extension_work
     except Exception:
         logger.warning("Extension maintenance deferred; core work remains available")
-    return services.lease_work(worker, exclude_attempt_ids=excluded, observation_batch=batch)
+    return services.lease_work(worker, exclude_attempt_ids=excluded)
 
 
 @boundary("GET")

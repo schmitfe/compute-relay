@@ -42,8 +42,8 @@ class Backend:
         self.reconciled += 1
         return {"outcome": "submission_uncertain"}
 
-    async def observe(self, native, *, manifest):
-        return {"state": "completed", "terminal": True, "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}}
+    async def observe(self, items):
+        return {item["native_identity"]["attempt_id"]: {"state": "completed", "terminal": True, "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}} for item in items}
 
     async def cancel(self, native, *, manifest):
         self.cancelled += 1

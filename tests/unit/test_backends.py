@@ -112,7 +112,7 @@ def test_fake_persists_identity_without_executing_uploaded_source(sample, tmp_pa
     assert not marker.exists()
     restarted = FakeBackend(sample[2])
     assert asyncio.run(restarted.reconcile(ATTEMPT, prepared["manifest"]))["native_identity"] == result["native_identity"]
-    assert asyncio.run(restarted.observe(result["native_identity"], manifest=prepared["manifest"]))["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+    assert asyncio.run(restarted.observe([{"native_identity": result["native_identity"], "manifest": prepared["manifest"]}]))[ATTEMPT]["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
     collected = asyncio.run(restarted.collect(result["native_identity"], ["results/metrics.json"], manifest=prepared["manifest"]))
     assert json.loads(collected["artifacts"]["results/metrics.json"])["executed_uploaded_code"] is False
     with pytest.raises(BackendError):
@@ -124,7 +124,7 @@ def test_fake_cancellation_is_durable(sample):
     backend = FakeBackend(sample[2])
     identity = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
     assert asyncio.run(backend.cancel(identity, manifest=prepared["manifest"]))["outcome"] == "cancel_requested"
-    assert asyncio.run(FakeBackend(sample[2]).observe(identity, manifest=prepared["manifest"]))["state"] == "cancelled"
+    assert asyncio.run(FakeBackend(sample[2]).observe([{"native_identity": identity, "manifest": prepared["manifest"]}]))[ATTEMPT]["state"] == "cancelled"
 
 
 def test_native_transport_timeout_does_not_resubmit(sample):
@@ -419,7 +419,7 @@ def test_simulated_zero_second_job_still_spends_allowance(sample):
     prepared, files = package(sample)
     backend = FakeBackend(sample[2])
     native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
-    assert asyncio.run(backend.observe(native, manifest=prepared["manifest"]))["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+    assert asyncio.run(backend.observe([{"native_identity": native, "manifest": prepared["manifest"]}]))[ATTEMPT]["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
 
 
 def test_preempted_no_requeue_job_has_final_accounting():

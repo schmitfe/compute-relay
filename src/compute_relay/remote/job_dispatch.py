@@ -12,6 +12,7 @@ from .collection import collect, output_transfer, read_logs
 from .jobs import own_record, reconcile, submission_time_matches, submit, stage_input
 from .protocol import JOB_OPERATIONS, JOB_PROTOCOL
 from .scheduler import scheduler
+from .status import observe
 
 def execute_jobs(config, request):
     op = request.get("operation")
@@ -23,6 +24,8 @@ def execute_jobs(config, request):
         return reconcile(config, request)
     if op == "stage_input":
         return stage_input(config, request)
+    if op == "observe":
+        return observe(config, request)
     identity = request["native_identity"]
     if not re.fullmatch(r"[0-9]{1,20}", identity.get("job_id", "")):
         raise ValueError("Invalid native job ID")
@@ -32,11 +35,6 @@ def execute_jobs(config, request):
     if op == "logs":
         return read_logs(config, request, record)
     job_id = identity["job_id"]
-    if op == "observe":
-        return {"queue": scheduler(config, "squeue", ["-h", "-j", job_id, "-o", "%i|%T|%k|%V"]),
-                "accounting": scheduler(config, "sacct", ["-j", job_id, "-X", "-D", "-P", "-n",
-                    "--format=JobIDRaw,State,ElapsedRaw,AllocCPUS,AllocTRES,ExitCode,Submit,Start,End,Comment%128,WorkDir%4096"]),
-                "expected_gpus": record["manifest"]["maximum_allocation"]["gpu_devices"]}
     if op == "cancel":
         live = scheduler(config, "squeue", ["-h", "-j", job_id, "-o", "%i|%k|%V"])
         rows = [line.split("|") for line in live["stdout"].splitlines() if line.strip()]

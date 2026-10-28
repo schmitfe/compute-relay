@@ -1,5 +1,5 @@
 """Async owner lanes and durable submission fencing without remote execution."""
-from test_support.unit_test_async_worker import configured
+from test_support.unit_test_async_worker import Backend, Control, configured
 
 import asyncio
 import base64
@@ -9,60 +9,10 @@ from uuid import uuid4
 
 import pytest
 
-from compute_relay.backends import canonical_json_bytes, prepare
+from compute_relay.backends import canonical_json_bytes
 from compute_relay.worker.runner import Worker
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.concurrency import PrincipalScheduler, WorkerCapacityError
-from compute_relay.worker.journal import Journal
-
-
-class Control:
-    def __init__(self):
-        self.calls, self.fail_report, self.lease = [], False, None
-
-    async def request(self, method, path, body=None):
-        self.calls.append((method, path, body))
-        await asyncio.sleep(0)
-        if path.endswith("/dispatch"):
-            return {"authorized": True}
-        if path.endswith("/report") and self.fail_report:
-            self.fail_report = False
-            raise ControlError("CONTROL_UNAVAILABLE")
-        if path == "/internal/v1/lease":
-            return {"lease": self.lease}
-        return {}
-
-
-class Backend:
-    def __init__(self):
-        self.submitted, self.reconciled, self.cancelled = 0, 0, 0
-        self.entered, self.release = asyncio.Event(), asyncio.Event()
-        self.release.set()
-        self.output_failure = False
-
-    async def submit(self, attempt_id, manifest, files):
-        self.submitted += 1
-        self.entered.set()
-        await self.release.wait()
-        return {"outcome": "submitted", "native_identity": {"job_id": "17", "attempt_id": attempt_id}}
-
-    async def reconcile(self, attempt_id, manifest):
-        self.reconciled += 1
-        return {"outcome": "submission_uncertain"}
-
-    async def observe(self, native, *, manifest):
-        return {"state": "completed", "terminal": True, "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}}
-
-    async def cancel(self, native, *, manifest):
-        self.cancelled += 1
-        return {"outcome": "cancel_requested"}
-
-    async def collect(self, native, outputs, *, manifest):
-        if self.output_failure:
-            raise OSError("private remote diagnostic")
-        return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}
-
-
 
 
 def test_cancelled_submission_preserves_intent_and_only_reconciles_on_resume(configured):
@@ -98,7 +48,7 @@ def test_lost_report_replays_receipt_without_resubmission(configured):
 def test_terminal_output_failure_keeps_final_accounting(configured):
     async def scenario():
         c = configured
-        c.lease.update(operation="observe", native_identity={"job_id": "17"})
+        c.lease.update(operation="observe", native_identity={"job_id": "17", "attempt_id": c.lease["attempt_id"]})
         c.backend.output_failure = True
         await c.worker.execute(c.lease)
         report = c.control.calls[-1][2]
@@ -467,13 +417,12 @@ def test_explicit_remote_concurrency_is_bounded(value):
         remote_parallelism(value)
 
 
-def test_two_hundred_observations_use_four_batches_and_preserve_each_terminal_report(configured):
+def test_two_hundred_observations_use_seven_batches_and_preserve_each_terminal_report(configured):
     from collections import deque
     from copy import deepcopy
     from compute_relay.worker.runner import serve_workers
     async def scenario():
         c = configured
-        c.worker.observation_batch = 64
         leases = [{**deepcopy(c.lease), "id": str(uuid4()), "attempt_id": str(uuid4()), "operation": "observe"} for _ in range(200)]
         for index, lease in enumerate(leases):
             lease["native_identity"] = {"job_id": str(index + 1), "attempt_id": lease["attempt_id"]}
@@ -483,8 +432,8 @@ def test_two_hundred_observations_use_four_batches_and_preserve_each_terminal_re
         class QueueControl(Control):
             async def request(self, method, path, body=None):
                 if path == "/internal/v1/lease":
-                    assert body["observation_batch"] == 64 and len(body["in_progress"]) <= 256
-                    group = [queue.popleft() for _ in range(min(64, len(queue)))]
+                    assert set(body) == {"core_only", "in_progress"} and len(body["in_progress"]) <= 128
+                    group = [queue.popleft() for _ in range(min(32, len(queue)))]
                     return {"lease": group[0], "observations": group[1:]} if group else {"lease": None}
                 if path.endswith("/renew"):
                     return {"renewed": True}
@@ -496,9 +445,9 @@ def test_two_hundred_observations_use_four_batches_and_preserve_each_terminal_re
                         done.set()
                 return await super().request(method, path, body)
         class BatchedBackend(Backend):
-            async def observe_many(self, items):
+            async def observe(self, items):
                 batches.append(len(items))
-                return {item["native_identity"]["attempt_id"]: await self.observe(item["native_identity"], manifest=item["manifest"]) for item in items}
+                return await super().observe(items)
         c.worker.client = QueueControl()
         c.worker.backend_factory = lambda _: BatchedBackend()
         serving = asyncio.create_task(serve_workers([c.worker]))
@@ -508,8 +457,31 @@ def test_two_hundred_observations_use_four_batches_and_preserve_each_terminal_re
             serving.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await serving
-        assert sorted(batches) == [8, 64, 64, 64]
+        assert sorted(batches) == [8, 32, 32, 32, 32, 32, 32]
         assert len(reports) == 200 and not c.worker._in_progress and not list(c.journal.pending_reports())
+    asyncio.run(scenario())
+
+
+def test_invalid_status_item_does_not_block_another_jobs_verified_result(configured):
+    from copy import deepcopy
+    async def scenario():
+        c = configured
+        leases = [{**deepcopy(c.lease), "operation": "observe", "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(2)]
+        for index, lease in enumerate(leases):
+            lease["native_identity"] = {"job_id": str(index + 1), "attempt_id": lease["attempt_id"]}
+        leases[0]["prepared"]["files"]["main.py"] = base64.b64encode(b"tampered").decode()
+        observed = []
+        class CheckedBackend(Backend):
+            async def observe(self, items):
+                observed.extend(item["native_identity"]["attempt_id"] for item in items)
+                return await super().observe(items)
+        c.worker.backend_factory = lambda _: CheckedBackend()
+        await c.worker._execute_attempts(leases)
+        reports = [body for _, path, body in c.control.calls if path.endswith("/report")]
+        assert observed == [leases[1]["attempt_id"]]
+        assert len(reports) == 1 and reports[0]["lease_id"] == leases[1]["id"]
+        assert reports[0]["observation"]["accounting"]["final"]
+        assert c.journal.read_report(leases[0]["attempt_id"]) is None
     asyncio.run(scenario())
 
 
@@ -532,8 +504,6 @@ def test_completed_batch_item_stops_renewing_while_other_items_collect(configure
                     reported.add(attempt)
                 return await super().request(method, path, body)
         class SlowCollection(Backend):
-            async def observe_many(self, items):
-                return {item["native_identity"]["attempt_id"]: await self.observe(item["native_identity"], manifest=item["manifest"]) for item in items}
             async def collect(self, native, outputs, *, manifest):
                 if native["job_id"] == "2":
                     await asyncio.sleep(.06)
@@ -541,7 +511,7 @@ def test_completed_batch_item_stops_renewing_while_other_items_collect(configure
         c.worker.client = RenewalControl()
         c.worker.backend_factory = lambda _: SlowCollection()
         monkeypatch.setattr(lease_module, "RENEWAL_INTERVAL_SECONDS", .01)
-        await c.worker._execute_observations(proposals)
+        await c.worker._execute_attempts(proposals)
         assert len(reported) == 2
     asyncio.run(scenario())
 
@@ -551,7 +521,6 @@ def test_new_cancellation_lease_survives_older_batch_cleanup(configured):
     from compute_relay.worker.runner import serve_workers
     async def scenario():
         c = configured
-        c.worker.observation_batch = 2
         first, second = [{**deepcopy(c.lease), "operation": "observe", "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(2)]
         for index, proposal in enumerate((first, second)):
             proposal["native_identity"] = {"job_id": str(index + 1), "attempt_id": proposal["attempt_id"]}
@@ -577,9 +546,9 @@ def test_new_cancellation_lease_survives_older_batch_cleanup(configured):
                         done.set()
                 return await super().request(method, path, body)
         class SlowBackend(Backend):
-            async def observe_many(self, items):
+            async def observe(self, items):
                 return {first["attempt_id"]: {"state": "running", "terminal": False},
-                    second["attempt_id"]: await self.observe(second["native_identity"], manifest=items[1]["manifest"])}
+                    second["attempt_id"]: (await super().observe(items))[second["attempt_id"]]}
             async def collect(self, native, outputs, *, manifest):
                 await release_second.wait()
                 return await super().collect(native, outputs, manifest=manifest)
@@ -589,13 +558,13 @@ def test_new_cancellation_lease_survives_older_batch_cleanup(configured):
                 return await super().cancel(native, manifest=manifest)
         c.worker.client = QueueControl()
         c.worker.backend_factory = lambda _: SlowBackend()
-        original = c.worker._execute_observations
+        original = c.worker._execute_attempts
         async def tracked(leases):
             try:
                 return await original(leases)
             finally:
                 old_finished.set()
-        c.worker._execute_observations = tracked
+        c.worker._execute_attempts = tracked
         serving = asyncio.create_task(serve_workers([c.worker]))
         try:
             await asyncio.wait_for(cancel_started.wait(), timeout=5)

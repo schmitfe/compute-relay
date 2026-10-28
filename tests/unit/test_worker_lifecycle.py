@@ -41,9 +41,9 @@ class BackendState:
             raise OSError("private transport diagnostic")
         return deepcopy(self.cancel_reply)
 
-    def observe(self, native, *, manifest):
+    def observe(self, items):
         self.calls.append("observe")
-        return deepcopy(self.observation)
+        return {item["native_identity"]["attempt_id"]: deepcopy(self.observation) for item in items}
 
     def collect(self, native, outputs, *, manifest):
         self.calls.append("collect")
