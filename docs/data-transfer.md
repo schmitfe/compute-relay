@@ -100,7 +100,7 @@ does not preserve an entire multi-gigabyte stdout/stderr history.
 
 ## Storage and upgrade
 
-Defaults are 64 GiB per project, 256 GiB per installation, 1000 objects per
+Defaults are 64 GiB per project, 256 GiB per installation, 10,000 objects per
 project and eight incomplete transfers per project. Configure byte quotas with
 `BROKER_PROJECT_STORAGE_LIMIT` and `BROKER_GLOBAL_STORAGE_LIMIT`;
 `BROKER_MAX_TRANSFER_BYTES` can lower the per-file limit. The full declared size

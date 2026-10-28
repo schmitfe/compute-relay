@@ -165,6 +165,198 @@ An additional focused stream test exercises batched observation through a reused
 helper process. The synthetic 500-item tests verify query bounds, independently
 settled budgets and queue fairness without relying on wall-clock assertions.
 
+## Recorded results: 28 October 2026, real Slurm site
+
+The acceptance run used the installed `f0dc61d` transport implementation against
+a shared four-node cluster. Every job requested one CPU, 1 GiB and a one-minute
+limit, with no GPUs. The site's allocation quantum charged two logical CPUs per
+running job. Cohorts used `gpu`, `smp` and `mpi`; none used `interactive`.
+At most 52 benchmark jobs were admitted concurrently, with four remote command
+slots. Other users' load was not controlled.
+
+The [sanitized aggregate measurements](benchmarks/2026-10-28-real-slurm.json)
+retain cohort results and the separate MCP checks. Independent Slurm accounting
+verified **944 unique native jobs: 940 completed
+and four deliberately cancelled**, with no additional native IDs and CPU charges
+matching the controller. These consumed 10.465 CPU core-hours. Another 52
+admissions were cancelled before dispatch during an interrupted test and have
+no native jobs or compute charge. The controller recorded 996 admissions in
+total, including diagnostic cohorts. All successful jobs' result markers and
+declared artifact hashes were checked; representative payload bytes were also
+downloaded and hashed. Four successful jobs needed explicit output recovery
+after automatic collection retries were exhausted.
+
+The comparison below uses equal cohorts from rounds 1, 2 and 4: three 52-job
+cohorts, or 156 jobs per mode, sleeping 20 seconds each. Mode order rotated
+between rounds. Round 3 was excluded from comparative timings because it
+included an operator pause and a service restart. Dispatch time runs from the
+first execution request to receipt of the last native ID in that cohort.
+Scheduler-query and helper-source totals cover the three cohorts per mode.
+
+| Mode | Median time for 52 native IDs | Scheduler status queries | Helper source transferred | Peak worker RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Standard | 5.621 s | 1,374 | 63.094 MiB | 70.29 MiB |
+| Batched | 5.063 s | 306 | 50.955 MiB | 70.34 MiB |
+| Persistent | 5.141 s | 1,552 | 0.463 MiB | 69.59 MiB |
+| Combined | 5.255 s | 325 | 0.424 MiB | 70.19 MiB |
+
+Batching reduced measured scheduler-status traffic by **77.7%**. Persistent
+helpers reduced helper-source transfers by more than 99%, without establishing
+a consistent throughput advantage in these few trials. Source-byte figures
+exclude SSH framing, input/output data and controller HTTP traffic. Adaptive
+polling changes the number of observations, so query counts measure actual
+traffic rather than identical observation workloads. Persistent helper memory
+is additional to worker RSS; the recorded aggregate helper high-water figures
+are not simultaneous RSS measurements.
+
+Output completion was dominated by publication contention rather than native
+execution failures. Across the 624 comparison jobs, 130 first collection
+reports were incomplete. The project-wide publication lock returned
+`UPLOAD_BUSY`; most collections recovered automatically. The final persistent
+cohort required three explicit recovery requests, so its output-completion
+timing includes an operator pause and is excluded. For the two uninterrupted
+rounds shared by every mode, median complete-output times were 56.054 s
+(standard), 50.091 s (batched), 78.698 s (persistent) and 72.330 s (combined).
+These small, shared-cluster samples do not isolate a causal transport effect.
+
+Each mode also passed a separate eight-job recovery trial: one successful
+submission response was discarded after the remote journal recorded its
+receipt, one job was deliberately cancelled, and the owned SSH master was
+stopped. Automatic reconnection and journal reconciliation preserved all native
+IDs; seven successful jobs' outputs and the cancelled job's accounting were
+verified per mode. Missing outputs from deliberately cancelled jobs were
+expected. An initial standard-mode trial used an incorrect fault injection
+which also released ownership descriptors; its eight jobs were reconciled and
+verified, and the trial was repeated with fresh jobs. The batched trial's
+original harness waited for cancelled-job outputs; its recovery checks passed,
+but its timings were excluded. These are test-driver corrections, not changes
+to application recovery code.
+
+Sixteen additional jobs per mode produced 1 MiB outputs successfully. Payloads
+were identical within each size, so deduplication means this was an output-size
+and integrity check, **not a sustained unique-data bandwidth test**. Native
+queue waits, measured entirely from Slurm timestamps, had a median of two
+seconds and a maximum of 20 seconds across the run. Accounting comments were
+not retained by this site; the independent audit checked exact work-directory
+bindings and native IDs instead. Losing a controller response after a durable
+remote receipt does not test every possible interruption before that receipt
+is written.
+
+Capacity and responsiveness findings remain open in the [roadmap](roadmap.md):
+
+- The former 1,000-object quota rejected work after 476 admissions, despite only
+  506 KiB of stored data. The maintained default is now 10,000 objects; byte and
+  incomplete-transfer limits remain in force.
+- The 32 MiB logical-metadata quota rejected preparation after 788 admissions.
+  A temporary 64 MiB ceiling in the disposable benchmark launcher allowed the
+  test to finish. The normal application's metadata default remains 32 MiB.
+- The portal stopped responding once during preparation and recovered after a
+  restart. Its cause remains unconfirmed; private stack diagnostics were enabled
+  for the remaining trials. This interruption is excluded from transport timings.
+- Retained records, artifact quotas, submission allowances and outstanding-work
+  capacity are separate limits. Raising a submission allowance alone cannot
+  provide bounded burst admission or artifact retention.
+
+For this site, batching is the useful simplification candidate. The persistent
+transport and stream handler alone add 264 production lines plus integration
+branches and tests; their source-byte savings did not resolve the observed
+collection failures or establish a clear dispatch advantage. Choose the
+supported path explicitly before removing the alternative. The experiments
+remain off by default pending that decision and the reliability fixes.
+
+### Separate MCP acceptance
+
+After the HTTP transport comparison and its native audit finished, a fresh
+project ran **200 additional jobs through the installed MCP stdio server using
+the official SDK client**. This kept MCP traffic out of the transport timings.
+The jobs requested the same resources, slept five seconds and ran in four
+groups of 50. Eight MCP calls could be in flight at once. The workload included
+200 new preparations, 200 idempotent preparation replays, two 100-job listing
+pages, 200 compact job reads, detailed status polling, 200 execution requests
+and 200 downloaded and hashed result artifacts.
+
+The preparation burst took **14.405 seconds**. Replays returned the same 200 job
+IDs and admitted no extra jobs. All 200 jobs succeeded, with exactly 200 unique
+native IDs and matching Slurm/controller CPU accounting. The complete MCP run
+took **206.446 seconds** and used 0.587 CPU core-hours. Its 2,441 tool calls
+returned no tool errors, and no job needed an explicit output-recovery request.
+Internal connector traffic nevertheless encountered 48 `UPLOAD_BUSY` responses
+and one `STORAGE_QUOTA` response; all recovered automatically. The generic quota
+error does not identify its exact branch. Given the small objects and available
+byte/object capacity, the eight-incomplete-transfer limit is the likely cause.
+Final inspection found zero pending transfer reservations in both projects.
+
+| MCP operation | Calls | Median call time | 95th percentile |
+| --- | ---: | ---: | ---: |
+| New preparation | 200 | 0.571 s | 0.988 s |
+| Idempotent preparation replay | 200 | 0.131 s | 0.176 s |
+| Compact job read | 200 | 0.142 s | 0.221 s |
+| Detailed status read | 1,236 | 0.179 s | 0.374 s |
+| Execution request | 200 | 0.269 s | 0.450 s |
+| Result artifact retrieval | 200 | 0.011 s | 0.023 s |
+
+Call times exclude waiting for the client's eight-slot semaphore; the complete
+burst time includes that wait. Mean serialized SDK tool-result sizes were
+2,243 bytes for compact reads and 10,479 bytes for detailed reads. These sizes
+include the SDK result representation, not the full JSON-RPC or transport
+overhead. This verifies a 200-job burst through one local MCP session; it does
+not establish unbounded concurrency or remote HTTP MCP support.
+
+Across both tests, Slurm verified **1,144 native jobs**, including four deliberate
+cancellations, in approximately **82 minutes** from the original start. Total
+CPU charge was 11.052 core-hours, with no GPU use or interactive-partition jobs.
+The normal 32 MiB project metadata ceiling and existing retained-record limits
+remain separate from the temporary benchmark ceiling and submission grants.
+
+### Architectural interpretation
+
+The tests establish successful recovery in the exercised cases, not a lower
+failure rate for either transport. The recommendation for batching over one-shot
+helpers is an architectural judgment for this product: fewer application-owned
+lifecycle states, while reducing load on the shared scheduler.
+
+Both approaches already share an authenticated OpenSSH master. The persistent
+experiment keeps Python helpers alive within that connection; it does not
+introduce SSH connection reuse. OpenSSH provides connection multiplexing through
+[ControlMaster](https://man.openbsd.org/ssh_config#ControlMaster). Our one-shot
+transport opens commands over the protected master and refuses a fresh login
+when that master is absent.
+
+One-shot commands pay for process startup and retransmit helper source, but
+their process memory and protocol state end with each command. Persistent
+helpers avoid that repeated work while adding pool admission, channel ownership,
+framing, configuration pinning, timeout disposal and shutdown/reconnection
+coordination. The implementation already defends these boundaries; additional
+states mean additional invariants to maintain, not proof of an existing defect.
+Durable job identity and submission receipts remain in journals in both modes,
+so losing a helper does not by itself imply losing or duplicating a native job.
+
+The current persistent transport also retains the one-shot implementation for
+discovery and environment inspection. Choosing persistence therefore preserves
+both mechanisms unless its coverage and deployment contract are expanded.
+Choosing one-shot helpers allows the extra stream protocol and pool to be
+removed while retaining coverage of the existing operations.
+
+For hundreds of jobs, bounded batching is useful even without faster dispatch:
+Slurm's [squeue performance guidance](https://slurm.schedmd.com/squeue.html#SECTION_PERFORMANCE)
+asks clients to minimize scheduler RPCs because excessive calls can degrade the
+shared controller. A batch failure can temporarily delay status for several
+jobs; it must preserve their independent identities, accounting and reservations,
+and retry observation without repeating compute. A single status interface
+accepting one through a bounded number of jobs avoids maintaining separate
+single-job and multi-job status implementations. Collection should retain
+independent per-job recovery and bounded transfer capacity rather than acquire
+batch-wide completion semantics.
+
+Persistent helpers become a stronger choice if measurements on target sites
+show that process/channel startup, helper-source bandwidth or login-node CPU
+limits constrain the required workload. High network latency alone is not proof:
+both choices still exchange requests and responses over SSH. A representative
+high-latency or sustained-load test would need to demonstrate enough benefit to
+justify the extra lifecycle machinery. The present results support one shared
+SSH transport with bounded status batching as the general default for this
+codebase; they do not establish a universal rule against persistent RPC services.
+
 ## Promotion criteria and remaining work
 
 Both options remain off by default. The tests cover

@@ -57,7 +57,7 @@ PROJECT_STORAGE_LIMIT = int(os.environ.get("BROKER_PROJECT_STORAGE_LIMIT", 64 * 
 GLOBAL_STORAGE_LIMIT = int(os.environ.get("BROKER_GLOBAL_STORAGE_LIMIT", 256 * 1024**3))
 if not 1 <= MAX_TRANSFER_BYTES <= 8 * 1024**3 or min(PROJECT_STORAGE_LIMIT, GLOBAL_STORAGE_LIMIT) < 1:
     raise ImproperlyConfigured("Storage quotas must be positive and the per-file transfer limit must not exceed 8 GiB")
-MAX_OBJECTS = 1000
+MAX_OBJECTS = 10000
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Strict"
 CSRF_COOKIE_SAMESITE = "Strict"

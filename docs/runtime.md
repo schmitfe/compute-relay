@@ -97,7 +97,7 @@ that their cluster configuration was removed and their status may be stale.
 ## Local storage and metadata bounds
 
 Object storage and durable metadata have separate admission accounting. Current
-object defaults are 64 GiB per project, 256 GiB per installation and 1000 objects
+object defaults are 64 GiB per project, 256 GiB per installation and 10,000 objects
 per project, including pending capacity in quota checks. Ordinary byte uploads
 are bounded to 512 KiB each; the resumable data path supports 8 GiB per file and
 64 GiB per job in either direction. The legacy inline terminal report retains
