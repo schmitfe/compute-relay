@@ -43,6 +43,7 @@ class Worker:
         self.scheduler = scheduler or PrincipalScheduler(max_concurrency=self.parallelism, max_per_owner=self.parallelism)
         self.owner_id = self.scheduler.register(owner_id)
         self._poll_lock = asyncio.Lock()
+        self._output_lock = asyncio.Lock()
         self._in_progress = {}
 
     @staticmethod
@@ -168,7 +169,7 @@ class Worker:
         try:
             if getattr(backend, "supports_file_transfer", False) is True:
                 from .transfers import collect_outputs
-                result.update(await collect_outputs(self.client, backend, lease, native, manifest))
+                result.update(await collect_outputs(self.client, backend, lease, native, manifest, self._output_lock))
             else:
                 collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
                 result.update(self._serialized_collection(collected, manifest), collection_state="complete")

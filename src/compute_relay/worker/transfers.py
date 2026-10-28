@@ -1,8 +1,11 @@
 """Finite transfer steps for the asynchronous execution worker."""
 
+import asyncio
 import base64
+import random
 
 from compute_relay.transfer import CHUNK_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, FileReference
+from .client import ControlError
 
 
 def authority(lease):
@@ -58,18 +61,29 @@ async def stage_inputs(client, backend, lease, manifest, files):
             offset = new_offset
 
 
-async def collect_outputs(client, backend, lease, native, manifest):
+async def _publish_output(client, endpoint, body, publication_lock):
+    for attempt in range(8):
+        try:
+            async with publication_lock:
+                return await client.request("POST", endpoint, body)
+        except ControlError as error:
+            if error.status != 409 or error.broker_code != "UPLOAD_BUSY" or attempt == 7:
+                raise
+            await asyncio.sleep(random.uniform(.05, min(2, .1 * 2**attempt)))
+
+
+async def collect_outputs(client, backend, lease, native, manifest, publication_lock):
     inventory = await backend.output_manifest(native, manifest=manifest)
     for entry in output_entries(inventory, manifest):
         endpoint = f"/internal/v1/attempts/{lease['attempt_id']}/output-chunk"
         common = {**authority(lease), "path": entry["path"]}
-        reply = await client.request("POST", endpoint, {**common, "sha256": entry["sha256"], "size_bytes": entry["size_bytes"]})
+        reply = await _publish_output(client, endpoint, {**common, "sha256": entry["sha256"], "size_bytes": entry["size_bytes"]}, publication_lock)
         offset = check_offset(reply, entry["size_bytes"])
         while not reply["complete"]:
             chunk = await backend.output_chunk(native, manifest=manifest, path=entry["path"], offset=offset, version=entry["version"])
             content = check_chunk(chunk, offset, entry["size_bytes"])
-            reply = await client.request("POST", endpoint, {**common, "transfer_id": reply["transfer_id"], "offset": offset,
-                "content_base64": chunk["content_base64"], "finish": offset + len(content) == entry["size_bytes"]})
+            reply = await _publish_output(client, endpoint, {**common, "transfer_id": reply["transfer_id"], "offset": offset,
+                "content_base64": chunk["content_base64"], "finish": offset + len(content) == entry["size_bytes"]}, publication_lock)
             new_offset = check_offset(reply, entry["size_bytes"])
             if new_offset != offset + len(content):
                 raise ValueError("Invalid output acknowledgement")

@@ -26,6 +26,43 @@ canonicalization, HTTPX, the official MCP SDK, and Waitress. The `test` extra ad
 development checks. `requirements.lock` constrains reproducible source/fixture
 installs; a normal `pip install compute-relay` needs no extras.
 
+### Diagnosing an unresponsive portal
+
+The portal subprocess accepts `SIGUSR1` to append every Python thread's current
+stack to the installation's private `web.log` without stopping the server. This
+is available to web processes started with this version; it exposes no HTTP
+diagnostic endpoint and prints no frame-local values.
+
+Read the launcher's PID from the installation's private `runtime.json`. On Linux,
+`ps -o pid=,args= --ppid LAUNCHER_PID` identifies its web subprocess running
+`-m compute_relay.local_web`. Replace the PID placeholders with those verified
+process IDs, then run `kill -USR1 WEB_PID`. Inspect the newly appended stacks in
+that installation's `web.log` before restarting. Send the signal only to that web
+subprocess: the launcher, connectors and older web processes do not install this
+handler and can terminate if signalled. Keep logs private when sharing diagnostics.
+
+The 2026-10-28 cluster run encountered a portal stall lasting at least four
+minutes: all four request threads stopped responding, health checks timed out,
+and the queued-request count grew to 24. Restarting restored service. No stacks
+were captured during the stall, so its cause remains unconfirmed.
+
+Subsequent disposable local HTTP probes used synthetic data, the real Django and
+SQLite application, and four Waitress request threads without contacting a cluster:
+
+| Probe | Observed result |
+| --- | --- |
+| 180 sequential create/prepare operations with concurrent context/job reads | 848 health checks; maximum latency 21 ms |
+| Eight writers preparing 280 jobs | 517 temporary publication conflicts recovered by client retries; maximum health latency 223 ms |
+| Eight writers preparing 640 jobs, with a 64 MiB fixture metadata allowance | 1,123 temporary publication conflicts recovered; maximum health latency 217 ms |
+| 641 retained jobs and 1,001 seeded terminal upload receipts, followed by 128 unique-name preparations | Receipt pruning retained exactly 1,000 rows; 293 temporary publication conflicts recovered; maximum health latency 263 ms |
+| Four clients stopped reading 4 MiB/24 MiB artifact replies; 16 clients disconnected before receiving preparation replies | Stable-key retries recovered 16 distinct jobs; maximum health latency 3 ms |
+
+Cold request-handler imports completed concurrently in the receipt-pruning probe.
+These probes did not reproduce the original stall; they do not establish a fix.
+The [responsiveness roadmap item](roadmap.md) remains open pending a captured
+recurrence and a regression test for its actual cause. Server thread counts and
+database timeouts remain unchanged.
+
 ## Portal and agent interface
 
 The human portal configures clusters, discovery, execution recipes, projects,
@@ -104,6 +141,20 @@ are bounded to 512 KiB each; the resumable data path supports 8 GiB per file and
 its 10 MiB artifact bound. Eight pending upload reservations per project are
 allowed. See [files and live output](data-transfer.md) for limits, recovery and
 incremental log semantics.
+
+Each worker serializes its output-write requests through one FIFO asynchronous
+lock, preventing its own collectors from starving one another at the object
+store's writer lock. Remote chunk reads, status checks and lease renewals remain
+concurrent. Publication retries only an explicit `409 UPLOAD_BUSY`, reusing the
+unchanged request and already fetched remote chunk. Each request has at most
+eight attempts, with jittered delays capped at two seconds and at most 7.1
+seconds of added sleep. Cancellation or lost authority stops collection. Quota,
+integrity and other errors retain the separate bounded collection-recovery
+path without resubmitting compute or charging it again. Sustained contention
+can still exhaust automatic recovery and require an explicit output retry.
+If a retry can reuse verified bytes already published by another transfer, it
+releases its own redundant partial reservation immediately. Other transfers'
+reservations and independent input-upload authority remain unchanged.
 
 Logical metadata charges default to 32 MiB per project and 256 MiB across the
 installation. Job request/manifests, idempotency responses and extension
@@ -202,6 +253,23 @@ source transfers without establishing a clear throughput advantage. The chosen
 architecture keeps one SSH transport and bounded status grouping. Detailed
 experiment material is retained in Git history rather than maintained as a
 second implementation or benchmark framework.
+
+After consolidation, a disposable local Slurm acceptance submitted two jobs
+under a different reviewed execution-bundle hash, deliberately lost one submit
+reply, and verified reconciliation, cancellation, status reads, collection and
+final native accounting through the current helper. Recovery retained the same
+identities and made exactly two native submission calls. This checks helper
+upgrade/recovery behavior; it does not replace real-site load acceptance.
+
+A separate local contention probe used the real four-thread HTTP server,
+on-disk SQLite and eight worker lanes to collect 100 unique 64 KiB outputs from
+already-settled synthetic attempts. Short contention retries alone completed
+83 on the first pass and left four partial reservations. With the worker's
+FIFO publication lock, the production execution path collected all 100 in
+14.839 seconds with exactly 200 output requests, no publication conflicts or
+pending reservations, and unchanged 100 settlements / 200 CPU-core-seconds.
+All 447 health requests succeeded; maximum latency was 86 ms. This measures
+local publication recovery, not SSH, Slurm or large-file throughput.
 
 Four successful jobs required explicit output recovery after automatic retries
 were exhausted by publication contention. One portal stall during preparation

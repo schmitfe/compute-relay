@@ -1,6 +1,8 @@
 """Installed loopback WSGI server for the supervised local application."""
 
+import faulthandler
 import os
+import signal
 import sys
 
 
@@ -12,6 +14,7 @@ def main():
     port = int(os.environ["BROKER_PORT"])
     if not 1 <= port <= 65535:
         raise SystemExit("Choose a valid local port.")
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     os.environ["DJANGO_SETTINGS_MODULE"] = "compute_relay.control.settings"
     from django.core.wsgi import get_wsgi_application
     from waitress import serve

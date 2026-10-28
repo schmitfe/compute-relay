@@ -54,11 +54,18 @@ acceptance. See [completion and its consistency limits](investigations.md).
 ## Output recovery without another compute run
 
 Execution state, accounting and `collection_state` are separate. A successful
-native job can have `collection_state=retry_pending` or `failed`. Collection
+native job can have `collection_state=retry_pending` or `failed`. Each worker
+shares one asynchronous lock across output-write requests so its collectors do
+not starve one another; remote reads and lease renewals remain concurrent. Temporary
+publication contention (`409 UPLOAD_BUSY`) first retries the unchanged descriptor
+or chunk request at most eight times, with jittered delays capped at two seconds
+and at most 7.1 seconds of added sleep. Other errors do not take this fast retry
+path; cancellation and lost lease authority interrupt it. Collection
 failures receive at most three automatic attempts, with 15 and 30 second retry
 delays. Completed output objects and incomplete transfers are reused on retry;
 the worker does not resubmit the job or charge compute again. Missing declared
-files are reported as collection failures. After automatic retries stop:
+files are reported as collection failures. Reusing verified identical bytes
+also releases that transfer's redundant partial reservation. After automatic retries stop:
 
 ```sh
 compute-relay files retry --attempt-id ATTEMPT_UUID
@@ -120,7 +127,7 @@ No credentials or remote listeners are added by this change.
 
 Default tests exercise uploads, resumable downloads, stale leases, scopes,
 checksum/conflict rejection, quota reservations, live byte cursors, file changes,
-symlink rejection, and synchronous/asynchronous collection beyond 10 MiB.
+symlink rejection, bounded publication retries, and worker collection beyond 10 MiB.
 An additional local acceptance sends a file larger than 2 GiB through all four
 legs and checks Python allocation bounds:
 
@@ -137,5 +144,5 @@ The [recorded local acceptance](benchmarks/2026-10-27-resumable-transfers.json)
 transferred 2,147,483,665 bytes through each of the four legs, verified the final
 checksums, and measured 122,474,955 bytes (about 117 MiB) of peak traced Python
 allocations. The elapsed time includes allocation tracing and fixture overhead
-and is not a network throughput measurement. Persistent-helper tests separately
-exercise actual framed helper processes for large inputs, outputs and live logs.
+and is not a network throughput measurement. The worker uses the one-shot SSH
+transport for inputs, outputs and live logs.

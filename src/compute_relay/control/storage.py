@@ -283,12 +283,14 @@ def begin_transfer(project, digest, size, binding, *, uploaded=False):
     reconcile_uploads(limit=8)
     with _writer_lock(project.id):
         existing = Blob.objects.filter(project=project, sha256=digest, size_bytes=size).first()
+        current = UploadReservation.objects.filter(project=project, sha256=digest, size_bytes=size,
+            binding=binding, state="reserved").first()
         # A hash-only request must never turn a retained output into an upload grant.
         if existing and (not uploaded or UploadGrant.objects.filter(blob=existing).exists()):
             verify_blob(existing)
+            if current:
+                _finish(current, abort_if_missing=True, abort=True)
             return {"complete": True, "sha256": digest, "size_bytes": size, "offset": size}
-        current = UploadReservation.objects.filter(project=project, sha256=digest, size_bytes=size,
-            binding=binding, state="reserved").first()
         if current:
             partial = settings.ARTIFACT_ROOT / str(project.id) / ("upload-" + str(current.id))
             fd = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)

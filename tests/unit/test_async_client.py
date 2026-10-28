@@ -100,6 +100,7 @@ def test_async_http_errors_preserve_only_safe_codes_and_bounded_numeric_diagnost
 
     async def scenario():
         bodies = [resource_error(), {"error": {"code": "SCHEDULER_OPTIONS_REQUIRED", "message": PRIVATE + TOKEN}},
+                  {"error": {"code": "UPLOAD_BUSY", "message": PRIVATE + TOKEN, "details": {"private": PRIVATE + TOKEN}}},
                   {"error": {"code": PRIVATE + TOKEN, "message": PRIVATE + TOKEN}}]
         for document in bodies:
             stream = Stream([json.dumps(document).encode()])

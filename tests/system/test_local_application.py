@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from uuid import uuid4
 
 import pytest
 
@@ -159,6 +160,42 @@ def test_port_conflict_does_not_initialize_or_replace_another_installation(tmp_p
             cwd=tmp_path, env=environment(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
         assert result.returncode == 1 and "already in use" in result.stderr
         assert not (state / "control.sqlite3").exists() and not (state / "installation.json").exists()
+
+
+def test_portal_stack_signal_writes_private_all_thread_dump_and_keeps_serving(tmp_path):
+    from compute_relay.local_runtime import service_environment
+    from compute_relay.local_state import LocalState
+
+    state = tmp_path / "state"
+    port = free_port();origin = f"http://127.0.0.1:{port}"
+    installation = {"port": port, "owner_id": str(uuid4()), "installation_id": str(uuid4()),
+        "portal_auth": "none", "extensions": []}
+    with LocalState(state) as private:
+        env = environment()
+        env.update(service_environment(private, installation, str(uuid4())))
+        with private.log("web.log") as log:
+            process = subprocess.Popen([sys.executable, "-I", "-m", "compute_relay.local_web"],
+                cwd=tmp_path, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    log = state / "web.log"
+    try:
+        client, first = ready(process, origin, log)
+        process.send_signal(signal.SIGUSR1)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            assert process.poll() is None, "The diagnostic signal stopped the portal"
+            captured = log.read_text()
+            if captured.count("most recent call first") >= 5 and "local_web.py" in captured:
+                break
+            time.sleep(.05)
+        assert captured.count("most recent call first") >= 5
+        assert "handler_thread" in captured and "local_web.py" in captured
+        assert log.stat().st_mode & 0o777 == 0o600
+        assert state.stat().st_mode & 0o777 == 0o700
+        with client.open(origin + "/healthz", timeout=3) as response:
+            assert json.loads(response.read()) == first
+        assert process.poll() is None
+    finally:
+        stop(process)
 
 
 def test_offline_maintenance_cli_preserves_identity_and_never_replays_compacted_requests(tmp_path):

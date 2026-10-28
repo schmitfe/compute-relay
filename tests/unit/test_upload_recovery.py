@@ -228,3 +228,66 @@ def test_transfer_hashes_once_and_cached_verification_detects_changes(broker):
         blob_path(blob).write_bytes(b"changed! bytes")
         with pytest.raises(BrokerError, match="verification"):
             storage.verify_blob(blob)
+
+
+@pytest.mark.parametrize("uploaded", [False, True])
+def test_deduplicated_resume_releases_only_its_redundant_partial(broker, settings, uploaded):
+    data = b"identical bytes published by another transfer"
+    digest = sha256(data)
+    first = begin_transfer(broker.project, digest, len(data), "first", uploaded=uploaded)
+    transfer_chunk(broker.project, first["transfer_id"], "first", 0, data[:7], uploaded=uploaded)
+    other = begin_transfer(broker.project, digest, len(data), "unrelated")
+    transfer_chunk(broker.project, other["transfer_id"], "unrelated", 0, data[:3])
+    published = begin_transfer(broker.project, digest, len(data), "publisher", uploaded=uploaded)
+    transfer_chunk(broker.project, published["transfer_id"], "publisher", 0, data, finish=True, uploaded=uploaded)
+
+    resumed = begin_transfer(broker.project, digest, len(data), "first", uploaded=uploaded)
+
+    assert resumed == {"complete": True, "sha256": digest, "size_bytes": len(data), "offset": len(data)}
+    assert UploadReservation.objects.get(id=first["transfer_id"]).state == "aborted"
+    assert UploadReservation.objects.get(id=other["transfer_id"]).state == "reserved"
+    directory = settings.ARTIFACT_ROOT / str(broker.project.id)
+    assert not (directory / ("upload-" + first["transfer_id"])).exists()
+    assert (directory / ("upload-" + other["transfer_id"])).read_bytes() == data[:3]
+    broker.project.refresh_from_db()
+    pool = StoragePool.objects.get(id=1)
+    assert broker.project.storage_reserved == pool.reserved == len(data)
+    assert broker.project.storage_used == pool.used == len(data)
+    assert broker.project.object_count == 1 and Blob.objects.count() == 1
+    assert read_blob(Blob.objects.get()) == data
+    assert UploadGrant.objects.exists() is uploaded
+
+
+def test_output_deduplication_cannot_replace_independent_upload_bytes(broker):
+    data = b"retained output is not independent upload authority"
+    first = begin_transfer(broker.project, sha256(data), len(data), "upload:first", uploaded=True)
+    transfer_chunk(broker.project, first["transfer_id"], "upload:first", 0, data[:7], uploaded=True)
+    published = begin_transfer(broker.project, sha256(data), len(data), "output:publisher")
+    transfer_chunk(broker.project, published["transfer_id"], "output:publisher", 0, data, finish=True)
+
+    resumed = begin_transfer(broker.project, sha256(data), len(data), "upload:first", uploaded=True)
+
+    assert not resumed["complete"] and resumed["transfer_id"] == first["transfer_id"] and resumed["offset"] == 7
+    assert UploadReservation.objects.get(id=first["transfer_id"]).state == "reserved"
+    assert not UploadGrant.objects.exists()
+    assert transfer_chunk(broker.project, first["transfer_id"], "upload:first", 7, data[7:], finish=True, uploaded=True)["complete"]
+    broker.project.refresh_from_db()
+    assert broker.project.storage_reserved == StoragePool.objects.get(id=1).reserved == 0
+    assert UploadGrant.objects.filter(blob=Blob.objects.get()).exists()
+
+
+def test_deduplicated_resume_verifies_retained_bytes_before_discarding_partial(broker, settings):
+    data = b"expected bytes"
+    first = begin_transfer(broker.project, sha256(data), len(data), "first")
+    transfer_chunk(broker.project, first["transfer_id"], "first", 0, data[:4])
+    published = begin_transfer(broker.project, sha256(data), len(data), "publisher")
+    transfer_chunk(broker.project, published["transfer_id"], "publisher", 0, data, finish=True)
+    blob_path(Blob.objects.get()).write_bytes(b"tampered bytes")
+
+    with pytest.raises(BrokerError, match="verification"):
+        begin_transfer(broker.project, sha256(data), len(data), "first")
+
+    assert UploadReservation.objects.get(id=first["transfer_id"]).state == "reserved"
+    assert (settings.ARTIFACT_ROOT / str(broker.project.id) / ("upload-" + first["transfer_id"])).read_bytes() == data[:4]
+    broker.project.refresh_from_db()
+    assert broker.project.storage_reserved == StoragePool.objects.get(id=1).reserved == len(data)

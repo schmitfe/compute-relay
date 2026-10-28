@@ -19,14 +19,14 @@ from compute_relay.backends import SlurmBackend, prepare
 from compute_relay.backends.preparation import sha256, canonical_json_bytes, JOB_PROTOCOL
 from compute_relay.control import services
 from compute_relay.control.models import Artifact, Attempt, Blob, LedgerEntry, UploadGrant, UploadReservation
-from compute_relay.control.storage import begin_transfer, blob_path, transfer_chunk, verify_blob
+from compute_relay.control.storage import _writer_lock, begin_transfer, blob_path, transfer_chunk, verify_blob
 from compute_relay.domain.lifecycle import PreparedWork
 from compute_relay.remote import helper
 from compute_relay.transfer import CHUNK_BYTES, FileReference, MAX_FILE_BYTES
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.runner import Worker
 from compute_relay.worker.transfers import collect_outputs, stage_inputs
-from compute_relay.worker.client import ControlError
+from compute_relay.worker.client import ControlError, _http_error
 from compute_relay.workspace import WorkspaceClient
 from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
 from test_support.unit_test_workspace import workspace
@@ -58,7 +58,7 @@ class HTTP:
             raise ControlError("CONTROL_UNAVAILABLE")
         response = self.client.generic(method, path, data=json.dumps(body or {}), content_type="application/json")
         if response.status_code >= 400:
-            raise ControlError(response.json()["error"]["code"], response.status_code)
+            raise _http_error(response.status_code, response.content)
         return response.json()
 
     def get_bytes(self, path, limit):
@@ -352,6 +352,43 @@ def test_collection_failure_retries_settled_attempt_without_new_compute_or_charg
     assert attempt.collection_state == "complete" and attempt.error_code == "" and not attempt.collection_pending
     assert broker.grant.spent_cpu == 2 and broker.grant.reserved_cpu == 0
     assert Attempt.objects.count() == 1 and LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_collection_retries_busy_publication_without_restarting_remote_reads(broker, monkeypatch):
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    budgeted(broker)
+    job = prepared_job(broker, outputs=["result.json"])
+    attempt, first = dispatched(broker, job)
+    native, lease = submit_receipt(broker, attempt, first)
+    data = b"correct result"
+    backend = AsyncMock()
+    backend.output_manifest.return_value = {"files": [{"path": "result.json", "sha256": sha256(data),
+        "size_bytes": len(data), "version": "unchanged"}]}
+    backend.output_chunk.return_value = {"offset": 0, "content_base64": base64.b64encode(data).decode()}
+    api = HTTP("synthetic-worker-token")
+    request = api._request
+    blocked = set()
+
+    def contended(method, path, body=None, **kwargs):
+        step = body.get("offset", "descriptor")
+        if step not in blocked:
+            blocked.add(step)
+            with _writer_lock(broker.project.id):
+                return request(method, path, body, **kwargs)
+        return request(method, path, body, **kwargs)
+
+    api._request = contended
+    result = asyncio.run(collect_outputs(AsyncHTTP(api), backend, lease, native, job.manifest, asyncio.Lock()))
+    assert result["collection_state"] == "complete"
+    assert len(api.calls) == 4 and api.calls[0] == api.calls[1] and api.calls[2] == api.calls[3]
+    backend.output_manifest.assert_awaited_once()
+    backend.output_chunk.assert_awaited_once_with(native, manifest=job.manifest, path="result.json", offset=0, version="unchanged")
+    artifact = Artifact.objects.get(attempt=attempt, path="result.json")
+    assert artifact.blob.sha256 == sha256(data) and artifact.blob.size_bytes == len(data)
+    assert Artifact.objects.filter(attempt=attempt).count() == 1
+    broker.project.refresh_from_db()
+    assert broker.project.storage_reserved == 0 and not UploadReservation.objects.filter(state="reserved").exists()
 
 
 @pytest.mark.django_db(transaction=True)

@@ -187,6 +187,7 @@ def test_mcp_instructions_and_tools_explain_current_effective_limits():
     ("INSPECTION_ALREADY_REQUESTED", "cancel its job"),
     ("IDEMPOTENCY_CONFLICT", "original arguments"), ("ACTIVE_JOB_LIMIT", "list_project_jobs"),
     ("INVALID_REQUEST", "resource, scheduler and input fields"),
+    ("UPLOAD_BUSY", "unchanged transfer request"),
 ])
 def test_known_error_codes_have_local_actionable_guidance_without_remote_content(code, guidance):
     document = {"error": {"code": code, "message": PRIVATE + TOKEN, "details": {"private": PRIVATE + TOKEN}}}

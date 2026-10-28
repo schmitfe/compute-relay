@@ -75,8 +75,10 @@ The number of remote commands is independent of the number of admitted Slurm
 jobs: a project can allow up to 1,000 active jobs without opening 1,000 SSH
 sessions. Existing project settings are preserved. Slurm and account limits
 still determine which submitted jobs actually run. Short jobs may still cost
-more to stage and schedule than to execute locally; this release uses individual
-submissions and observations rather than batched scheduler queries.
+more to stage and schedule than to execute locally. Submissions are individual;
+one status interface accepts one through 32 due jobs on the same connection and
+shares scheduler queries across them. Every job keeps its own verification,
+lease, journal and finalization through the same worker path.
 
 Finite concurrency/pending limits bound work inside the worker.
 These process-level controls do not replace database reservations, active/lifetime
@@ -175,7 +177,9 @@ operations. After a controller or remote-helper failure, retries wait with jitte
 and a 60-second ceiling; only one operation tests recovery after each cooldown.
 Older in-flight successes cannot clear a newer failure. HTTP retries happen at
 the worker's durable polling/report boundary, not by blindly resending arbitrary
-mutations. Controller 401/403 responses stop the connector instead of retrying
+mutations. Output publication alone retries an unchanged descriptor or chunk on
+explicit `409 UPLOAD_BUSY`; see [bounded output recovery](data-transfer.md#output-recovery-without-another-compute-run).
+Controller 401/403 responses stop the connector instead of retrying
 its credential. Helper calls continue to require the owned master and cannot
 fall back to another SSH login themselves.
 
