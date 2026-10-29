@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build distributions, install a wheel into a clean venv, and start it locally.
 
-Uses disposable state and loopback only. Requires the test extra for `build` and
+Uses disposable state and loopback only. Requires uv, the test extra for `build` and
 network/package-cache access for build and runtime dependencies. No Docker,
 SSH credential, existing installation, project key, or cluster is used.
 """
@@ -149,9 +149,12 @@ def main():
         distribution = root / "dist"
         run([sys.executable, "-m", "build", "--sdist", "--wheel", "--outdir", distribution, source], cwd=root, env=clean_env)
         wheel, count = inspect_distributions(source, distribution)
+        constraints = root / "runtime-requirements.txt"
+        run(["uv", "export", "--locked", "--no-dev", "--no-emit-project", "--no-hashes",
+             "--output-file", constraints], cwd=ROOT, env=clean_env)
         target = root / "venv";venv.EnvBuilder(with_pip=True).create(target)
         python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        run([python, "-m", "pip", "install", "--constraint", ROOT / "requirements.lock", wheel], cwd=root, env=clean_env)
+        run([python, "-m", "pip", "install", "--constraint", constraints, wheel], cwd=root, env=clean_env)
         run([python, "-m", "pip", "check"], cwd=root, env=clean_env)
         run([python, "-c", "from importlib import import_module\n"
              "from compute_relay.remote.bundles import bundle_source,component_names\n"
@@ -164,7 +167,7 @@ def main():
              "    compile(source, kind, 'exec')\n"
              "    for component in component_names(kind):\n"
              "        import_module('compute_relay.remote.' + component[:-3])\n"] , cwd=root, env=clean_env)
-        run([python, "-c", "import django,httpx,mcp,waitress,jsonschema,rfc8785; from importlib.metadata import distribution; package=distribution('compute-relay'); assert not any('extra ==' in requirement for requirement in package.requires or [] if requirement.startswith(('httpx','mcp','waitress'))); assert {entry.name for entry in package.entry_points if entry.group == 'console_scripts'} == {'compute-relay'}"] , cwd=root, env=clean_env)
+        run([python, "-c", "import django,httpx,mcp,waitress,jsonschema,rfc8785; from compute_relay.sdk import WorkspaceClient,ProjectFacade,finish; from importlib.metadata import distribution; package=distribution('compute-relay'); assert not any('extra ==' in requirement for requirement in package.requires or [] if requirement.startswith(('httpx','mcp','waitress'))); assert {entry.name for entry in package.entry_points if entry.group == 'console_scripts'} == {'compute-relay'}"] , cwd=root, env=clean_env)
         executable = python.parent / ("compute-relay.exe" if os.name == "nt" else "compute-relay")
         run([executable, "--help"], cwd=root, env=clean_env)
         result = "not requested (--skip-launch)" if args.skip_launch else installed_launcher(python, root, clean_env)

@@ -9,6 +9,7 @@ package and links to its operational and development documentation.
 | Understand shipped behavior and limits | [Runtime](runtime.md) |
 | Configure clusters and projects | [Portal](management.md), [connectors](personal-connectors.md), [cluster setup](cluster-configuration.md) |
 | Connect a science project | [Local project and client setup](local-client-setup.md) |
+| Orchestrate jobs in a local agent script | [Python SDK](python-sdk.md) |
 | Understand authority and trust boundaries | [Architecture](architecture.md), [security](security.md) |
 | Review API and planning contracts | [API target contract](api.md), [schemas](../contracts/README.md) |
 | Run checks | [Testing](testing.md), [disposable Slurm testing](container-testing.md) |

@@ -54,7 +54,7 @@ def usage_guide(project, interpreter):
         "and project key supply those fields. Replace `BUNDLE_ID` and `WORKLOAD_STAGE` below "
         "with the staged bundle ID and a stable idempotency key:\n\n```sh\n"
         + command("files", "prepare", "--directory", root, "--bundle", "BUNDLE_ID", "--request", "job.json", "--idempotency-key", "WORKLOAD_STAGE") + "\n```\n\n"
-        "Request execution through the project's MCP connection and follow its actual review "
+        "Request execution through the project's MCP connection or Python SDK and follow its actual review "
         "and budget requirements. This prepare command does not execute a job.\n\n"
         "## Fetch declared, retained results\n\n"
         "Replace `ATTEMPT_UUID` and choose a fresh output subdirectory:\n\n```sh\n"
@@ -74,4 +74,45 @@ def usage_guide(project, interpreter):
         "--no-download exports broker metadata with local delivery unverified. The run-manifest.json "
         "keeps scientific assessment, execution, collection, verification and accounting distinct. "
         "No finish/export command starts compute.\n"
+        "\n## Orchestrate locally with Python\n\n"
+        "For a bounded, preplanned sequence, an agent can write one local script instead of "
+        "returning each status response to the model. The SDK reuses the same HTTP client and "
+        "broker policy as MCP. Save the following as `run_compute.py` beside `main.py` and "
+        "`job.json`; run it with `" + shlex.join([str(interpreter), "run_compute.py"]) + "`. "
+        "Use the recorded interpreter, even if the science project has its own environment.\n\n"
+        "```python\n"
+        "import time\n"
+        "from compute_relay.sdk import ControlError, ProjectFacade, WorkspaceClient, finish\n\n"
+        "workspace = WorkspaceClient(" + repr(root) + ")\n"
+        "project = ProjectFacade.from_credential(workspace.client)\n"
+        'bundle = workspace.stage(["main.py"])\n'
+        'job = workspace.prepare(bundle["bundle_id"], "job.json")\n'
+        'print({"job_id": job["id"], "review_url": job["review_url"]})\n'
+        'project.request_execution(job["id"])\n'
+        "deadline, revision = time.monotonic() + 600, None\n"
+        "while time.monotonic() < deadline:\n"
+        "    try:\n"
+        '        job = project.get_job(job["id"], after_revision=revision, wait_seconds=20 if revision else 0)\n'
+        "    except ControlError as error:\n"
+        '        if error.broker_code != "WAIT_BUSY":\n'
+        "            raise\n"
+        "        time.sleep(1)\n"
+        "        continue\n"
+        '    revision = job["revision"]\n'
+        '    if job["completion"]["operationally_reconciled"]:\n'
+        '        print(finish(workspace, job_id=job["id"], output="results/" + job["id"], resume=True))\n'
+        "        break\n"
+        '    if job["next_action"]["action"] in {"await_human_review", "revise_request", "recover_outputs"}:\n'
+        '        print({"job_id": job["id"], "next_action": job["next_action"], "review_url": job["review_url"]})\n'
+        "        break\n"
+        "else:\n"
+        '    print({"job_id": job["id"], "status": "still_pending"})\n'
+        "```\n\n"
+        "The preparation key is derived from the unchanged request and staged hashes; the "
+        "default execution key reuses the first execution request. Rerunning an unchanged "
+        "script therefore resumes the same job rather than buying another execution. Human "
+        "review and output-recovery cases return for attention. A timeout stops local waiting "
+        "after about ten minutes; it does not cancel admitted work. HTTP, scheduler and "
+        "collection latency still exist. Print concise receipts, never credentials or source bytes. "
+        "Hash verification does not establish scientific correctness.\n"
     ).encode("utf-8")

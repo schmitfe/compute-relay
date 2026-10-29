@@ -10,17 +10,17 @@ automatic execution.
 
 ## Quick start
 
-Install from this repository and start the local portal:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
+install from this repository and start the local portal:
 
 ```sh
-python -m venv ~/.venvs/compute-relay
-. ~/.venvs/compute-relay/bin/activate
-python -m pip install git+https://github.com/schmitfe/compute-relay.git
+uv tool install --python 3.13 git+https://github.com/schmitfe/compute-relay.git
 compute-relay
 ```
 
-The launcher opens `http://127.0.0.1:8768`. In the portal, add your cluster and
-start its connector. Choose your SSH identity and answer passphrase or MFA
+If `compute-relay` is not found, run `uv tool update-shell` and reopen your
+terminal. The launcher opens `http://127.0.0.1:8768`. In the portal, add your
+cluster and start its connector. Choose your SSH identity and answer passphrase or MFA
 prompts in the terminal. Then select an environment, create a project, set its
 approval and compute limits, and create a project key.
 
@@ -55,17 +55,19 @@ isolate credentials from another process running as that account; see the
 
 ## Development
 
-From a source checkout, install the test extra and run the core checks:
+From a source checkout, use uv 0.13.6 to install the locked test extra and run
+the core checks:
 
 ```sh
-python -m pip install -c requirements.lock '.[test]'
-python -m pytest -q
-python tools/check_contracts.py
-python tools/local_smoke.py
+uv sync --locked --extra test --python 3.13
+uv run --locked --extra test python -m pytest -q
+uv run --locked --extra test python tools/check_contracts.py
+uv run --locked --extra test python tools/local_smoke.py
 ```
 
-The default suite uses SQLite and synthetic credentials; it does not contact a
-real cluster. See [optional Slurm acceptance](docs/container-testing.md).
+`uv.lock` is the dependency source for development, CI and disposable fixtures.
+Ordinary wheel/pip installation remains supported. The default suite uses SQLite
+and synthetic credentials; it does not contact a real cluster. See [optional Slurm acceptance](docs/container-testing.md).
 
 ## License
 

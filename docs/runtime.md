@@ -23,8 +23,11 @@ Restarting resumes the same durable state after any necessary SSH login.
 
 The ordinary package includes Django, JSON Schema validation, RFC 8785 manifest
 canonicalization, HTTPX, the official MCP SDK, and Waitress. The `test` extra adds
-development checks. `requirements.lock` constrains reproducible source/fixture
-installs; a normal `pip install compute-relay` needs no extras.
+development checks. `uv.lock` pins development, CI and disposable fixture
+installs; uv 0.13.6 checks the lock before syncing or running those checks.
+Setuptools remains the package build backend. Normal tool or wheel installation
+needs no extras, and the installed application does not require uv. See
+[installation](deployment.md) and [development checks](testing.md).
 
 ### Diagnosing an unresponsive portal
 
@@ -79,6 +82,12 @@ and verify checksums. See [client setup](local-client-setup.md).
 
 The package exposes project-local stdio MCP clients. Remote HTTP MCP and OAuth
 are not provided; see the [roadmap](roadmap.md).
+
+An initialized workspace can also use the public [Python SDK](python-sdk.md) to
+prepare, request, monitor and export jobs in a bounded local script. It reuses
+the MCP adapter's client and operations with the same project credential and
+broker authorization. Intermediate responses can stay outside model context;
+HTTP requests, human review and scheduler waits still apply.
 
 ## Preparation, approval, and accounting
 

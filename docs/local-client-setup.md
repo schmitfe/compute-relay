@@ -53,6 +53,12 @@ UUID or credential contents belong in the prompt. This setup configures the
 local stdio adapter; HTTP MCP and OAuth are unsupported. See the
 [roadmap](roadmap.md) for the conditions to consider hosted support.
 
+Agents with local Python execution can also use the [Python SDK](python-sdk.md)
+with the same initialized workspace and credential. The generated helper guide
+includes a bounded script that prepares, requests and waits for a job, then
+exports verified results without sending every status response through the model.
+Human review and the broker's current limits apply to either interface.
+
 To add the other client or workflow to an already initialized project, explicitly
 reuse its key; retain the original `--broker-url` for a remote service:
 

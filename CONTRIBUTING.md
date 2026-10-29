@@ -14,11 +14,23 @@ material or acceptance artifacts containing private host details.
 
 ## Development checks
 
-Use Python 3.12 or 3.13 in a virtual environment, then install the locked test
-dependencies with `python -m pip install -c requirements.lock '.[test]'`.
-Run `python -m pytest -q`, `python tools/check_contracts.py`, and
-`python tools/local_smoke.py`. The ordinary suite uses temporary
-databases and tiny synthetic workloads. It does not contact a real cluster.
+Use Python 3.12 or 3.13 and [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/).
+The project requires that uv version. Install and run the locked test environment:
+
+```sh
+uv sync --locked --extra test --python 3.13
+uv run --locked --extra test python -m pytest -q
+uv run --locked --extra test python tools/check_contracts.py
+uv run --locked --extra test python tools/local_smoke.py
+```
+
+`uv.lock` is shared by development, CI and disposable Docker fixtures. Change
+dependencies in `pyproject.toml`, run `uv lock`, and commit both files. Use
+`uv lock --upgrade-package NAME` for an intentional dependency update; `--locked`
+checks fail instead of silently changing the lock. Setuptools remains the build
+backend, and ordinary wheel/pip installation is supported.
+
+The ordinary suite uses temporary databases and tiny synthetic workloads. It does not contact a real cluster.
 The NumPy science calibration is optional and separate from core dependencies.
 
 For environment, workflow or storage changes, run the corresponding disposable
