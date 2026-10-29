@@ -6,7 +6,7 @@ from compute_relay.control.execution_policy import approval_requirements
 
 
 @pytest.mark.parametrize("project_mode", ["approval_required", "budgeted", "mixed"])
-@pytest.mark.parametrize("key_mode", ["inherit", "automatic", "approval_required"])
+@pytest.mark.parametrize("key_mode", ["inherit", "approval_required"])
 @pytest.mark.parametrize("cluster_setting", [False, True, None])
 @pytest.mark.parametrize("within", [False, True, None])
 def test_every_independent_gate_and_mixed_condition_is_reported(project_mode, key_mode, cluster_setting, within):
@@ -35,7 +35,7 @@ def test_unknown_envelope_comparisons_do_not_look_like_a_boolean_decision(within
 
 
 def test_explanations_do_not_copy_private_cluster_settings():
-    result = approval_requirements({"mode": "budgeted"}, "automatic", {
+    result = approval_requirements({"mode": "budgeted"}, "inherit", {
         "site_profile": {"automatic_execution_allowed": False, "private": "PRIVATE-PROFILE"},
         "ssh": {"identity_file": "PRIVATE-KEY-PATH"},
     })

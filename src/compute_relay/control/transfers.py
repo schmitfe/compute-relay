@@ -3,7 +3,6 @@
 import base64
 
 from django.db import transaction
-from django.utils import timezone
 
 from . import services
 from .auth import worker_identity
@@ -88,13 +87,4 @@ def retry_collection(request, attempt_id):
     _, attempt = scope(request, "jobs:write", attempt_id=attempt_id)
     if body(request):
         raise ValueError("Retry accepts an empty object")
-    with transaction.atomic():
-        attempt = Attempt.objects.select_for_update().get(id=attempt.id)
-        if not attempt.native_identity or not services.terminal_observation(attempt.observation):
-            raise BrokerError("ATTEMPT_ACTIVE", "Output recovery requires a finished native job.", 409)
-        attempt.collection_pending = True
-        attempt.collection_state = "pending"
-        attempt.collection_failures = 0
-        attempt.next_poll_at = timezone.now()
-        attempt.save(update_fields=["collection_pending", "collection_state", "collection_failures", "next_poll_at"])
-    return {"attempt_id": str(attempt.id), "collection_state": "pending"}, 202
+    return services.retry_collection(attempt)

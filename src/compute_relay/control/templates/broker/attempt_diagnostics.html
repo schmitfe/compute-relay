@@ -3,7 +3,7 @@
 <h2 id="attempt-diagnostic-{{ diagnostics.attempt_id }}">{{ diagnostics.title }}</h2>
 <p>{{ diagnostics.message }}</p>
 <p><strong>Next step:</strong> {{ diagnostics.suggestion }}</p>
-<dl>
+<details data-attempt-facts><summary>Scheduler and accounting details</summary><dl>
 <dt>Slurm job ID</dt><dd>{{ diagnostics.native_job_id|default:"Not recorded" }}</dd>
 <dt>Cluster</dt><dd>{% if diagnostics.connection_removed %}{{ diagnostics.cluster_name }} (configuration removed){% elif diagnostics.connection_id %}<a href="/clusters/{{ diagnostics.connection_id }}/">{{ diagnostics.cluster_name }}</a>{% else %}{{ diagnostics.cluster_name }}{% endif %}</dd>
 <dt>Broker attempt</dt><dd>{{ diagnostics.attempt_id|default:"Not recorded" }}</dd>
@@ -18,11 +18,16 @@
 <dt>Observation source</dt><dd>{{ diagnostics.source|default:"Not reported" }}</dd>
 <dt>Reported allocation</dt><dd>{{ diagnostics.allocated_cpus|default_if_none:"Unknown" }} CPUs · {{ diagnostics.allocated_gpus|default_if_none:"Unknown" }} GPUs · {{ diagnostics.elapsed_seconds|default_if_none:"Unknown" }} seconds</dd>
 <dt>Reported usage</dt><dd>{{ diagnostics.cpu_core_seconds|default_if_none:"Unknown" }} CPU-core seconds · {{ diagnostics.gpu_device_seconds|default_if_none:"Unknown" }} GPU-device seconds</dd>
-</dl>
+</dl></details>
 {% for notice in diagnostics.notices %}<p class="notice">{{ notice }}</p>{% endfor %}
-<h3>Standard error</h3><pre>{{ diagnostics.stderr|default:"No standard error collected." }}</pre>
+{% if diagnostics.cancellation_pending %}<p role="status">Cancellation is requested. The connector must confirm the outcome; accounting and reserved compute can remain pending.</p>{% endif %}
+{% if diagnostics.can_cancel %}<form method="post" action="/review/{{ diagnostics.job_id }}/attempts/{{ diagnostics.attempt_id }}/cancel/">{% csrf_token %}<button class="reject">Request cancellation</button></form><p class="helptext">Cancellation keeps this attempt's identity and accounting. A dispatched job may already have used compute; cancellation does not promise a refund.</p>{% endif %}
+{% if diagnostics.can_collect %}<form method="post" action="/review/{{ diagnostics.job_id }}/attempts/{{ diagnostics.attempt_id }}/collect/">{% csrf_token %}<button>Retry output collection</button></form><p class="helptext">Recover files from this same finished allocation. This does not run the program again or create another compute reservation.</p>{% endif %}
+{% if diagnostics.outputs %}<h3>Declared results</h3><ul>{% for output in diagnostics.outputs %}<li><code>{{ output.path }}</code> · {% if output.artifact %}<a href="/review/{{ diagnostics.job_id }}/results/{{ output.artifact.id }}/">Download result</a> · {{ output.artifact.blob.size_bytes }} bytes<br><small>SHA-256 {{ output.artifact.blob.sha256 }}</small>{% else %}Not collected{% endif %}</li>{% endfor %}</ul><p class="helptext">A download does not acknowledge all results or validate their scientific content. Keep the path and verify the recorded SHA-256 when saving results for further work.</p>{% endif %}
+<details data-attempt-logs{% if diagnostics.severity == "error" %} open{% endif %}><summary>Collected logs</summary><h3>Standard error</h3><pre>{{ diagnostics.stderr|default:"No standard error collected." }}</pre>
 {% if diagnostics.stderr_truncated %}<p class="notice">Standard error preview is limited to {{ diagnostics.log_limit_bytes }} bytes. Additional text is not shown here.</p>{% endif %}
 <h3>Standard output</h3><pre>{{ diagnostics.stdout|default:"No standard output collected." }}</pre>
 {% if diagnostics.stdout_truncated %}<p class="notice">Standard output preview is limited to {{ diagnostics.log_limit_bytes }} bytes. Additional text is not shown here.</p>{% endif %}
+</details>
 </section>
 {% endautoescape %}

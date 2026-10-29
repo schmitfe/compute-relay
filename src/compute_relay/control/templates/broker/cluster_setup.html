@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% load broker_local_runtime %}{% block content %}
+{% extends "broker/base.html" %}{% load broker_local_runtime %}{% block title %}Set up {{ setup.name }}{% endblock %}{% block content %}
 {% local_connector_start_available as local_start %}
 <p><a href="/clusters/">Clusters</a> / {{ setup.name }}</p><h1>Set up {{ setup.name }}</h1>
 <p class="notice">Details saved · Start your personal connector to identify this cluster. This cluster cannot receive jobs yet.</p>
@@ -25,6 +25,7 @@ compute-relay connector --setup /path/to/personal-connector.json --state-directo
 {% if local_start %}</details>{% endif %}
 {% else %}<p>Set your remote username in <a href="/clusters/setup/{{ setup.id }}/edit/">cluster details</a> before starting its connector. Choose the working directory after the connector is available.</p>{% endif %}
 {% else %}<p>The personal connector is for Slurm over SSH. Simulators are created by the disposable test fixtures.</p>{% endif %}
-<p>Reload this page after discovery to open the cluster overview, choose the remote working directory and confirm cluster configuration. Compute access still needs explicit project permissions and review; setup does not enable automatic spending.</p>
+<p><a class="button secondary" href="/clusters/setup/{{ setup.id }}/">Check connection and discovery</a></p>
+<p>After discovery, continue to the cluster overview to choose its working directory and confirm its resource limits. Compute access still needs explicit project permissions and review; setup does not enable automatic spending.</p>
 </section>
 {% endblock %}

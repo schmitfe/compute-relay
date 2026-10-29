@@ -9,10 +9,18 @@ import json
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Count, Q, Sum
 
 from .errors import BrokerError
 from .models import AuditEvent, IdempotencyRecord, MetadataPool, MetadataUsage, Project
+
+
+RECORD_LIMITS = {
+    "job": ("MAX_PROJECT_DRAFT_JOBS", 1000, "MAX_INSTALLATION_DRAFT_JOBS", 10000),
+    "idempotency": ("MAX_PROJECT_IDEMPOTENCY_KEYS", 10000, "MAX_INSTALLATION_IDEMPOTENCY_KEYS", 100000),
+    "definition": ("MAX_PROJECT_DEFINITIONS", 1000, "MAX_INSTALLATION_DEFINITIONS", 10000),
+    "retired_job": ("MAX_PROJECT_RETIRED_JOBS", 10000, "MAX_INSTALLATION_RETIRED_JOBS", 100000),
+}
 
 
 def json_size(value):
@@ -40,11 +48,7 @@ def reserve_metadata(project, kind, object_id, size_bytes):
         project_rows = MetadataUsage.objects.filter(project=project)
         project_size = project_rows.aggregate(total=Sum("size_bytes"))["total"] or 0
         total = MetadataUsage.objects.aggregate(total=Sum("size_bytes"))["total"] or 0
-        limits = {"job": ("MAX_PROJECT_DRAFT_JOBS", 1000, "MAX_INSTALLATION_DRAFT_JOBS", 10000),
-                  "idempotency": ("MAX_PROJECT_IDEMPOTENCY_KEYS", 10000, "MAX_INSTALLATION_IDEMPOTENCY_KEYS", 100000),
-                  "definition": ("MAX_PROJECT_DEFINITIONS", 1000, "MAX_INSTALLATION_DEFINITIONS", 10000),
-                  "retired_job": ("MAX_PROJECT_RETIRED_JOBS", 10000, "MAX_INSTALLATION_RETIRED_JOBS", 100000)}
-        names = limits.get(kind, limits["definition"])
+        names = RECORD_LIMITS.get(kind, RECORD_LIMITS["definition"])
         # Every extension definition/run shares a cap, regardless of its subtype.
         group = ["job"] if kind == "job" else ["idempotency"] if kind == "idempotency" else ["retired_job"] if kind == "retired_job" else None
         group_rows = MetadataUsage.objects.filter(kind__in=group) if group else MetadataUsage.objects.exclude(kind__in=["job", "idempotency", "retired_job"])
@@ -96,6 +100,45 @@ def metadata_usage(project=None):
             "records": rows.count(), "jobs": rows.filter(kind="job").count(),
             "idempotency_keys": rows.filter(kind="idempotency").count(),
             "definitions": rows.exclude(kind__in=["job", "idempotency", "retired_job"]).count()}
+
+
+def capacity_rows(project):
+    """Read-only logical capacity, including pending storage claims; no disk scan."""
+    from .models import StoragePool, UploadReservation
+    from .storage import MAX_PENDING_UPLOADS
+    current = Project.objects.get(id=project.id)
+    pool = StoragePool.objects.filter(id=1).first()
+    kinds = {"job": Q(kind="job"), "retired_job": Q(kind="retired_job"),
+             "definition": ~Q(kind__in=["job", "idempotency", "retired_job"])}
+    metadata = MetadataUsage.objects.aggregate(
+        global_bytes=Sum("size_bytes"), project_bytes=Sum("size_bytes", filter=Q(project=project)),
+        **{scope + kind: Count("id", filter=condition & restriction)
+           for kind, condition in kinds.items()
+           for scope, restriction in [("project_", Q(project=project)), ("global_", Q())]})
+    keys = IdempotencyRecord.objects.filter(compacted=False).aggregate(
+        project_idempotency=Count("id", filter=Q(project=project)), global_idempotency=Count("id"))
+    metadata.update(keys)
+    pending = UploadReservation.objects.filter(project=project, state="reserved").count()
+    rows = []
+
+    def row(label, used, limit, global_used=None, global_limit=None, *, bytes=False):
+        rows.append({"label": label, "bytes": bytes, "used": used, "limit": limit,
+            "remaining": max(0, limit - used), "global_used": global_used, "global_limit": global_limit,
+            "global_remaining": max(0, global_limit - global_used) if global_limit is not None else None,
+            "full": used >= limit or (global_limit is not None and global_used >= global_limit)})
+
+    row("Stored and reserved file bytes", current.storage_used + current.storage_reserved, settings.PROJECT_STORAGE_LIMIT,
+        (pool.used + pool.reserved) if pool else 0, settings.GLOBAL_STORAGE_LIMIT, bytes=True)
+    row("Stored files and pending transfers", current.object_count + pending, settings.MAX_OBJECTS)
+    row("Incomplete transfers", pending, MAX_PENDING_UPLOADS)
+    row("Logical metadata", metadata["project_bytes"] or 0, _limit("PROJECT_METADATA_LIMIT", 32 * 1024**2),
+        metadata["global_bytes"] or 0, _limit("GLOBAL_METADATA_LIMIT", 256 * 1024**2), bytes=True)
+    for kind, label in [("job", "Retained job records"), ("idempotency", "Active retry receipts"),
+                        ("definition", "Module definitions and runs"), ("retired_job", "Archived job identities")]:
+        names = RECORD_LIMITS[kind]
+        row(label, metadata["project_" + kind], _limit(names[0], names[1]),
+            metadata["global_" + kind], _limit(names[2], names[3]))
+    return rows
 
 
 def idempotency_charge_id(operation, key):

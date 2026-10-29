@@ -921,3 +921,17 @@ def cancel_attempt(attempt):
             attempt.next_poll_at = timezone.now()
             attempt.save()
         return serialize_attempt(attempt), 202
+
+
+def retry_collection(attempt):
+    """Revisit the same finished native allocation without admitting compute."""
+    with transaction.atomic():
+        attempt = Attempt.objects.select_for_update().get(id=attempt.id)
+        if not attempt.native_identity or not terminal_observation(attempt.observation):
+            raise BrokerError("ATTEMPT_ACTIVE", "Output recovery requires a finished native job.", 409)
+        attempt.collection_pending = True
+        attempt.collection_state = "pending"
+        attempt.collection_failures = 0
+        attempt.next_poll_at = timezone.now()
+        attempt.save(update_fields=["collection_pending", "collection_state", "collection_failures", "next_poll_at"])
+    return {"attempt_id": str(attempt.id), "collection_state": "pending"}, 202

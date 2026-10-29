@@ -151,8 +151,12 @@ def portal(request, project_id):
         return HttpResponse("Project access is required.", status=403)
     if request.method != "GET":
         return HttpResponse(status=405)
+    permitted = set(project.grant.policy["allowed_environment_revision_sha256"])
+    rows = list(EnvironmentBuild.objects.filter(spec__project=project).select_related("spec", "job", "environment").order_by("-created_at")[:100])
+    for build in rows:
+        build.permitted_for_jobs = bool(build.environment_id and build.environment.revision_sha256 in permitted)
     return render(request, "broker_environments/builds.html", {"project": project,
-        "builds": EnvironmentBuild.objects.filter(spec__project=project).select_related("spec", "job", "environment").order_by("-created_at")[:100]})
+        "builds": rows})
 
 
 @csrf_protect

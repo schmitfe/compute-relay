@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Sign in{% endblock %}{% block content %}
 <h1>Open your compute workspace</h1><p>Project API keys are for agent requests.</p>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 {% if password_free %}<p>Use the one-time portal access link shown in your launcher terminal. It expires after five minutes. Run the launcher again to get a fresh link for this running workspace.</p>{% else %}<form method="post">{% csrf_token %}<label>Username <input name="username" autocomplete="username" maxlength="150" required></label><label>Password <input name="password" type="password" autocomplete="current-password" maxlength="4096" required></label><button>Sign in</button></form>{% endif %}

@@ -1,7 +1,8 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Compute Relay</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{% block title %}Workspace{% endblock %} · Compute Relay</title>
 {% include "broker/portal_theme_script.html" %}
 {% include "broker/portal_styles.html" %}
 </head><body>
+<a class="skip-link" href="#main-content">Skip to content</a>
 <header><a class="portal-brand" href="/">Compute Relay</a><div class="header-controls"><small class="header-identity">Local application · {% if user.is_authenticated %}{{ user.get_full_name|default:user.username }}{% else %}Human review{% endif %}</small><div class="theme-picker" id="portal-theme-picker" hidden><label for="portal-theme">Theme</label><select id="portal-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div><noscript><small>Theme follows your system setting.</small></noscript></div></header>
-{% load broker_extensions %}{% if user.is_authenticated %}<nav><a href="/">Projects &amp; jobs</a> <a href="/clusters/">Clusters</a> <a href="/projects/new/">New project</a>{% extension_navigation as extension_links %}{% for link in extension_links %}<a href="{{ link.url }}">{{ link.label }}</a>{% endfor %}</nav>{% endif %}
-{% block content %}{% endblock %}{% include "broker/live_updates_script.html" %}</body></html>
+{% load broker_extensions %}{% if user.is_authenticated %}<nav aria-label="Main"><a href="/"{% if request.path == '/' %} aria-current="page"{% endif %}>Projects &amp; jobs</a> <a href="/clusters/"{% if request.path == '/clusters/' %} aria-current="page"{% endif %}>Clusters</a> <a href="/projects/new/"{% if request.path == '/projects/new/' %} aria-current="page"{% endif %}>New project</a>{% extension_navigation as extension_links %}{% for link in extension_links %}<a href="{{ link.url }}"{% if request.path == link.url %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}</nav>{% endif %}
+<main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>{% include "broker/live_updates_script.html" %}</body></html>

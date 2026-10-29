@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Storage for {{ project.name }}{% endblock %}{% block content %}
 <p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / Storage</p><h1>Storage for {{ project.name }}</h1>
 <p class="notice">Budgets are advisory estimates. They do not enforce filesystem quotas, reserve physical space, or redirect existing jobs. Job storage redirection is not connected in this version. Capacity checks run only when the location owner enables them and the protected worker supports storage.</p>
 {% if can_add %}<p><a class="button" href="/projects/{{ project.id }}/storage/targets/new/">Add storage location</a></p>{% else %}<p>Assign one of your clusters to this project before adding a storage location through its HPC account.</p>{% endif %}
@@ -11,9 +11,12 @@
 {% elif row.target.owner_id == request.user.id %}<form method="post" action="/projects/{{ project.id }}/storage/pools/{{ row.target.pool_id }}/probes/">{% csrf_token %}{% if row.target.pool.probe_enabled %}<input type="hidden" name="enabled" value="false"><button>Pause capacity checks</button>{% else %}<input type="hidden" name="enabled" value="true"><button>Enable read-only capacity checks</button>{% endif %}</form>{% else %}<p>The location owner controls capacity checks.</p>{% endif %}</td></tr>
 {% empty %}<tr><td colspan="4">No storage locations have been added to this project on this cluster.</td></tr>{% endfor %}</tbody></table></div>
 {% empty %}<p>No clusters or storage locations are assigned to this project.</p>{% endfor %}</section>
-<section><h2>Shared budget and defaults by cluster</h2><ul>{% for cluster in connections %}<li><a href="?connection={{ cluster.id }}">{{ cluster }}</a></li>{% empty %}<li>Assign a cluster in project settings first.</li>{% endfor %}</ul>
-{% if form %}<h3>{{ selected_connection }}</h3><p>Shared budget totals apply across every cluster and API key in this project. Each cluster has its own selected locations.</p>
-<form method="post">{% csrf_token %}<input type="hidden" name="connection_id" value="{{ selected_connection.id }}">{{ form.as_p }}<button>Save advisory storage settings</button></form>{% endif %}</section>
+<section><h2>Planning estimates by cluster</h2><ul>{% for cluster in connections %}<li><a href="?connection={{ cluster.id }}">{{ cluster }}</a></li>{% empty %}<li>Assign a cluster in project settings first.</li>{% endfor %}</ul>
+{% if form %}<h3>{{ selected_connection }}</h3><p>Planning totals apply across every cluster and API key in this project. Selected locations are used for estimates; they do not change where jobs write files.</p>
+<form method="post">{% csrf_token %}<input type="hidden" name="connection_id" value="{{ selected_connection.id }}">{% include "broker/configuration_errors.html" %}
+{% for field in form %}{% if field.name == 'retained_gib_estimate' %}<details{% if form.retained_gib_estimate.errors or form.retained_inodes_estimate.errors %} open{% endif %}><summary>Manual retained-data estimates</summary>{% endif %}
+{% include "broker/configuration_field.html" with field=field %}
+{% if field.name == 'retained_inodes_estimate' %}</details><h4>Locations used for estimates</h4>{% endif %}{% endfor %}<button>Save advisory storage settings</button></form>{% endif %}</section>
 <section><h2>Cached capacity and quota observations</h2>
 {% for pool in snapshot.pools %}<article><h3>{{ pool.name }}</h3><p>Status: {{ pool.health.state }} · Measurement: {{ pool.measurement_status }}</p><p>Last observed: {{ pool.health.observed_at|default:"Not observed" }}{% if pool.health.age_seconds != None %} · Age: {{ pool.health.age_seconds }} seconds{% endif %}</p>
 <p>Checks: {% if pool.probe_enabled %}enabled{% else %}paused{% endif %} · Worker support: {% if pool.probe_supported %}available{% else %}not advertised{% endif %}</p>

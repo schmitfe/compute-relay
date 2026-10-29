@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}{{ run.revision.name }}{% endblock %}{% block content %}
 <p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / <a href="/projects/{{ project.id }}/workflows/">Workflows</a></p>
 <h1>{{ run.revision.name }}</h1><p>Run state: <strong>{{ summary.state }}</strong></p>
 <p>Downstream inputs bind exact retained producer artifacts. Review each prepared node before approving execution when the project or key requires confirmation.</p>

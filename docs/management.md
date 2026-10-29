@@ -10,8 +10,9 @@ boundary.
 ## Add a cluster
 
 1. In **Clusters → Add cluster**, save a name, Slurm login hostname, remote
-   username and SSH port. Supply a proposed work directory or choose it after
-   login. Saving the setup does not submit a job or create remote files.
+   username. Slurm is selected internally. Advanced SSH settings hold a custom
+   port, local key/known-hosts paths, requested session lifetime in minutes and
+   optional directory hint. Choose the working directory after login if unknown. Saving the setup does not submit a job or create remote files.
 2. Select **Start connector**. The local launcher handles the request and asks
    for SSH key selection, host-key confirmation, passphrase or MFA in its
    terminal. The browser does not collect the key or authentication answers.
@@ -57,7 +58,9 @@ connector needs another local login before it can dispatch or collect results.
 Create a project and select its execution policy, CPU-core/GPU-device allowance,
 resource envelope, expiry, simultaneous-job limit, lifetime submission limit,
 clusters and environments. Empty cluster/environment grants deny execution.
-Hours become integer seconds in the ledger. Editing totals preserves spent and
+The form groups execution policy, total allowance, maximum resources and access.
+Select a cluster and its exact environments together in one save; empty grants
+remain denied. Hours become integer seconds in the ledger. Editing totals preserves spent and
 reserved compute and cannot reduce the allowance below existing commitments.
 
 Preparing a package does not reserve compute. Requesting execution does: pending
@@ -91,7 +94,10 @@ ceiling. Resource/accounting bounds must be reviewed before unattended spending.
 
 Agent job names are 1–80 characters using letters, digits, underscores, dots and
 hyphens. The same name is used for display and Slurm. The project page lists its
-jobs, submitting keys, latest execution state and balances. An immutable package
+jobs, submitting keys, latest execution state and balances. Dashboard and project
+lists have 50-row pages and All, Unresolved and Awaiting review filters. Unresolved
+includes pending review, running/uncertain attempts, unfinished accounting and
+failed or pending output collection. Live updates preserve the selected view. An immutable package
 can have a completed or rejected execution; preparation alone does not mean it
 is waiting to run.
 
@@ -99,7 +105,24 @@ The review page shows the exact source, batch file and environment wrapper.
 Approve the current execution request or reject it with a comment. Source or
 resource changes require a new revision and decision. Collected errors, native
 exit status and bounded logs help diagnose completed attempts. Logs and scripts
-are displayed as untrusted text.
+are displayed as untrusted text. A failed decision keeps its comment for the matching
+request. Section links reach exact files, decisions and result actions; old
+resolved attempts and raw scheduler facts/logs can be expanded as needed.
+
+**Request cancellation** uses the same attempt and retains uncertain accounting;
+it remains available when metadata/receipt capacity is full. **Retry output
+collection** recovers the declared outputs of a finished native job without
+running compute again. Disabling new access to the cluster does not block this
+recovery; an archived configuration or revoked worker still does. Declared
+results have owner-authorized, verified attachment downloads with hashes and
+sizes. Downloads do not acknowledge all results or validate their science. Use
+the initialized workspace's helper guide for repeatable verified export.
+
+The allowance display uses CPU core-hours and GPU device-hours, with exact
+seconds available. Local storage and retained-record headroom are separate from
+lifetime executions. Completed jobs continue consuming retained records; raising
+the lifetime limit does not enlarge metadata or file capacity. Physical artifact
+cleanup is still a roadmap item.
 
 Visible dashboard/project/cluster/review status sections refresh from saved
 broker data. Editing a comment or setting is preserved. Discovery and cluster
@@ -114,7 +137,6 @@ restrictions and confirmation mode:
 | --- | --- |
 | Follow project policy | Uses the project's review/automatic policy |
 | Always require confirmation | Every new execution waits for human review |
-| Automatic within project policy | Automatic only when project and cluster policy also allow it |
 
 Issuance and rotation reveal the complete secret once in a non-cacheable
 response. The database retains a hash, metadata and independent key ID. Sessions,
@@ -122,6 +144,12 @@ audit events and replay metadata do not retain plaintext. Reloading cannot
 retrieve it; rotate or create another key if it is lost. All keys share the
 project ledger and lifetime limit. Revocation retains historical attribution and
 stops new operations/undispatched work while native accounting continues.
+
+The one-time key page provides the current broker address and a secret-free
+initialization command. Paste the key only into its hidden terminal prompt; do
+not put it in chat or command arguments. For a rotated key in an initialized
+workspace, replace only the private `.compute-relay/project.key` contents using
+a local editor, keep owner-only read permissions and restart the agent session.
 
 From the science workspace, use `compute-relay init-mcp --client both
 --with-workflow` and paste the key at the hidden prompt. The MCP client receives

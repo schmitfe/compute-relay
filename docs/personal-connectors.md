@@ -33,7 +33,8 @@ selected standalone connector.
    known-hosts **paths on your device**, using an absolute path or one beginning
    with `~/`. These are local hints, not uploads: the portal never reads those
    files. Do not paste a key, password, passphrase or second factor into a field.
-4. Choose a requested SSH session lifetime between 60 seconds and 24 hours.
+4. Choose a requested SSH session lifetime between 1 and 1,440 minutes (24 hours)
+   in advanced settings.
    The default is eight hours. This does not extend a shorter session permitted
    by the cluster.
 5. Save, then select **Download personal connector setup**. Keep the downloaded

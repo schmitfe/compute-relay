@@ -36,17 +36,18 @@ class LocalDateTime(forms.DateTimeField):
 
 class ProjectForm(forms.Form):
     name = forms.CharField(max_length=100, label="Project name")
-    mode = forms.ChoiceField(choices=[("approval_required", "Review every execution"), ("budgeted", "Automatic within limits"), ("mixed", "Automatic within limits, review larger requests")])
+    mode = forms.ChoiceField(label="Execution policy", choices=[("approval_required", "Review every execution"), ("budgeted", "Automatic within limits"), ("mixed", "Automatic within limits, review larger requests")],
+        help_text="Cluster and API-key confirmation requirements still apply. Review cannot exceed the remaining total allowance.")
     cpu_hours = forms.DecimalField(min_value=0, max_value=Decimal(2**53 - 1) / 3600, decimal_places=6, label="Total CPU core hours")
     gpu_hours = forms.DecimalField(min_value=0, max_value=Decimal(2**53 - 1) / 3600, decimal_places=6, label="Total GPU device hours")
-    max_cpus = forms.IntegerField(min_value=1, max_value=1024, initial=2, label="CPUs per job")
-    max_gpus = forms.IntegerField(min_value=0, max_value=16, initial=0, label="GPUs per job")
-    memory_mib = forms.IntegerField(min_value=128, max_value=16777216, initial=1024, label="Memory per job (MiB)")
-    wall_minutes = forms.IntegerField(min_value=1, max_value=10080, initial=10, label="Scheduler time per job (minutes)")
+    max_cpus = forms.IntegerField(min_value=1, max_value=1024, initial=2, label="Maximum CPUs per job")
+    max_gpus = forms.IntegerField(min_value=0, max_value=16, initial=0, label="Maximum GPUs per job")
+    memory_mib = forms.IntegerField(min_value=128, max_value=16777216, initial=1024, label="Maximum memory per job (MiB)")
+    wall_minutes = forms.IntegerField(min_value=1, max_value=10080, initial=10, label="Maximum scheduler time per job (minutes)")
     max_active_jobs = forms.IntegerField(min_value=1, max_value=1000, initial=2, label="Concurrent jobs",
         help_text="Up to 1,000 active jobs per project; cluster scheduling and account limits still apply. This is separate from the connector's bounded SSH command concurrency.")
     max_total_jobs = forms.IntegerField(required=False, min_value=0, max_value=1000000, initial=1000,
-        label="Total submission limit", help_text="Lifetime execution authorizations across every API key. Failures and cancellations still count. Zero blocks new executions.")
+        label="Lifetime execution limit", help_text="Lifetime execution authorizations across every API key. Failures and cancellations still count. Zero blocks new executions.")
     expires_at = LocalDateTime(label="New execution allowed until (Europe/Berlin)")
     connections = forms.ModelMultipleChoiceField(queryset=Connection.objects.none(), required=False, widget=forms.CheckboxSelectMultiple, label="Allowed clusters")
     environments = forms.ModelMultipleChoiceField(queryset=Environment.objects.none(), required=False, widget=forms.CheckboxSelectMultiple, label="Allowed environments")
@@ -58,28 +59,27 @@ class ProjectForm(forms.Form):
         self.fields["connections"].queryset = owned_connections(user).filter(setup_complete=True)
         self.pending_connections = owned_connections(user).filter(setup_complete=False).order_by("name", "id")
         self.fields["connections"].help_text = "Only clusters with completed setup can be granted to a project."
-        if self.is_bound:
-            values = self.data.getlist("connections") if hasattr(self.data, "getlist") else self.data.get("connections", [])
-        else:
-            values = self.initial.get("connections", owned_connections(user))
-        if isinstance(values, (str, UUID)):
-            values = [values]
-        connection_ids = []
-        for value in values:
-            try:
-                connection_ids.append(UUID(str(getattr(value, "pk", value))))
-            except (ValueError, TypeError, AttributeError):
-                pass  # The connection field reports invalid/foreign selections.
-        permitted = owned_connections(user).filter(id__in=connection_ids)
-        environments = owned_environments(user).filter(connection__in=permitted).select_related("connection").order_by("connection__name", "connection_id", "name")
+        environments = owned_environments(user).filter(connection__in=self.fields["connections"].queryset).select_related("connection").order_by("connection__name", "connection_id", "name")
         self.fields["environments"].queryset = environments
         groups = {}
         for environment in environments:
-            groups.setdefault(environment.connection, []).append((str(environment.id), environment.name))
-        self.fields["environments"].choices = [(connection.name, choices) for connection, choices in groups.items()]
+            groups.setdefault(environment.connection, []).append(str(environment.id))
+        self.environment_clusters = groups
         self.fields["environments"].label = "Allowed environments by cluster"
-        self.fields["environments"].help_text = "Recipes belong to their cluster. Save cluster changes to load its available recipes."
+        self.fields["environments"].help_text = "Select clusters and their environments together. An environment is allowed only when both boxes are checked; nothing is granted automatically."
         self.fields["expires_at"].initial = timezone.localtime(timezone.now() + timedelta(days=30))
+
+    @property
+    def environment_groups(self):
+        choices = {str(choice.data["value"]): choice for choice in self["environments"]}
+        return [(connection, [choices[value] for value in values]) for connection, values in self.environment_clusters.items()]
+
+    @property
+    def sections(self):
+        return [("project-policy", "Project and execution", [self[name] for name in ("name", "mode", "paused")]),
+                ("project-allowance", "Total project allowance", [self[name] for name in ("cpu_hours", "gpu_hours", "max_total_jobs", "expires_at")]),
+                ("project-job-limits", "Maximum per job and concurrency", [self[name] for name in ("max_cpus", "max_gpus", "memory_mib", "wall_minutes", "max_active_jobs", "allowed_gpu_types")]),
+                ("project-access", "Cluster and software access", [self[name] for name in ("connections", "environments")])]
 
     def clean(self):
         data = super().clean()
@@ -87,6 +87,10 @@ class ProjectForm(forms.Form):
             data["max_total_jobs"] = 1000
         if data.get("expires_at") and data["expires_at"] <= timezone.now():
             self.add_error("expires_at", "Choose a future cutoff.")
+        if "connections" in data and "environments" in data:
+            selected = {connection.id for connection in data["connections"]}
+            if any(environment.connection_id not in selected for environment in data["environments"]):
+                self.add_error("environments", "Select the cluster for every allowed environment, or uncheck that environment.")
         types = [part.strip() for part in data.get("allowed_gpu_types", "").split(",") if part.strip()]
         if any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}", part) for part in types):
             self.add_error("allowed_gpu_types", "Use valid Slurm GPU type names.")
@@ -100,13 +104,12 @@ class ProjectForm(forms.Form):
 class KeyForm(forms.Form):
     name = forms.CharField(max_length=80, label="Key name", help_text="Give each agent or client its own key.")
     expires_at = LocalDateTime(label="Key expires (Europe/Berlin)")
-    scopes = forms.MultipleChoiceField(choices=SCOPES, widget=forms.CheckboxSelectMultiple, initial=ALL_SCOPES)
-    cluster_access = forms.ChoiceField(choices=[("inherit", "All clusters allowed by the project"), ("restrict", "Only the selected clusters (none means deny all)")])
+    scopes = forms.MultipleChoiceField(label="Permissions", choices=SCOPES, widget=forms.CheckboxSelectMultiple, initial=ALL_SCOPES)
+    cluster_access = forms.ChoiceField(label="Cluster access", choices=[("inherit", "All clusters allowed by the project"), ("restrict", "Only the selected clusters (none means deny all)")])
     execution_mode = forms.ChoiceField(required=False, initial="inherit", label="Execution confirmation",
-        choices=[("inherit", "Follow project policy"), ("approval_required", "Always require human confirmation"),
-                 ("automatic", "Automatic within project policy")],
-        help_text="Automatic execution requires a project that permits it. Every mode respects project limits and cluster access.")
-    allowed_connections = forms.ModelMultipleChoiceField(queryset=Connection.objects.none(), required=False, widget=forms.CheckboxSelectMultiple)
+        choices=[("inherit", "Follow project policy"), ("approval_required", "Always require human confirmation")],
+        help_text="Following project policy never overrides cluster confirmation requirements or project limits.")
+    allowed_connections = forms.ModelMultipleChoiceField(label="Selected clusters", queryset=Connection.objects.none(), required=False, widget=forms.CheckboxSelectMultiple)
     submission_id = forms.UUIDField(widget=forms.HiddenInput, initial=uuid4)
 
     def __init__(self, *args, project, **kwargs):
@@ -125,16 +128,22 @@ class KeyForm(forms.Form):
     def clean_execution_mode(self):
         return self.cleaned_data.get("execution_mode") or "inherit"
 
+    @property
+    def sections(self):
+        return [("key-identity", "Agent access", [self[name] for name in ("name", "expires_at", "execution_mode")]),
+                ("key-clusters", "Cluster restrictions", [self[name] for name in ("cluster_access", "allowed_connections")]),
+                ("key-permissions", "Permissions", [self["scopes"]])]
+
 
 
 
 class EnvironmentForm(forms.Form):
     name = forms.CharField(max_length=80, label="Environment name")
     connection = forms.ModelChoiceField(queryset=Connection.objects.none(), label="Cluster")
-    kind = forms.ChoiceField(choices=[("system", "Existing Python / Bash"), ("modules", "Environment Modules / Lmod"), ("venv", "Existing Python virtual environment"), ("conda", "Conda / Anaconda / Miniforge environment"), ("poetry", "Existing Poetry virtual environment")])
+    kind = forms.ChoiceField(label="Environment type", choices=[("system", "Existing Python / Bash"), ("modules", "Environment Modules / Lmod"), ("venv", "Existing Python virtual environment"), ("conda", "Conda / Anaconda / Miniforge environment"), ("poetry", "Existing Poetry virtual environment")])
     detected_interpreter = forms.ChoiceField(required=False, choices=[], label="Detected Python", help_text="Choose a saved or inspected executable, or keep the manual interpreter below.")
     detected_environment = forms.ChoiceField(required=False, choices=[], label="Detected environment", help_text="Existing Conda or Poetry/venv prefixes on this cluster. Select one to fill its kind, prefix and interpreter.")
-    interpreter = forms.CharField(max_length=4096, initial="/usr/bin/python3", help_text="An existing executable on compute nodes. Module environments may use python3 through the loaded PATH.")
+    interpreter = forms.CharField(max_length=4096, initial="/usr/bin/python3", label="Interpreter path", help_text="An existing executable on compute nodes. Module environments may use python3 through the loaded PATH. Editing this path clears detected selections.")
     discovered_modules = forms.MultipleChoiceField(required=False, choices=[], widget=forms.CheckboxSelectMultiple,
         label="Modules from this cluster", help_text="Saved discovery catalog; selected entries load first. Inspect selection explicitly loads these modules on the login node; saving a recipe does not.")
     modules = forms.CharField(required=False, max_length=8192, widget=forms.Textarea, label="Additional modules (advanced)",
@@ -143,7 +152,7 @@ class EnvironmentForm(forms.Form):
         help_text="Leave empty to use the cluster's module command in a login batch shell. An explicit file is used only if that command is missing.")
     module_paths = forms.CharField(required=False, max_length=4096, widget=forms.Textarea,
         label="Module search paths", help_text="Optional: one approved absolute directory per line. Prefilled from cluster discovery when available.")
-    prefix = forms.CharField(required=False, max_length=4096, label="Environment prefix")
+    prefix = forms.CharField(required=False, max_length=4096, label="Environment directory", help_text="The existing Conda, virtual environment or Poetry directory on this cluster.")
     conda_executable = forms.CharField(required=False, max_length=4096, label="Conda executable", help_text="Leave empty during inspection to locate Conda through the selected modules. Used by conda run inside compute jobs.")
 
     def __init__(self, *args, user, inspection=False, observation=None, probe_selection=None, **kwargs):

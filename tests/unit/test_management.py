@@ -257,7 +257,7 @@ def test_rotation_revokes_old_key_and_preserves_scopes_expiry_and_restrictions(m
     assert_not_persisted(secret)
 
 
-@pytest.mark.parametrize("mode", ["inherit", "approval_required", "automatic"])
+@pytest.mark.parametrize("mode", ["inherit", "approval_required"])
 def test_key_creation_and_access_editor_store_explicit_execution_confirmation_mode(management, mode):
     context = management
     owner = human(context.owner)
@@ -265,7 +265,7 @@ def test_key_creation_and_access_editor_store_explicit_execution_confirmation_mo
     assert key.execution_mode == mode
     edit = owner.get(f"/projects/{context.project.id}/keys/{key.id}/edit/")
     assert edit.status_code == 200 and edit.context["form"].initial["execution_mode"] == mode
-    other_mode = "approval_required" if mode != "approval_required" else "automatic"
+    other_mode = "approval_required" if mode != "approval_required" else "inherit"
     assert form_post(owner, f"/projects/{context.project.id}/keys/{key.id}/edit/",
                      key_data(context, execution_mode=other_mode)).status_code == 302
     key.refresh_from_db()
@@ -296,9 +296,9 @@ def test_review_key_forces_approval_on_budgeted_project_and_rejection_consumes_n
     assert services.allowance(context.project)["jobs"]["remaining"] == 0
 
 
-def test_automatic_key_cannot_bypass_project_required_review(management):
+def test_inheriting_key_cannot_bypass_project_required_review(management):
     context = management
-    context.credential.execution_mode = "automatic"
+    context.credential.execution_mode = "inherit"
     context.credential.save(update_fields=["execution_mode"])
     job = prepared(context)
     assert execution(context, job).state == "awaiting_approval"

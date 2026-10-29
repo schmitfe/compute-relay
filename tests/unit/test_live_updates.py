@@ -152,7 +152,7 @@ def test_pending_request_displays_changed_current_key_requirements_without_chang
     initial, = live(client, "review", job.id).json()["execution_requests"]
     assert "KEY_REVIEW_REQUIRED" in initial["html"]
     assert "data-current-request-requirements" not in initial["html"]
-    broker.credential.execution_mode = "automatic"
+    broker.credential.execution_mode = "inherit"
     broker.credential.save(update_fields=["execution_mode"])
     changed, = live(client, "review", job.id).json()["execution_requests"]
     assert changed["state"] == initial["state"] == "awaiting_approval"

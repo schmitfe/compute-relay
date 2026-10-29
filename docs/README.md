@@ -8,6 +8,7 @@ package and links to its operational and development documentation.
 | Install, recover or upgrade | [Deployment](deployment.md) |
 | Understand shipped behavior and limits | [Runtime](runtime.md) |
 | Configure clusters and projects | [Portal](management.md), [connectors](personal-connectors.md), [cluster setup](cluster-configuration.md) |
+| Review portal simplification and its evidence | [Portal usability review](portal-usability-review.md) |
 | Connect a science project | [Local project and client setup](local-client-setup.md) |
 | Orchestrate jobs in a local agent script | [Python SDK](python-sdk.md) |
 | Understand authority and trust boundaries | [Architecture](architecture.md), [security](security.md) |

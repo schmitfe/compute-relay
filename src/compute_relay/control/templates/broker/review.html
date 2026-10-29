@@ -1,15 +1,17 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% load broker_resource_limits %}{% block title %}{{ job.name }}{% endblock %}{% block content %}
 <div id="live-job-summary" data-live-fragment>{% include "broker/live_job_summary.html" %}</div>
+<nav aria-label="Job sections"><a href="#execution-requests">Execution decisions</a>{% if detail.manifest %}<a href="#prepared-package">Prepared files</a>{% endif %}<a href="#attempts">Execution and results</a><a href="#save-results">Save results</a></nav>
 {% if job.state == "archived" %}<p class="notice">This job's unsubmitted package metadata was archived. Its identity and digest remain recorded. Create a fresh job to run new work.</p>{% endif %}
 <p class="helptext" data-live-page data-live-url="/ui/live/review/{{ job.id }}/"><span data-live-status role="status">Execution state and new review requests update automatically. Unsent comments are kept.</span></p>
 <p class="notice">This preview requires a separate protected service account or server before using real secrets with an agent that controls your desktop. A human session on an agent-controlled desktop does not prove human presence.</p>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <div id="live-resource-validation" data-live-fragment>{% include "broker/resource_validation.html" with validation=detail.resource_validation %}</div>
 <div id="live-approval-requirements" data-live-fragment>{% include "broker/approval_requirements.html" with requirements=detail.approval %}</div>
-<div data-live-attempts>{% for diagnostics in attempt_diagnostics %}{% include "broker/live_attempt.html" with diagnostics=diagnostics %}{% endfor %}</div>
+<div id="attempts" data-live-attempts>{% for diagnostics in attempt_diagnostics %}{% include "broker/live_attempt.html" with diagnostics=diagnostics collapsed=forloop.counter0 %}{% endfor %}</div>
+<section id="save-results"><h2>Save and verify results</h2><p>Use each attempt's declared result links to download retained files. For repeatable export of results and logs, use the file helper described in your science workspace's <code>.compute-relay/USAGE.md</code>. It verifies saved file hashes; exporting files does not rerun compute or approve another execution.</p><p>Compute outcome, final accounting, output collection and your local export are separate. Successful compute alone does not establish that all results were collected or scientifically validated.</p></section>
 <div id="live-review-allowance" data-live-fragment>{% include "broker/live_review_allowance.html" %}</div>
-{% if detail.manifest %}<section><h2>Exact prepared package</h2><p>SHA-256 <code>{{ detail.manifest_sha256 }}</code></p><p>Maximum reservation: {{ detail.manifest.reservation.cpu_core_seconds }} CPU core-seconds, {{ detail.manifest.reservation.gpu_device_seconds }} GPU device-seconds.</p>
+{% if detail.manifest %}<section id="prepared-package"><h2>Exact prepared package</h2><p>SHA-256 <code>{{ detail.manifest_sha256 }}</code></p><p>Maximum reservation: {{ detail.manifest.reservation.cpu_core_seconds|compute_hours }} CPU core-hours, {{ detail.manifest.reservation.gpu_device_seconds|compute_hours }} GPU device-hours.</p><small>Exact reservation: {{ detail.manifest.reservation.cpu_core_seconds }} CPU core-seconds, {{ detail.manifest.reservation.gpu_device_seconds }} GPU device-seconds.</small>
 {% for file in detail.files %}<h3>{{ file.review_path }}</h3><small>SHA-256 {{ file.sha256 }} · {{ file.size_bytes }} bytes</small>{% if file.hidden_characters %}<p class="notice">Invisible or directional Unicode characters are shown as explicit U+ codes. Check these before approving.</p>{% endif %}{% if file.text == None %}<p class="notice">Not shown: this file exceeds the 1 MiB preview limit. Inspect the exact file and its SHA-256 before approving this package.</p>{% else %}<pre>{{ file.review_text }}</pre>{% endif %}{% endfor %}
 <details><summary>Full manifest and resource binding</summary><pre>{{ manifest_text }}</pre></details></section>{% endif %}
-<div data-live-executions>{% for execution in detail.execution_requests %}{% include "broker/live_execution_request.html" %}{% endfor %}</div>
+<div id="execution-requests" data-live-executions>{% for execution in detail.execution_requests %}{% include "broker/live_execution_request.html" %}{% endfor %}</div>
 {% endblock %}

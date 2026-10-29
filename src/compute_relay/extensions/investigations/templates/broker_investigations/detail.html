@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}{{ investigation.name }}{% endblock %}{% block content %}
 <h1>{{ investigation.name }}</h1><p>Scope: {{ investigation.state }}</p>
 <h2>Question and deliverable</h2><p>{{ investigation.plan.question }}</p><p>{{ investigation.plan.deliverable }}</p>
 <h2>Core experiments</h2><ul>{% for item in investigation.plan.core_experiments %}<li>{{ item }}</li>{% endfor %}</ul>

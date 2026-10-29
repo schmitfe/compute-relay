@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Confirm storage directory on {{ registration.connection }}{% endblock %}{% block content %}
 <p><a href="/projects/{{ project.id }}/storage/">{{ project.name }} storage</a> / {{ registration.name }}</p>
 <h1>Confirm storage directory on {{ registration.connection }}</h1>
 <p>Location: <strong>{{ registration.name }}</strong>; requested directory: <code>{{ registration.root }}</code>.</p>

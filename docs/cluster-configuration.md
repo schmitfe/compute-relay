@@ -66,7 +66,9 @@ shown with its type explicitly unknown; shared MPS/shard advertisements do not
 become physical GPUs. Duplicate or contradictory GPU advertisements remain
 unknown. See [Slurm GRES semantics](https://slurm.schedmd.com/gres.html).
 
-Partition walltime becomes a finite whole-minute ceiling. Fractional minutes are
+The portal edits maximum scheduler walltime in whole minutes and converts it
+to exact seconds only at the saved profile boundary. Partition walltime becomes
+a finite whole-minute ceiling. Fractional minutes are
 rounded down so the suggestion cannot exceed the observed limit. An explicitly
 unlimited scheduler walltime is bounded by the broker's supported maximum.
 Missing/malformed time remains unknown. Slurm accepts several duration forms

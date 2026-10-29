@@ -32,6 +32,7 @@ def test_new_cluster_needs_no_worker_or_profile_and_creates_no_connection(manage
     page = client.get("/clusters/new/")
     assert page.status_code == 200
     assert "worker" not in page.context["form"].fields and "credential_profile" not in page.context["form"].fields
+    assert "backend" not in page.context["form"].fields
     before = Connection.objects.count()
     with patch("subprocess.run", side_effect=AssertionError("saving a draft must not run SSH")):
         result = form_post(client, "/clusters/new/", registration_data(user="", remote_root=""))
@@ -157,3 +158,19 @@ def test_stale_edit_cannot_replace_current_personal_setup_target(management):
     assert replay.status_code == 409
     draft.refresh_from_db()
     assert draft.host == "updated.invalid" and draft.connection_id is None
+
+
+@pytest.mark.parametrize("state,confirmed,expected", [
+    ("ready", False, "Confirm directory and limits"),
+    ("running", False, "Wait for discovery"),
+    ("failed", False, "Connect and run discovery"),
+])
+def test_cluster_list_names_the_next_incomplete_step(management, state, confirmed, expected):
+    connection = management.connections[0]
+    connection.discovery_state = state
+    connection.setup_complete = False
+    connection.configuration_confirmed = confirmed
+    connection.save(update_fields=["discovery_state", "setup_complete", "configuration_confirmed"])
+    response = human(management.owner).get("/clusters/")
+    assert expected.encode() in response.content
+    assert b"Identification required" not in response.content

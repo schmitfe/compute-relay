@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Add a storage location to {{ project.name }}{% endblock %}{% block content %}
 <p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / <a href="/projects/{{ project.id }}/storage/">Storage</a> / Add location</p><h1>Add a storage location to {{ project.name }}</h1>
 <p>Choose a cluster. Personal connectors let you choose a directory under your own HPC account; managed workers provide operator-approved roots.</p>
 <ul>{% for item in clusters %}<li><a href="?connection={{ item.id }}">{{ item.name }}</a></li>{% empty %}<li>Assign one of your clusters to this project before adding its storage locations.</li>{% endfor %}</ul>

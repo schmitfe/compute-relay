@@ -162,8 +162,7 @@ class ProjectCredential(models.Model):
     revoked = models.BooleanField(default=False)
     allowed_connection_ids = models.JSONField(null=True, blank=True, default=None)
     execution_mode = models.CharField(max_length=20, default="inherit", choices=[
-        ("inherit", "Follow project policy"), ("approval_required", "Require human confirmation"),
-        ("automatic", "Automatic within project policy")])
+        ("inherit", "Follow project policy"), ("approval_required", "Require human confirmation")])
     created_at = models.DateTimeField(default=timezone.now)
     replaced_by = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
 

@@ -1,1 +1,1 @@
-<div data-live-attempt="{{ diagnostics.attempt_id }}">{% include "broker/attempt_diagnostics.html" with diagnostics=diagnostics %}</div>
+<div data-live-attempt="{{ diagnostics.attempt_id }}">{% if collapsed and diagnostics.is_resolved %}<details data-attempt-history><summary>Earlier execution · {{ diagnostics.state }} · {{ diagnostics.attempt_id }}</summary>{% endif %}{% include "broker/attempt_diagnostics.html" with diagnostics=diagnostics %}{% if collapsed and diagnostics.is_resolved %}</details>{% endif %}</div>

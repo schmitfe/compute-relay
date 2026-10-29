@@ -1,9 +1,25 @@
 """Human labels for authoritative resource summaries; no admission decisions."""
 
+from decimal import Decimal, ROUND_FLOOR
+
 from django import template
 
 
 register = template.Library()
+
+
+@register.filter
+def compute_hours(seconds):
+    hours = (Decimal(seconds) / 3600).quantize(Decimal("0.000001"), rounding=ROUND_FLOOR)
+    return format(hours, "f").rstrip("0").rstrip(".") or "0"
+
+
+@register.simple_tag
+def project_capacity(project):
+    from compute_relay.control.metadata import capacity_rows
+    return capacity_rows(project) if project else []
+
+
 _RESOURCES = {
     "nodes": ("Nodes", "nodes", None),
     "cpu_cores": ("CPUs", "CPU cores", "maximum_cpus"),

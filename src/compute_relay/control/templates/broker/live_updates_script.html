@@ -18,6 +18,15 @@
     const target = current.querySelector('.execution-outcome'), source = next.querySelector('.execution-outcome');
     if (target && source && target.innerHTML !== source.innerHTML && !target.contains(document.activeElement)) target.innerHTML = source.innerHTML;
   }
+  function preserveDisclosures(current, next) {
+    for (const attribute of ['id', 'data-attempt-history', 'data-attempt-facts', 'data-attempt-logs']) {
+      const selector = 'details[' + attribute + ']';
+      for (const detail of current.querySelectorAll(selector)) {
+        const replacement = Array.from(next.querySelectorAll(selector)).find(node => node.getAttribute(attribute) === detail.getAttribute(attribute));
+        if (replacement) replacement.open = detail.open;
+      }
+    }
+  }
   function mergeExecutions(items) {
     const container = document.querySelector('[data-live-executions]');
     if (!container || !Array.isArray(items)) return;
@@ -64,13 +73,21 @@
       if (!next) continue;
       const current = Array.from(container.children).find(node => node.dataset.liveAttempt === item.id);
       if (!current) container.prepend(next);
-      else if (current.innerHTML !== next.innerHTML && !current.contains(document.activeElement)) current.replaceWith(next);
+      else if (current.innerHTML !== next.innerHTML && !current.contains(document.activeElement)) {
+        preserveDisclosures(current, next);
+        current.replaceWith(next);
+      }
     }
   }
   function apply(payload) {
     for (const [identifier, html] of Object.entries(payload.fragments || {})) {
       const target = document.getElementById(identifier);
-      if (target && target.hasAttribute('data-live-fragment') && !target.contains(document.activeElement) && target.innerHTML !== html) target.innerHTML = html;
+      if (target && target.hasAttribute('data-live-fragment') && !target.contains(document.activeElement) && target.innerHTML !== html) {
+        const next = document.createElement('div');
+        next.innerHTML = html;
+        preserveDisclosures(target, next);
+        target.replaceChildren(...next.childNodes);
+      }
     }
     mergeExecutions(payload.execution_requests);
     mergeAttempts(payload.attempts);

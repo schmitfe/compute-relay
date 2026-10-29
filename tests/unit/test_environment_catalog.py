@@ -381,16 +381,16 @@ def test_new_project_form_excludes_foreign_environment_recipes(catalog):
     form = ProjectForm(user=context.owner)
     selectable = set(form.fields["environments"].queryset.values_list("id", flat=True))
     assert selectable == {context.first_env.id, context.second_env.id}
-    groups = list(form.fields["environments"].choices)
-    assert {str(label) for label, _ in groups} == {context.first.name, context.second.name}
+    assert {connection.name for connection, _ in form.environment_groups} == {context.first.name, context.second.name}
 
 
-def test_existing_project_get_offers_only_environments_for_its_selected_clusters(catalog):
+def test_existing_project_get_offers_owned_environments_for_one_pass_cluster_grants(catalog):
     context = catalog
     page = human(context.owner).get(f"/projects/{context.project.id}/")
     assert page.status_code == 200
     selectable = set(page.context["form"].fields["environments"].queryset.values_list("id", flat=True))
-    assert selectable == {context.first_env.id}
+    assert selectable == {context.first_env.id, context.second_env.id}
+    assert str(context.foreign_env.id).encode() not in page.content
 
 
 @pytest.mark.parametrize("choice", ["second_env", "foreign_env"])
@@ -423,3 +423,25 @@ def test_existing_poetry_selection_clears_conda_runner_from_previous_choice(cata
     assert form.cleaned_data["kind"] == "poetry"
     assert form.cleaned_data["conda_executable"] == ""
     assert form.cleaned_data["module_names"] == ["Python/3.12"]
+
+
+def test_environment_form_hides_empty_detected_selectors_but_retains_manual_no_script_inputs(catalog):
+    response = human(catalog.owner).get(f"/clusters/{catalog.first.id}/environments/new/")
+
+    class Inputs(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.inputs = {}
+
+        def handle_starttag(self, tag, attributes):
+            attrs = dict(attributes)
+            if tag in {"input", "select"} and "name" in attrs:
+                self.inputs[attrs["name"]] = (tag, attrs)
+
+    fields = Inputs()
+    fields.feed(response.content.decode())
+    for name in ("detected_interpreter", "detected_environment"):
+        assert fields.inputs[name][1]["type"] == "hidden"
+    for name in ("interpreter", "prefix", "conda_executable"):
+        assert "disabled" not in fields.inputs[name][1]
+    assert b"Environment directory" in response.content and b"Save environment" in response.content

@@ -2,6 +2,7 @@
 
 import functools
 import json
+import shlex
 from decimal import Decimal, ROUND_CEILING
 from datetime import datetime
 from uuid import UUID
@@ -194,9 +195,10 @@ def project_detail(request, project_id):
         "approval": approval_requirements(policy, "inherit", connection.configuration)}
         for connection in project.connections.filter(owner=request.user, enabled=True, archived=False,
             setup_complete=True, worker__revoked=False, id__in=policy["allowed_connection_ids"]).order_by("name", "id")]
+    from .portal_jobs import job_list_context
     return render(request, "broker/project_detail.html", {"project": project, "form": form, "error": error,
         "keys": project.projectcredential_set.order_by("-created_at"), "allowance": services.allowance(project),
-        "jobs": Job.objects.with_summary().filter(project=project).order_by("-created_at", "-id")[:100],
+        **job_list_context(request, [project]),
         "resource_targets": resource_targets, "rotation_nonce": str(uuid4())})
 
 
@@ -207,7 +209,8 @@ def key_new(request, project_id):
     form = KeyForm(request.POST if request.method == "POST" else None, project=project)
     if request.method == "POST" and form.is_valid():
         credential, secret = issue_key(project, request.user, form.cleaned_data)
-        return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project}, status=201)
+        return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project,
+            "init_command": "compute-relay init-mcp --broker-url " + shlex.quote(request.build_absolute_uri("/").rstrip("/"))}, status=201)
     return render(request, "broker/key_form.html", {"form": form, "project": project, "creating": True})
 
 
@@ -219,7 +222,8 @@ def key_rotate(request, project_id, key_id):
     human_permission(request.user, project, "viewer")
     credential = get_object_or_404(ProjectCredential, id=key_id, project=project)
     credential, secret = rotate_key(project, credential, request.user, request.POST.get("submission_id"))
-    return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project, "rotated": True}, status=201)
+    return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project, "rotated": True,
+        "init_command": "compute-relay init-mcp --broker-url " + shlex.quote(request.build_absolute_uri("/").rstrip("/"))}, status=201)
 
 
 @human_view

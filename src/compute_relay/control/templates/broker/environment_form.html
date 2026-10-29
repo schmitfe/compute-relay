@@ -1,6 +1,6 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Add environment on {{ cluster }}{% endblock %}{% block content %}
 <p><a href="/clusters/">Clusters</a> / <a href="/clusters/{{ cluster.id }}/">{{ cluster }}</a> / <a href="/clusters/{{ cluster.id }}/environments/">Environments</a> / Add recipe</p>
-<h1>Add an environment recipe</h1>
+<h1>Add an environment</h1>
 <nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></nav>
 <p>Select Python modules, Anaconda/Miniforge, or an existing Poetry/venv environment for <strong>{{ cluster }}</strong>. Use <strong>Inspect selection</strong> to find executable paths and existing environments through your running connector, then save a recipe and grant it in project settings.</p>
 <details><summary>What inspection does</summary><p>It loads your selected modules in the cluster login shell and lists existing environments. It never installs packages or runs a project. Conda uses isolated configuration; Poetry environments are found from existing prefixes and its standard cache. You can enter custom paths manually.</p></details>
@@ -10,22 +10,25 @@
 {% elif task and not observation %}<p class="error">Inspection expired. Keep the connector running and inspect again.</p>{% endif %}
 {% if observation %}<p class="notice">Inspection requested {{ task.created_at }}; results from the login node. Compute-node availability is unverified. Conda: {{ observation.conda_status }}.{% if observation.poetry_executable %} Poetry: <code>{{ observation.poetry_executable }}</code>.{% endif %}{% if observation.truncated %} Some candidates were omitted; you can enter an exact prefix manually.{% endif %}</p>{% endif %}
 {% if selected_cluster.discovery_snapshot.software.modules.provisional %}<p class="notice">This cluster's catalog includes module filename candidates{% if selected_cluster.discovery_snapshot.software.modules.availability.enabled %} and the site's module listing{% endif %}. Aliases, dependencies and compatibility have not been validated together. Review the selected modules and initialization in the job package before execution.</p>{% endif %}
-<section><form method="post">{% csrf_token %}{{ form.non_field_errors }}
+<section><form method="post">{% csrf_token %}{% include "broker/configuration_errors.html" %}
 <input type="hidden" name="connection_revision" value="{{ cluster.revision_sha256 }}">
 {% if task %}<input type="hidden" name="inspection_task" value="{{ task.id }}">{% endif %}
 {% for field in form %}
+{% if field.name == "discovered_modules" %}<details id="recipe-modules"{% if form.discovered_modules.errors or form.modules.errors or form.module_init.errors or form.module_paths.errors or form.kind.value == "modules" %} open{% endif %}><summary>Load cluster modules (optional for existing environments)</summary>{% endif %}
 {% if field.name == "modules" %}<details{% if form.modules.errors or form.module_init.errors or form.module_paths.errors %} open{% endif %}><summary>Advanced module setup</summary>{% endif %}
 {% if field.name == "detected_interpreter" %}<button name="action" value="inspect" class="secondary" formnovalidate{% if waiting or not inspection_ready %} disabled{% endif %}>Inspect selection</button><h2>Interpreter and environment</h2>{% endif %}
-{% if field.is_hidden %}{{ field }}{{ field.errors }}
+{% if field.name == "detected_interpreter" and field.field.choices|length == 1 and not field.errors or field.name == "detected_environment" and field.field.choices|length == 1 and not field.errors %}{{ field.as_hidden }}
+{% elif field.is_hidden %}{{ field }}{{ field.errors }}
 {% elif field.name == "discovered_modules" %}
-<div class="module-picker form-field">{{ field.label_tag }}
+<fieldset class="module-picker form-field" id="field_discovered_modules" tabindex="-1" aria-describedby="{{ field.auto_id }}_helptext"><legend>{{ field.label }}</legend>
 {% if form.available_modules %}<label for="module-filter">Find a module</label><input id="module-filter" type="search" placeholder="Name or version" autocomplete="off"><div class="catalog-scroll">{{ field }}</div>
 {% else %}<p>No modules found in this cluster's configured discovery paths. An exact module/version can be entered below if known.</p>{% endif %}
-{{ field.errors }}<div class="helptext" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</div></div>
+{{ field.errors }}<div class="helptext" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</div></fieldset>
 {% else %}{% include "broker/configuration_field.html" with field=field %}{% endif %}
-{% if field.name == "module_paths" %}</details>{% endif %}
+{% if field.name == "module_paths" %}</details></details>{% endif %}
 {% endfor %}
-<button name="action" value="save"{% if waiting %} disabled{% endif %}>Create immutable recipe</button></form></section>
+<p>Saving records these exact paths and module choices. To change a saved environment, create a new one and grant it in project settings.</p>
+<button name="action" value="save"{% if waiting %} disabled{% endif %}>Save environment</button></form></section>
 {{ form.detected_environments|json_script:"detected-environments" }}
 {% if observation %}{{ observation|json_script:"environment-observation" }}{% endif %}
 <script>
@@ -34,6 +37,16 @@ const detectedPython = document.getElementById('id_detected_interpreter');
 const detectedEnvironment = document.getElementById('id_detected_environment');
 const recipeKind = document.getElementById('id_kind');
 const manualModules = document.getElementById('id_modules');
+function updateEnvironmentFields() {
+  const kind = recipeKind.value;
+  for (const [name, relevant] of [['prefix', ['conda', 'venv', 'poetry'].includes(kind)], ['conda_executable', kind === 'conda']]) {
+    const field = document.getElementById('id_' + name), group = document.getElementById('field_' + name);
+    const show = relevant || Boolean(group.querySelector('.errorlist'));
+    group.hidden = !show;
+    field.disabled = !show;
+  }
+  if (kind === 'modules') document.getElementById('recipe-modules').open = true;
+}
 function useModuleRecipe() {
   const selected = document.querySelector('#id_discovered_modules input[type="checkbox"]:checked') || manualModules.value.trim();
   if (recipeKind.value !== 'system' || !selected) return;
@@ -51,10 +64,17 @@ function applyDetectedEnvironment() {
   const observation = document.getElementById('environment-observation');
   if (item.kind === 'conda' && observation) document.getElementById('id_conda_executable').value = JSON.parse(observation.textContent).conda_executable;
   else if (item.kind !== 'conda') document.getElementById('id_conda_executable').value = '';
+  updateEnvironmentFields();
 }
 detectedPython.addEventListener('change', () => { if (detectedPython.value) document.getElementById('id_interpreter').value = detectedPython.value; });
 detectedEnvironment.addEventListener('change', applyDetectedEnvironment);
+recipeKind.addEventListener('change', () => {
+  detectedPython.value = '';
+  detectedEnvironment.value = '';
+  updateEnvironmentFields();
+});
 applyDetectedEnvironment();
+updateEnvironmentFields();
 if (detectedPython.value && !detectedEnvironment.value) document.getElementById('id_interpreter').value = detectedPython.value;
 document.getElementById('id_interpreter').addEventListener('input', () => { detectedPython.value = ''; detectedEnvironment.value = ''; });
 for (const key of ['prefix', 'conda_executable']) document.getElementById('id_' + key).addEventListener('input', () => { detectedEnvironment.value = ''; });

@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}
+{% extends "broker/base.html" %}{% block title %}Environment build permission for {{ project.name }}{% endblock %}
 {% block content %}<h1>Environment build permission for {{ project.name }}</h1>
 <p>This administrator policy is separate from an agent's API key. It must explicitly enable builds, select existing bootstrap environments and pin the expected compute Python/platform. Builds also need the ordinary project compute allowance and submission slots.</p>
 <p>The available builder creates Python virtual environments from an empty standard-library environment or uploaded, pinned wheels. Conda, micromamba and Poetry builders are not available yet.</p>

@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Choose a storage directory on {{ cluster }}{% endblock %}{% block content %}
 <p><a href="/projects/{{ project.id }}/storage/">{{ project.name }} storage</a></p><h1>Choose a storage directory on {{ cluster }}</h1>
 <p>Your personal connector returns directory names and access metadata. Browsing does not create directories or read file contents. To create a final missing directory, select its parent, append the new name on the storage form, then choose Check/create directory.</p>
 {% if not connector_ready %}<p class="notice">Restart your personal connector to enable directory browsing.</p>{% endif %}

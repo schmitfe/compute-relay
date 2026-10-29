@@ -111,7 +111,14 @@ Policy changes do not automatically execute older pending requests. Their holds
 can be cancelled explicitly using the route above (empty JSON body) or MCP
 `cancel_execution_request(job_id, execution_request_id, idempotency_key)`.
 
-Require `Idempotency-Key` on job creation, execution requests, decisions, grant changes and cancellation. Scope it to project and operation (human/admin operations also bind actor as appropriate), and retain it for at least the operation lifetime. The key stores the canonical request digest and durable result. Reusing it with different bytes returns `409 IDEMPOTENCY_CONFLICT`. An HTTP retry and a new execution attempt are different actions.
+Require `Idempotency-Key` on job creation, execution requests, decisions and grant changes. Scope it to project and operation (human/admin operations also bind actor as appropriate), and retain it for at least the operation lifetime. The key stores the canonical request digest and durable result. Reusing it with different bytes returns `409 IDEMPOTENCY_CONFLICT`. An HTTP retry and a new execution attempt are different actions.
+
+Attempt/request cancellation and finished-output collection retry accept an empty
+object and reuse their durable state transitions without a new charged retry
+receipt. Repetition retains the same attempt; pending approval holds release
+once, and uncertain dispatched allocations keep their accounting reservation.
+These closeout operations remain available at metadata/receipt capacity. They
+recheck ordinary authority and return current state rather than a cached reply.
 
 Use an error envelope:
 
