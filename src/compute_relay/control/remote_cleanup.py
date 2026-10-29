@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import posixpath
 
 from django.core import signing
 from django.db import transaction
@@ -10,7 +11,7 @@ from django.utils import timezone
 
 from .errors import BrokerError
 from .metadata import append_audit
-from .models import Attempt, InputSource, Job, JobFile, Project, UploadReservation
+from .models import Attempt, Environment, InputSource, Job, JobFile, Project, UploadReservation
 
 SALT = "compute-relay.remote-attempt-cleanup"
 
@@ -37,6 +38,17 @@ def blocked(attempt, *, leased=False):
     if (JobFile.objects.filter(blob__artifact__attempt=attempt).exists()
             or InputSource.objects.filter(blob__artifact__attempt=attempt).exists()):
         return "A result is referenced by another job or module definition."
+    directory = attempt.native_identity.get("work_dir")
+    if isinstance(directory, str) and directory.startswith("/"):
+        directory = posixpath.normpath(directory)
+        for config in Environment.objects.filter(connection=attempt.connection).values_list("configuration", flat=True):
+            paths = [config.get(key) for key in ("prefix", "interpreter", "conda_executable", "module_init")]
+            paths.extend(config.get("module_paths", []))
+            for path in paths:
+                if isinstance(path, str) and path.startswith("/"):
+                    path = posixpath.normpath(path)
+                    if posixpath.commonpath([directory, path]) in {directory, path}:
+                        return "A registered environment protects this directory."
     for relation in Job._meta.related_objects:
         if (relation.related_model._meta.app_label != "broker"
                 and relation.related_model.objects.filter(**{relation.field.name: attempt.job}).exists()):

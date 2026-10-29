@@ -152,6 +152,8 @@ their existing connector. It can wait while that connector is offline. The
 worker rechecks authority, exact native/journal/manifest identity and terminal
 scheduler evidence before removing an owned attempt directory. It never follows
 symlinks, crosses filesystems or deletes managed environments/module roots.
+Registered environment prefixes, interpreters and module paths also protect
+overlapping attempt directories, including registrations made after queuing.
 Submission journals remain, so interrupted deletion and lost replies cannot
 turn into another compute submission. Remote lengths are measured by the worker
 when it runs; the portal does not promise remote free-space savings in advance.
