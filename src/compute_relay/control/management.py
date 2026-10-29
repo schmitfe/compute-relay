@@ -20,7 +20,7 @@ from .errors import BrokerError
 from .local_auth import current_user_active
 from .forms import (EnvironmentForm, KeyForm, ProjectForm,
                     owned_connections, owned_environments)
-from .models import (Attempt, ConnectorTask, Environment, Grant, IdempotencyRecord, Job, Project,
+from .models import (Attempt, ConnectorTask, Environment, Grant, IdempotencyRecord, Project,
                      ProjectCredential)
 
 
@@ -441,4 +441,4 @@ def environment_new(request, connection_id):
         "personal_configuration": connection.owner_id == request.user.id and personal(connection),
         "task": task, "observation": observation,
         "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
-        "inspection_ready": "personal_environments_v1" in connection.worker.connector_features})
+        "inspection_ready": connection.worker.setup_ready})

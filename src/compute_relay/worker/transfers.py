@@ -88,5 +88,5 @@ async def collect_outputs(client, backend, lease, native, manifest, publication_
             if new_offset != offset + len(content):
                 raise ValueError("Invalid output acknowledgement")
             offset = new_offset
-    return {"artifacts": {}, "collection_state": "failed" if inventory.get("missing") else "complete",
+    return {"collection_state": "failed" if inventory.get("missing") else "complete",
         **({"error_code": "OUTPUT_MISSING"} if inventory.get("missing") else {})}

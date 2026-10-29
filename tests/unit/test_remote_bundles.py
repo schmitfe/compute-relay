@@ -3,6 +3,7 @@ from test_support.unit_test_remote_bundles import LocalFixedTransport, prepared,
 
 import ast
 import asyncio
+import base64
 import copy
 import hashlib
 import importlib
@@ -144,7 +145,7 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
     assert not submission_helper_is_current(manifest)
     with pytest.raises(BackendError, match="helper revision"):
         verify_package(manifest, package["manifest_sha256"], files)
-    for operation in ("observe", "cancel", "collect", "reconcile"):
+    for operation in ("observe", "cancel", "output_manifest", "reconcile"):
         verify_package(manifest, package["manifest_sha256"], files, operation=operation)
     assert asyncio.run(backend.reconcile(attempt, manifest))["native_identity"] == native
     assert asyncio.run(backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["state"] == "running"
@@ -154,7 +155,10 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
     assert observation["accounting"] == {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}
     directory = Path(native["work_dir"])
     (directory / "result.txt").write_text("bounded artifact")
-    assert asyncio.run(backend.collect(native, ["result.txt"], manifest=manifest))["artifacts"] == {"result.txt": b"bounded artifact"}
+    inventory = asyncio.run(backend.output_manifest(native, manifest=manifest))
+    entry = inventory["files"][0]
+    chunk = asyncio.run(backend.output_chunk(native, manifest=manifest, path="result.txt", offset=0, version=entry["version"]))
+    assert base64.b64decode(chunk["content_base64"]) == b"bounded artifact"
     assert site[4].read_text().splitlines().count("sbatch") == 1
 
 
@@ -190,7 +194,7 @@ def test_native_async_management_uses_current_bundle_after_upgrade_and_uncertain
         assert (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["state"] == "running"
         assert (await backend.cancel(native, manifest=manifest))["outcome"] == "cancel_requested"
         assert (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["accounting"]["final"] is True
-        assert (await backend.collect(native, manifest=manifest))["artifacts"] == {}
+        assert (await backend.output_manifest(native, manifest=manifest))["files"] == []
         assert (await backend.reconcile(attempt, manifest))["native_identity"] == native
         assert site[4].read_text().splitlines().count("sbatch") == 1
     asyncio.run(scenario())
@@ -206,7 +210,7 @@ def test_backend_cancel_reports_only_explicit_understood_results(site, outcome):
     assert actual == {"outcome": outcome if outcome in {"unknown", "identity_mismatch", "cancel_requested", "already_terminal"} else "unknown"}
 
 
-@pytest.mark.parametrize("operation", ["submit", "observe", "cancel", "collect", "reconcile"])
+@pytest.mark.parametrize("operation", ["submit", "observe", "cancel", "output_manifest", "reconcile"])
 def test_upgrade_management_never_weakens_package_integrity(site, operation):
     package, files = prepared(site)
     changed = {**files, "main.py": files["main.py"] + b"# tamper"}

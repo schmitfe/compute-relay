@@ -70,18 +70,8 @@ def enqueue(user, connection_id, kind, payload, revision):
         current, worker, _registration = locked_connection(reference)
         if current.revision_sha256 != revision:
             raise BrokerError("REVISION_CHANGED", "The cluster changed. Reload this page before continuing.", 409)
-        if "personal_setup_v1" not in worker.connector_features:
-            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector with the updated broker environment to enable interactive configuration.", 409)
-        if kind == "environment_probe" and "personal_environments_v1" not in worker.connector_features:
-            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to inspect Python and Conda environments.", 409)
-        if kind == "mkdir" and "personal_folders_v1" not in worker.connector_features:
-            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable the New folder action.", 409)
-        if (kind == "configure" and payload.get("module_availability_enabled") is True
-                and "personal_module_availability_v1" not in worker.connector_features):
-            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector to enable module avail discovery.", 409)
-        if (kind == "configure" and "cpu_allocation_quantum" in payload.get("site_profile", {})
-                and "personal_cpu_allocation_v1" not in worker.connector_features):
-            raise BrokerError("CONNECTOR_UPGRADE_REQUIRED", "Restart your personal connector with the updated broker environment before applying CPU allocation units.", 409)
+        if not worker.setup_ready:
+            raise BrokerError("CONNECTOR_NOT_READY", "Start your personal connector before configuring this cluster.", 409)
         expire_tasks(current)
         pending = ConnectorTask.objects.filter(connection=current, state__in=["queued", "running"])
         if pending.filter(kind="configure").exists() or pending.count() >= 4:
@@ -132,8 +122,7 @@ def directories(request, connection_id):
     result = task.result if task and task.state == "succeeded" else {}
     return render(request, "broker/cluster_directories.html", {"cluster": connection, "task": task,
         "result": result, "waiting": bool(task and task.state in {"queued", "running"}),
-        "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
-        "folders_ready": "personal_folders_v1" in connection.worker.connector_features})
+        "connector_ready": connection.worker.setup_ready})
 
 
 @human_view
@@ -169,8 +158,7 @@ def configure(request, connection_id):
         "remote_root": initial_root, "root_error": root_error, "task": task,
         "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
         "derived": derive_cluster_configuration(connection.discovery_snapshot, connection.configuration.get("site_profile", {})),
-        "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
-        "cpu_allocation_ready": "personal_cpu_allocation_v1" in connection.worker.connector_features})
+        "connector_ready": connection.worker.setup_ready})
 
 
 def authenticated_connection(request, document):
@@ -189,11 +177,10 @@ def tasks(request):
         connection, worker, _registration = locked_connection(reference, worker)
         defaults_deferred = False
         if document.get("hello") is True:
-            features = document.get("features", ["personal_setup_v1"])
-            if not isinstance(features, list) or any(not isinstance(item, str) or item not in {"personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1", "personal_parallel_v1"} for item in features):
-                raise BrokerError("INVALID_FEATURES", "Unsupported connector setup capabilities.")
-            worker.connector_features = list(dict.fromkeys(features))
-            worker.save(update_fields=["connector_features"])
+            if document.get("protocol") != "personal-connector/v1":
+                raise BrokerError("CONNECTOR_PROTOCOL_UNSUPPORTED", "Restart the connector using the current installation.", 409)
+            worker.setup_ready = True
+            worker.save(update_fields=["setup_ready"])
             if document.get("needs_discovery") is True:
                 if Attempt.objects.filter(connection=connection).exclude(accounting_state__in=["settled", "released"]).exists():
                     defaults_deferred = True

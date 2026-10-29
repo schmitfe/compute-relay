@@ -100,8 +100,8 @@ approval still binds the exact execution source hash. Compatible management of
 an existing attempt uses current reviewed code and verifies its original
 manifest hash, embedded journal manifest, exact native identity and derived
 directory. Stored manifests and journals never supply executable helper source.
-Only declared compatible protocols are accepted; use the stopped-installation
-[upgrade check](deployment.md#check-an-upgrade-before-starting-it) before migration.
+Only the declared current protocol is accepted. Incompatible alpha updates
+require [fresh setup](deployment.md#alpha-updates-and-fresh-setup).
 
 Management leases carry the sealed manifest without rereading local inputs, so
 lost input objects cannot prevent cancellation or final accounting. A failed
@@ -123,7 +123,7 @@ that authority merely because storage deduplicates them.
 
 Existing inputs without trustworthy provenance remain unverified. Re-upload
 the bytes explicitly into a new revision, or use a currently readable artifact.
-The migration does not infer a historical upload from a blob row. Access to a
+A blob row alone never grants upload authority. Access to a
 previously prepared package does not waive the current input checks for new use.
 
 Publication reserves bytes and an object slot before creating files, then uses

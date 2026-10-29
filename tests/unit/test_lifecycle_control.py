@@ -1,10 +1,8 @@
 """Scheduler management remains reachable and accounting survives lease recovery."""
-from unittest.mock import patch
 from django.test import Client
 from test_support.unit_test_control import submit_receipt
 
 
-import base64
 from copy import deepcopy
 from datetime import timedelta
 from types import SimpleNamespace
@@ -141,7 +139,7 @@ def test_repeated_unknown_cancel_backs_off_and_explicit_retry_resets_identity_wa
     assert services.lease_work(broker.worker)["lease"]["operation"] == "cancel"
 
 
-def test_verified_completion_after_failed_cancel_settles_once_even_when_storage_busy(broker, monkeypatch):
+def test_verified_completion_after_failed_cancel_settles_once_even_when_collection_failed(broker):
     attempt, lease, native = cancellation_lease(broker, outputs=["result.txt"])
     services.report(broker.worker, attempt.id, payload(lease, "cancel_unknown", native))
     make_due(attempt)
@@ -149,16 +147,13 @@ def test_verified_completion_after_failed_cancel_settles_once_even_when_storage_
     observation = {"state": "completed", "terminal": True,
         "accounting": {"cpu_core_seconds": 7, "gpu_device_seconds": 0, "final": True}}
     document = payload(lease, "observed", native, observation=observation,
-        artifacts={"result.txt": base64.b64encode(b"result").decode()})
-    def busy(*args, **kwargs):
-        raise BrokerError("UPLOAD_BUSY", "A writer is active.", 409)
-    monkeypatch.setattr(services, "store_blob", busy)
+        collection_state="failed", error_code="OUTPUT_COLLECTION_FAILED")
     first = services.report(broker.worker, attempt.id, document)
     assert services.report(broker.worker, attempt.id, document) == first
     attempt.refresh_from_db()
     broker.grant.refresh_from_db()
     assert attempt.cancel_requested is False and attempt.accounting_state == "settled"
-    assert attempt.error_code == "OUTPUT_STORAGE_UNAVAILABLE"
+    assert attempt.error_code == "OUTPUT_COLLECTION_FAILED"
     assert broker.grant.spent_cpu == 7 and broker.grant.reserved_cpu == 0
     assert LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1
 
@@ -369,26 +364,3 @@ def test_invalid_report_is_client_error_and_preserves_lease(broker, fields):
     assert response.status_code == 400
     attempt.refresh_from_db()
     assert attempt.lease_expires_at is not None and attempt.accounting_state == "reserved"
-
-
-def test_duplicate_report_committed_during_storage_replays_receipt(broker):
-    import base64
-    from compute_relay.control.models import LedgerEntry, WorkerReport
-    budgeted(broker)
-    attempt, lease = dispatched(broker, prepared_job(broker, outputs=["result.txt"]))
-    native, lease = submit_receipt(broker, attempt, lease)
-    data = {"lease_id": lease["id"], "generation": lease["generation"], "outcome": "observed", "native_identity": native,
-        "artifacts": {"result.txt": base64.b64encode(b"done").decode()},
-        "observation": {"state": "completed", "terminal": True,
-            "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}}}
-    responses = []
-    original = services.store_blob
-    def commit_other_report(*args, **kwargs):
-        with patch.object(services, "store_blob", original):
-            responses.append(services.report(broker.worker, attempt.id, data))
-        return original(*args, **kwargs)
-    with patch.object(services, "store_blob", side_effect=commit_other_report):
-        result = services.report(broker.worker, attempt.id, data)
-    assert result == responses[0]
-    assert WorkerReport.objects.filter(lease_id=lease["id"]).count() == 1
-    assert LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1

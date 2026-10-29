@@ -56,7 +56,7 @@ def test_registered_backends_share_one_async_execution_interface(tmp_path):
     for configuration in ({"backend": "fake", "state_directory": str(tmp_path / "simulation")},
                           {"ssh": {"host": "not-contacted", "user": "broker", "known_hosts": "/protected/known_hosts"}}):
         backend = create_backend(configuration)
-        for operation in ("submit", "reconcile", "observe", "cancel", "collect", "discover"):
+        for operation in ("submit", "reconcile", "observe", "cancel", "output_manifest", "output_chunk", "read_logs", "discover"):
             assert inspect.iscoroutinefunction(getattr(backend, operation))
 
 

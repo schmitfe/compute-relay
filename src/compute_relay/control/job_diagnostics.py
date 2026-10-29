@@ -144,7 +144,7 @@ def _category(attempt, state, native_state, error, stderr):
         if re.search(r"(?m)^BROKER_ENVIRONMENT_ERROR: ?MODULE_COMMAND_UNAVAILABLE(?::[^\r\n]*)?\r?$", stderr):
             return "module_command_unavailable"
         return "failed"
-    if error in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_STORAGE_UNAVAILABLE", "OUTPUT_MISSING", "MISSING_OUTPUT"}:
+    if error in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_MISSING"}:
         return "outputs_unavailable"
     if error in {"AUTHENTICATION_UNAVAILABLE", "SSH_LOGIN_FAILED", "SSH_UNAVAILABLE", "SSH_TIMEOUT", "TRANSPORT_UNAVAILABLE"}:
         return "connector_unavailable"
@@ -207,7 +207,7 @@ def build_attempt_diagnostics(attempt):
         notices.append("Accounting is not settled; reservations can remain held while reconciliation waits for usable evidence.")
     elif accounting_state == "released":
         notices.append("The broker released this reservation through its accounting path.")
-    if error in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_STORAGE_UNAVAILABLE", "OUTPUT_MISSING", "MISSING_OUTPUT"} and category != "outputs_unavailable":
+    if error in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_MISSING"} and category != "outputs_unavailable":
         notices.append("Some declared outputs could not be collected or stored; this is separate from the allocation result and accounting.")
     if error == "OBSERVED_OVERAGE":
         notices.append("Actual usage exceeded the reservation and was charged in full. Inspect the remaining project allowance and any debt before requesting more work.")

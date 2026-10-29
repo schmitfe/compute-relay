@@ -60,9 +60,12 @@ edges across clusters.
 ## Review and publication
 
 Include the problem, resulting behavior, validation and material limitations
-in a change description. Keep schema copies and examples consistent. Include a
-data migration when stored contracts change; do not rewrite previously released
-migrations. Public CI must need no secrets, institutional hosts or manual MFA.
+in a change description. Keep schema copies and examples consistent. The alpha
+requires no backward compatibility for stored state. Regenerate the
+current initial migrations when the schema changes and verify fresh setup with
+all bundled modules and with core only. Document any required state reset; do
+not add backfills or legacy configuration readers. Public CI must need no
+secrets, institutional hosts or manual MFA.
 Reference the relevant stable test IDs in [the testing plan](docs/testing.md),
 include a negative or regression case for security-relevant behavior, and
 document site assumptions. Attribute copied or adapted upstream code with its

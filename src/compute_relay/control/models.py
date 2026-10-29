@@ -19,7 +19,7 @@ class WorkerIdentity(models.Model):
     profiles = models.JSONField(default=list)
     supported_extensions = models.JSONField(default=list)
     last_seen_at = models.DateTimeField(null=True)
-    connector_features = models.JSONField(default=list)
+    setup_ready = models.BooleanField(default=False)
     execution_features = models.JSONField(default=list)
 
     def __str__(self):

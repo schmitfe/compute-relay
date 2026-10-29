@@ -1,6 +1,5 @@
 """Recover project work without relying on the agent's conversational memory."""
 
-import base64
 import json
 from copy import deepcopy
 from datetime import timedelta
@@ -11,7 +10,7 @@ from django.utils import timezone
 from compute_relay.control import services
 from compute_relay.control.auth import token_hash
 from compute_relay.control.models import Attempt, Project, ProjectCredential
-from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
+from test_support.unit_test_control import publish_output, broker, budgeted, dispatched, prepared_job, submit_receipt
 
 
 def api(broker, token=None):
@@ -37,9 +36,9 @@ def test_unread_results_distinguish_listing_bytes_and_acknowledgement_per_key(br
     job = prepared_job(broker, outputs=["answer.txt"])
     attempt, first = dispatched(broker, job)
     native, lease = submit_receipt(broker, attempt, first)
+    publish_output(lease, "answer.txt", b"answer")
     services.report(broker.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
         "outcome": "observed", "native_identity": native, "collection_state": "complete",
-        "artifacts": {"answer.txt": base64.b64encode(b"answer").decode()},
         "observation": {"state": "completed", "terminal": True, "accounting": {"final": True, "cpu_core_seconds": 1, "gpu_device_seconds": 0}}})
     endpoint = f"/api/v1/projects/{broker.project.id}/jobs?state=unread_results"
     assert len(api(broker).get(endpoint).json()["jobs"]) == 1

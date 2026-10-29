@@ -125,10 +125,13 @@ def test_fake_persists_identity_without_executing_uploaded_source(sample, tmp_pa
     restarted = FakeBackend(sample[2])
     assert asyncio.run(restarted.reconcile(ATTEMPT, prepared["manifest"]))["native_identity"] == result["native_identity"]
     assert asyncio.run(restarted.observe([{"native_identity": result["native_identity"], "manifest": prepared["manifest"]}]))[ATTEMPT]["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
-    collected = asyncio.run(restarted.collect(result["native_identity"], ["results/metrics.json"], manifest=prepared["manifest"]))
-    assert json.loads(collected["artifacts"]["results/metrics.json"])["executed_uploaded_code"] is False
+    entry = asyncio.run(restarted.output_manifest(result["native_identity"], manifest=prepared["manifest"]))["files"][0]
+    chunk = asyncio.run(restarted.output_chunk(result["native_identity"], manifest=prepared["manifest"],
+        path=entry["path"], offset=0, version=entry["version"]))
+    assert json.loads(base64.b64decode(chunk["content_base64"]))["executed_uploaded_code"] is False
     with pytest.raises(BackendError):
-        asyncio.run(restarted.collect(result["native_identity"], ["not-declared"], manifest=prepared["manifest"]))
+        asyncio.run(restarted.output_chunk(result["native_identity"], manifest=prepared["manifest"],
+            path="not-declared", offset=0, version=entry["version"]))
 
 
 def test_fake_cancellation_is_durable(sample):
@@ -137,6 +140,36 @@ def test_fake_cancellation_is_durable(sample):
     identity = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
     assert asyncio.run(backend.cancel(identity, manifest=prepared["manifest"]))["outcome"] == "cancel_requested"
     assert asyncio.run(FakeBackend(sample[2]).observe([{"native_identity": identity, "manifest": prepared["manifest"]}]))[ATTEMPT]["state"] == "cancelled"
+
+
+@pytest.mark.parametrize("change", ["negative_offset", "bool_offset", "past_end", "version", "native"])
+def test_fake_output_chunks_reject_invalid_ranges_and_changed_identity(sample, change):
+    prepared, files = package(sample)
+    backend = FakeBackend(sample[2])
+    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
+    entry = asyncio.run(backend.output_manifest(native, manifest=prepared["manifest"]))["files"][0]
+    arguments = {"manifest": prepared["manifest"], "path": entry["path"], "offset": 0, "version": entry["version"]}
+    if change in {"negative_offset", "bool_offset", "past_end"}:
+        arguments["offset"] = {"negative_offset": -1, "bool_offset": True, "past_end": entry["size_bytes"] + 1}[change]
+    elif change == "version":
+        arguments["version"] = "0" * 64
+    else:
+        native = {**native, "job_id": "other"}
+    with pytest.raises(BackendError):
+        asyncio.run(backend.output_chunk(native, **arguments))
+
+
+def test_fake_logs_resume_with_the_same_byte_cursor_and_reset_changed_stream(sample):
+    prepared, files = package(sample)
+    backend = FakeBackend(sample[2])
+    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
+    first = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors={}))["stdout"]
+    cursor = {"stdout": {"cursor": first["next_cursor"], "file_id": first["file_id"]}}
+    resumed = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors=cursor))["stdout"]
+    assert resumed["content_base64"] == "" and not resumed["reset"]
+    cursor["stdout"]["file_id"] = "changed"
+    reset = asyncio.run(backend.read_logs(native, manifest=prepared["manifest"], cursors=cursor))["stdout"]
+    assert reset["reset"] and reset["content_base64"] == first["content_base64"]
 
 
 def test_native_transport_timeout_does_not_resubmit(sample):
@@ -274,7 +307,7 @@ def test_remote_output_retrieval_refuses_symlink_escape(remote_request, monkeypa
     outside.write_text("must not be returned")
     (directory / "results" / "metrics.json").symlink_to(outside)
     with pytest.raises(OSError):
-        helper.execute(remote_request["config"], {**remote_request, "operation": "collect", "native_identity": result["native_identity"],
+        helper.execute(remote_request["config"], {**remote_request, "operation": "output_manifest", "native_identity": result["native_identity"],
                                                    "outputs": ["results/metrics.json"]})
 
 

@@ -125,7 +125,7 @@ class PersonalWorker(Worker):
         document = {"connection_id": self.state["connection_id"]}
         if hello:
             document.update(hello=True, needs_discovery=not self.state.get("defaults_initialized", False),
-                features=["personal_setup_v1", "personal_folders_v1", "personal_module_availability_v1", "personal_cpu_allocation_v1", "personal_environments_v1", "personal_parallel_v1"])
+                protocol="personal-connector/v1")
         if self.state.get("pending_configuration_task"):
             document["pending_task_id"] = self.state["pending_configuration_task"]
         try:

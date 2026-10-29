@@ -134,8 +134,7 @@ the explicit CPU allocation unit is the separate owner setting described above.
 Forged minimum-floor fields cannot change them. Automatic execution changes only through the
 explicit personal-cluster checkbox described above.
 
-The form has no separate termination, overtime or cleanup section. Legacy timing
-properties do not affect new reservations or active agent limits. Actual elapsed
+The form has no separate termination, overtime or cleanup section. Actual elapsed
 allocation time can exceed requested walltime, and final charges are not capped
 at the reservation. Debt prevents new project admissions until resolved.
 

@@ -117,22 +117,3 @@ def test_async_submission_transport_failure_is_uncertain_without_retry_and_cance
         with pytest.raises(asyncio.CancelledError):
             await SlurmBackend(connection, transport=Cancelled()).submit(str(uuid4()), manifest, files)
     asyncio.run(scenario())
-
-
-def test_async_collect_validates_paths_and_decodes_only_structured_artifacts(package):
-    async def scenario():
-        calls = []
-
-        class Transport:
-            async def call_helper(self, source, request):
-                calls.append(request)
-                assert "identity_file" not in request["config"]
-                return {"stdout": "result", "artifacts_base64": {"results/metrics.json": base64.b64encode(b"{}").decode()}}
-
-        backend = SlurmBackend(package[0], transport=Transport())
-        with pytest.raises(ValueError):
-            await backend.collect({"job_id": "42"}, outputs=["../private"], manifest=package[1])
-        assert calls == []
-        result = await backend.collect({"job_id": "42"}, outputs=["results/metrics.json"], manifest=package[1])
-        assert result["artifacts"] == {"results/metrics.json": b"{}"} and calls[0]["operation"] == "collect"
-    asyncio.run(scenario())

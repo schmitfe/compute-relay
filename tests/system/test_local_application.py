@@ -282,5 +282,3 @@ storage.store_blob(project, b"crash-published fixture")
     assert json.loads(repeated.stdout)["draft_jobs"]["archived"] == 0
     assert json.loads(repeated.stdout)["upload_recovery"]["recovered"] == 0
     assert (state / "installation.json").read_bytes() == before_config
-    checked = command("check-upgrade")
-    assert checked.returncode == 0 and json.loads(checked.stdout)["management_compatible"] is True

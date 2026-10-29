@@ -142,10 +142,6 @@ def main(argv=None):
     start = sub.add_parser("start", help="Start the local portal, SQLite state and saved cluster connectors")
     register_options(start)
     start.set_defaults(run=run_local)
-    from .upgrade_check import run as check_upgrade
-    check = sub.add_parser("check-upgrade", help="Check a stopped installation's outstanding job protocols without migrating")
-    check.add_argument("--data-directory", default=argparse.SUPPRESS, help="Existing private installation state directory")
-    check.set_defaults(run=check_upgrade)
     from .local_maintenance import run as maintain_state
     maintenance = sub.add_parser("maintain-state", help="Inspect or compact bounded local metadata while the application is stopped")
     maintenance.add_argument("--data-directory", default=argparse.SUPPRESS, help="Existing private installation state directory")

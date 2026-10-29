@@ -94,8 +94,7 @@ cluster and environment grants can be changed together. New connections use
 Slurm without a backend selector, and SSH overrides are under advanced settings.
 Editable cluster walltime and SSH lifetime use minutes; saved worker profiles
 and API accounting retain integer seconds. Key confirmation follows project
-policy or always requires review; the equivalent old automatic choice is mapped
-to Follow project policy by a small data migration. No old runtime mode remains.
+policy or always requires review.
 
 Dashboard and project jobs share 50-row pages with All, Unresolved and Awaiting
 review filters. Live updates keep the selected page/filter and unsent edits;
@@ -114,8 +113,11 @@ archived identities, with installation limits where applicable. These read-only
 logical counters neither scan the disk nor promise physical free space. Optional
 environment-build pages show whether a ready environment is actually permitted;
 storage settings remain advisory planning estimates. See the
-[review and implemented scope](portal-usability-review.md) and remaining
+[portal guide](management.md) and remaining
 [human/site acceptance work](roadmap.md).
+
+The alpha supports fresh setup after incompatible stored-state changes, rather
+than historical schema upgrades. See [alpha updates](deployment.md#alpha-updates-and-fresh-setup).
 
 ## Preparation, approval, and accounting
 
@@ -174,9 +176,10 @@ Object storage and durable metadata have separate admission accounting. Current
 object defaults are 64 GiB per project, 256 GiB per installation and 10,000 objects
 per project, including pending capacity in quota checks. Ordinary byte uploads
 are bounded to 512 KiB each; the resumable data path supports 8 GiB per file and
-64 GiB per job in either direction. The legacy inline terminal report retains
-its 10 MiB artifact bound. Eight pending upload reservations per project are
-allowed. See [files and live output](data-transfer.md) for limits, recovery and
+64 GiB per job in either direction. Slurm and simulated jobs publish outputs
+through this same resumable path; final reports carry status and accounting,
+not file bytes. Eight pending upload reservations per project are allowed.
+See [files and live output](data-transfer.md) for limits, recovery and
 incremental log semantics.
 
 Each worker serializes its output-write requests through one FIFO asynchronous
@@ -257,9 +260,9 @@ into separate execution/management and discovery bundles. New prepared jobs bind
 `helper_protocol=slurm-jobs/v1` and the exact execution-bundle SHA-256. Management
 uses current compatible code plus the original package digest and exact remote
 journal/native identity. It never runs helper source obtained from an old
-manifest. New submissions still reject a changed execution hash. Use the offline
-[upgrade check](deployment.md#check-an-upgrade-before-starting-it) before starting
-an updated installation with outstanding work.
+manifest. New submissions still reject a changed execution hash. Incompatible
+alpha updates require [fresh setup](deployment.md#alpha-updates-and-fresh-setup)
+after outstanding work is reconciled.
 
 Discovery separates configured capabilities, authorization and observed idle
 resources. Software/module catalogs are login-node observations, with provenance

@@ -70,12 +70,11 @@ class OpenSSHTransport:
             argv += ["-o", option]
         return [*argv, "--", s["user"] + "@" + s["host"]]
 
-    def _helper_command(self, source: str, request: dict | None) -> tuple[list[str], bytes]:
+    def _helper_command(self, source: str, request: dict) -> tuple[list[str], bytes]:
         python = self.connection.get("python_path", "/usr/bin/python3")
         if not isinstance(python, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", python):
             raise TransportError("Invalid protected remote interpreter")
-        # Persistent channels send framed requests after the bootstrap bytes.
-        payload = b"" if request is None else json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode()
+        payload = json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode()
         if len(payload) > self.PAYLOAD_LIMIT:
             raise TransportError("Remote operation payload exceeds limit")
         bundle = source.encode("utf-8")

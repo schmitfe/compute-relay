@@ -30,7 +30,7 @@ def run(args):
                     input=json.dumps(request).encode(), stdout=subprocess.PIPE, stderr=log,
                     env=service_environment(state, document, str(uuid4())), timeout=120)
             if result.returncode or len(result.stdout) > 65536:
-                raise LocalStateError("Maintenance could not finish. See private maintenance.log; start and stop the updated application once if migrations are pending.")
+                raise LocalStateError("Maintenance could not finish. See private maintenance.log; use the matching installation version and initialized state.")
             response = json.loads(result.stdout)
             if not isinstance(response, dict):
                 raise ValueError

@@ -130,7 +130,7 @@ def target_directories(request, connection_id, project_id):
     return_url = _storage_path(project, "targets/new/?") + urlencode({**selected, "connection": str(connection.id)}, doseq=True)
     return render(request, "broker_storage/target_directories.html", {"project": project, "cluster": connection, "task": task,
         "result": result, "selection": selected, "select_url": select_url, "return_url": return_url,
-        "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
+        "connector_ready": connection.worker.setup_ready,
         "waiting": bool(task and task.state in {"queued", "running"})})
 
 

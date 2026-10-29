@@ -112,13 +112,13 @@ async def main():
                 await asyncio.sleep(1)
             else:
                 raise RuntimeError("Current management did not obtain final native accounting")
-            await backend.collect(native, manifest=manifest)
+            await backend.output_manifest(native, manifest=manifest)
             if (await backend.reconcile(attempt_id, manifest)).get("native_identity") != native:
                 raise RuntimeError("Repeated recovery changed native identity")
         if transport.submissions != 2:
             raise RuntimeError("Recovery submitted an additional native job")
         print(json.dumps({"helper_upgrade": "passed", "native_submissions": 2,
-                          "lost_reply_recovered": True, "management_operations": ["reconcile", "cancel", "observe", "collect"],
+                          "lost_reply_recovered": True, "management_operations": ["reconcile", "cancel", "observe", "output_manifest"],
                           "final_native_accounting": True}, sort_keys=True))
     finally:
         for native, manifest in attempts:

@@ -28,7 +28,7 @@ from compute_relay.worker.runner import Worker
 from compute_relay.worker.transfers import collect_outputs, stage_inputs
 from compute_relay.worker.client import ControlError, _http_error
 from compute_relay.workspace import WorkspaceClient
-from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
+from test_support.unit_test_control import broker, budgeted, dispatched, execution, prepared_job, submit_receipt
 from test_support.unit_test_workspace import workspace
 from test_support.unit_test_backends import sample, ATTEMPT, REVISION
 
@@ -242,18 +242,6 @@ def test_same_content_inputs_keep_independent_partial_offsets(sample, tmp_path, 
     asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/two.bin", offset=0,
         content_base64=base64.b64encode(data[:20]).decode()))
     assert asyncio.run(backend.stage_input(ATTEMPT, manifest, "data/one.bin"))["offset"] == 10
-
-
-def test_legacy_collection_stops_after_aggregate_cap(sample, tmp_path, monkeypatch):
-    sample = deepcopy(sample)
-    sample[0]["outputs"] = ["first.bin", "second.bin"]
-    backend, prepared, files, _, _ = remote_package(sample, tmp_path, monkeypatch)
-    native = asyncio.run(backend.submit(ATTEMPT, prepared["manifest"], files))["native_identity"]
-    directory = Path(native["work_dir"])
-    (directory / "first.bin").write_bytes(b"x" * (10 * 1024 * 1024))
-    (directory / "second.bin").write_bytes(b"more")
-    result = asyncio.run(backend.collect(native, sample[0]["outputs"], manifest=prepared["manifest"]))
-    assert set(result["artifacts"]) == {"first.bin"}
 
 
 def test_remote_output_manifest_and_ranges_reject_changes_and_symlinks(sample, tmp_path, monkeypatch):
@@ -577,22 +565,24 @@ def test_stale_worker_cannot_transfer_outputs_or_read_inputs(broker):
     assert error.value.status == 403
 
 
-def test_storage_failures_stop_after_three_legacy_collection_reports(broker, settings):
+@pytest.mark.django_db(transaction=True)
+def test_fake_worker_collection_quota_failures_settle_once_and_stop_after_three_attempts(broker, settings, tmp_path, monkeypatch):
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     budgeted(broker)
     job = prepared_job(broker, outputs=["results.bin"])
-    attempt, first = dispatched(broker, job)
-    native, lease = submit_receipt(broker, attempt, first)
+    attempt = execution(broker, job).attempt
+    first = services.lease_work(broker.worker)["lease"]
+    configuration = {**broker.connection.configuration, "backend": "fake", "revision_sha256": broker.connection.revision_sha256}
+    worker = Worker(AsyncHTTP(HTTP("synthetic-worker-token")), {str(broker.connection.id): configuration},
+        Journal(tmp_path / "journal"), extensions=[], owner_id=uuid4())
+    asyncio.run(worker.execute(first))
     settings.PROJECT_STORAGE_LIMIT = 1
     for number in range(3):
-        services.report(broker.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
-            "outcome": "observed", "native_identity": native, "collection_state": "complete",
-            "observation": {"state": "completed", "terminal": True,
-                "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}},
-            "artifacts": {"results.bin": base64.b64encode(b"too large for this quota").decode()}})
+        Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
+        lease = services.lease_work(broker.worker)["lease"]
+        asyncio.run(worker.execute(lease))
         attempt.refresh_from_db()
         assert attempt.collection_failures == number + 1
-        if number < 2:
-            Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
-            lease = services.lease_work(broker.worker)["lease"]
     assert attempt.collection_state == "failed" and not attempt.collection_pending
+    assert not Artifact.objects.filter(attempt=attempt).exists()
     assert LedgerEntry.objects.filter(attempt=attempt, action="settle").count() == 1

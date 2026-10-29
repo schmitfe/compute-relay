@@ -4,9 +4,17 @@ The compute skill starts with a concrete deliverable, a minimum experiment set,
 required validation, a finite resource/execution allowance, a diagnostic limit
 and an evidence-based stopping rule. All agents and retries share that plan.
 Unused project funds do not justify another experiment. Failed required
-validation with no remaining allowance yields an inconclusive report. The
-[planning comparison](references/investigation-planning.md) records the sources
-and limitations behind these rules.
+validation with no remaining allowance yields an inconclusive report. These are agent guidance, not enforced investigation sub-budgets or proof of
+scientific validity. Question-first probes and stopping rules adapt the
+[Diagnosing Bugs](https://github.com/mattpocock/skills/blob/main/skills/engineering/diagnosing-bugs/SKILL.md)
+and [Prototype](https://github.com/mattpocock/skills/blob/main/skills/engineering/prototype/SKILL.md)
+skills. Shared delegation and preserved plans follow the
+[Anthropic research-system discussion](https://www.anthropic.com/research/multi-agent-research-system);
+planned versus exploratory analysis follows
+[Center for Open Science guidance](https://www.cos.io/initiatives/prereg).
+Model/session limits such as [SDK turn limits](https://openai.github.io/openai-agents-python/running_agents/)
+and [session budgets](https://platform.claude.com/docs/en/managed-agents/budgets)
+are separate from Compute Relay's allocated resource accounting.
 
 ## Optional investigation records
 

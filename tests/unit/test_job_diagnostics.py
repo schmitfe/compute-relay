@@ -154,7 +154,7 @@ def test_cancel_request_is_not_a_confirmed_cancellation_or_refund():
     assert "not treat this request as a refund" in detail["suggestion"]
 
 
-@pytest.mark.parametrize("error", ["OUTPUT_COLLECTION_FAILED", "OUTPUT_STORAGE_UNAVAILABLE", "OUTPUT_MISSING"])
+@pytest.mark.parametrize("error", ["OUTPUT_COLLECTION_FAILED", "OUTPUT_MISSING"])
 def test_missing_outputs_do_not_reclassify_success_as_program_failure_or_hide_accounting(error):
     value = changed(state="succeeded", error_code=error)
     value.observation["native_state"] = "COMPLETED"

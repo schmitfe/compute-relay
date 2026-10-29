@@ -268,21 +268,26 @@ def test_final_overage_is_charged_once_and_exhausted_allowance_blocks_new_admiss
     assert error.value.code == "BUDGET_UNAVAILABLE"
 
 
-def test_output_storage_failure_does_not_suppress_final_accounting(broker):
+def test_output_storage_failure_does_not_suppress_final_accounting(broker, settings):
     budgeted(broker)
     job = prepared_job(broker, outputs=["result.json"])
     attempt, lease = dispatched(broker, job)
     native, lease = submit_receipt(broker, attempt, lease)
     data = {"lease_id": lease["id"], "generation": lease["generation"], "outcome": "observed", "native_identity": native,
-            "artifacts": {"result.json": base64.b64encode(b"synthetic output").decode("ascii")},
+            "collection_state": "failed", "error_code": "OUTPUT_COLLECTION_FAILED",
             "observation": {"state": "completed", "terminal": True,
                             "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}}}
-    with patch.object(services, "store_blob", side_effect=BrokerError("STORAGE_QUOTA", "No room", 409)):
-        response = services.report(broker.worker, attempt.id, data)
+    settings.PROJECT_STORAGE_LIMIT = 1
+    response = Client(HTTP_AUTHORIZATION="Bearer synthetic-worker-token").post(
+        f"/internal/v1/attempts/{attempt.id}/output-chunk", data=json.dumps({
+            "lease_id": lease["id"], "generation": lease["generation"], "path": "result.json",
+            "sha256": "a" * 64, "size_bytes": 16}), content_type="application/json")
+    assert response.status_code == 409
+    response = services.report(broker.worker, attempt.id, data)
     broker.grant.refresh_from_db()
     assert response["attempt"]["state"] == "succeeded"
     assert response["attempt"]["accounting_state"] == "settled"
-    assert response["attempt"]["error_code"] == "OUTPUT_STORAGE_UNAVAILABLE"
+    assert response["attempt"]["error_code"] == "OUTPUT_COLLECTION_FAILED"
     assert broker.grant.spent_cpu == 2 and broker.grant.reserved_cpu == 0
 
 
@@ -392,7 +397,7 @@ def test_failed_disk_write_releases_persistent_upload_reservation(broker):
     assert list(UploadReservation.objects.values_list("state", flat=True)) == ["aborted"]
 
 
-def test_undeclared_artifact_cannot_enter_store(broker):
+def test_inline_artifacts_are_rejected_without_storing_bytes(broker):
     budgeted(broker)
     job = prepared_job(broker)
     attempt, lease = dispatched(broker, job)
@@ -402,12 +407,12 @@ def test_undeclared_artifact_cannot_enter_store(broker):
         services.report(broker.worker, attempt.id,
                         {"lease_id": lease["id"], "generation": lease["generation"], "outcome": "observed",
                          "artifacts": {"undeclared.txt": base64.b64encode(b"no").decode()}})
-    assert error.value.code == "ARTIFACT_DENIED"
+    assert error.value.code == "INVALID_REPORT"
     assert Blob.objects.count() == before
     assert not Artifact.objects.exists()
 
 
-def test_large_internal_artifact_report_settles_while_public_body_stays_bounded(broker):
+def test_worker_and_public_requests_reject_oversized_inline_outputs(broker):
     budgeted(broker)
     job = prepared_job(broker, outputs=["large.bin"])
     attempt, lease = dispatched(broker, job)
@@ -423,11 +428,10 @@ def test_large_internal_artifact_report_settles_while_public_body_stays_bounded(
     client = Client()
     response = client.post(f"/internal/v1/attempts/{attempt.id}/report", data=serialized,
                            content_type="application/json", HTTP_AUTHORIZATION="Bearer synthetic-worker-token")
-    assert response.status_code == 200, response.content
-    artifact = Artifact.objects.get(attempt=attempt, path="large.bin")
-    assert read_blob(artifact.blob) == content
+    assert response.status_code == 413, response.content
+    assert not Artifact.objects.filter(attempt=attempt).exists()
     broker.grant.refresh_from_db()
-    assert (broker.grant.spent_cpu, broker.grant.reserved_cpu) == (2, 0)
+    assert (broker.grant.spent_cpu, broker.grant.reserved_cpu) == (0, 60)
     public = client.post(f"/api/v1/projects/{broker.project.id}/objects",
                          data=json.dumps({"path": "too-large.bin", "content_base64": encoded}),
                          content_type="application/json", HTTP_AUTHORIZATION="Bearer " + broker.token)

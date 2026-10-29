@@ -68,7 +68,7 @@ def reserve_metadata(project, kind, object_id, size_bytes):
 def retire_metadata(project, object_id, size_bytes):
     """Atomically shrink a job charge into a small, count-capped tombstone.
 
-Unlike admission, a strictly shrinking transfer is permitted while an upgraded
+Unlike admission, a strictly shrinking transfer is permitted while an
 installation is over its byte ceiling. It cannot create or enlarge a charge.
 Eligibility to archive the corresponding job is enforced by maintenance.
 """

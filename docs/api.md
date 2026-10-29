@@ -65,7 +65,7 @@ A human decision binds an execution-request UUID as well as the immutable revisi
 Job and investigation status accept `after_revision` and `wait_seconds` (0–20)
 and return `revision` / `changed`. Investigation job creation can wrap the
 canonical request as `{request: ..., context: {investigations: {id: ..., role: ...}}}`;
-legacy canonical job bodies remain accepted. Group filtering uses the bounded
+ungrouped jobs use canonical job bodies. Group filtering uses the bounded
 JSON `context` query parameter. See [investigations and completion](investigations.md)
 for scopes, advisory plan limits, waiting capacity and manifest consistency.
 

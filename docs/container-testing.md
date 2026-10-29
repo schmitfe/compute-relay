@@ -103,7 +103,8 @@ docker compose -p compute-relay-upgrade-test \
 
 `tools/helper_upgrade_smoke.py` prepares and submits two bounded stdlib jobs with
 a reviewed comment-only difference in the installed execution bundle, then
-uses the current bundle to reconcile, cancel, observe and collect. One accepted
+uses the current bundle to reconcile, cancel, observe and inspect outputs through
+the resumable transfer interface. One accepted
 submission reply is deliberately lost. The check requires final native
 accounting, stable recovered identity, refusal to submit an old package under
 the new execution hash, and exactly two submission calls. It never retrieves or

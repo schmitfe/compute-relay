@@ -132,7 +132,7 @@ account therefore gives it its own observations and recipes.
    command by default.
 3. Keep the personal connector running and press **Inspect selection**. This is
    an explicit human action, with CSRF and current connection-revision checks.
-   The updated connector must advertise `personal_environments_v1`; restart it
+   The connector must complete the current setup handshake; restart it
    after upgrading the package. Merely opening or saving the page does not run
    discovery commands.
 4. Select **Detected Python** or **Detected environment** from the returned

@@ -146,19 +146,21 @@ def test_rounded_reservation_is_held_before_approval_and_cannot_overbook(broker)
 
 
 @pytest.mark.django_db
-def test_cpu_unit_requires_updated_worker_and_normal_configuration_acknowledgement(personal):
+def test_cpu_unit_requires_ready_connector_and_normal_configuration_acknowledgement(personal):
     from compute_relay.control.models import ConnectorTask
     from compute_relay.worker.enrollment import profile_metadata, resolve_connection
     context = personal
     path = f"/clusters/{context.connection.id}/configuration/"
     data = configuration_fields(context, cpu_allocation_quantum=2)
+    context.worker.setup_ready = False
+    context.worker.save(update_fields=["setup_ready"])
     denied = context.human.post(path, data)
-    assert denied.status_code == 409 and b"Restart your personal connector" in denied.content
+    assert denied.status_code == 409 and b"Start your personal connector" in denied.content
     assert not ConnectorTask.objects.exists()
     context.connection.refresh_from_db()
     assert context.connection.setup_complete
-    context.worker.connector_features.append("personal_cpu_allocation_v1")
-    context.worker.save(update_fields=["connector_features"])
+    context.worker.setup_ready = True
+    context.worker.save(update_fields=["setup_ready"])
     assert context.human.post(path, data).status_code == 302
     context.connection.refresh_from_db()
     assert "cpu_allocation_quantum" not in context.connection.configuration["site_profile"]
