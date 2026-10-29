@@ -1,6 +1,7 @@
-<img align="right" width="112" src="assets/compute-relay-icon.svg" alt="Compute Relay: an agent sends a reviewed job to a Slurm cluster" />
-
-# Compute Relay
+<h1>
+  <img width="504" src="assets/compute-relay-logo.svg#gh-light-mode-only" alt="Compute Relay" />
+  <img width="504" src="assets/compute-relay-logo-dark.svg#gh-dark-mode-only" alt="Compute Relay" />
+</h1>
 
 Let Codex, Claude Code and other local MCP clients prepare work for your Slurm
 clusters. Review the exact job before submission, or set project limits for

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Compute Relay</title>
+  <desc id="desc">An AI spark sends work across a bridge to stacked HPC compute nodes.</desc>
+  <g transform="translate(4 -1)">
+    <path fill="#12233f" fill-rule="evenodd" d="M30 126V82h104v44h-21a32 32 0 0 0-64 0Zm83-28h21v5h-21Zm0 15h21v5h-21Z"/>
+    <path fill="#0a9b86" d="M31 36c-3 13-8 18-21 21 13 3 18 8 21 21 3-13 8-18 21-21-13-3-18-8-21-21Zm29 13h56V37l25 20-25 21V66H60Z"/>
+  </g>
+</svg>
