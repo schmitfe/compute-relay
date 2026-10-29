@@ -14,6 +14,53 @@ import pytest
 from compute_relay.remote import connector_setup as setup
 
 
+def test_storage_selection_creates_missing_parents_and_preserves_existing_permissions(tmp_path):
+    existing = tmp_path / "shared"
+    existing.mkdir(mode=0o750)
+    result = setup.handle_request({"operation": "mkdir", "path": str(existing / "project" / "runs"),
+        "name": "results", "parents": True})
+    assert result["ok"] is True and result["created"] is True
+    assert result["path"] == str(existing / "project" / "runs" / "results")
+    assert stat.S_IMODE(existing.stat().st_mode) == 0o750
+    for path in (existing / "project", existing / "project" / "runs", Path(result["path"])):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o700
+    again = setup.handle_request({"operation": "mkdir", "path": str(existing / "project" / "runs"),
+        "name": "results", "parents": True})
+    assert again["ok"] is True and again["created"] is False
+
+
+def test_recursive_creation_resolves_existing_parent_alias_and_rejects_leaf_symlinks(fake_home, tmp_path):
+    alias = tmp_path / "alias"
+    alias.symlink_to(fake_home, target_is_directory=True)
+    result = setup.handle_request({"operation": "mkdir", "path": str(alias / "new" / "runs"),
+        "name": "results", "parents": True})
+    assert result["ok"] and result["path"] == str(fake_home / "new" / "runs" / "results")
+    (fake_home / "link").symlink_to(fake_home / "new", target_is_directory=True)
+    denied = setup.handle_request({"operation": "mkdir", "path": str(fake_home), "name": "link", "parents": True})
+    assert denied == {"ok": False, "error_code": "DIRECTORY_CONFLICT"}
+
+
+def test_parent_creation_refuses_a_symlink_inserted_during_creation(fake_home, tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original = setup.os.mkdir
+    def replaced(name, *args, **kwargs):
+        if name == "new":
+            os.symlink(outside, name, dir_fd=kwargs['dir_fd'])
+            raise FileExistsError
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(setup.os, 'mkdir', replaced)
+    result = setup.handle_request({"operation": "mkdir", "path": str(fake_home / "new" / "runs"),
+        "name": "results", "parents": True})
+    assert result['ok'] is False and not list(outside.iterdir())
+
+
+def test_recursive_creation_validates_the_complete_path_before_writing(fake_home):
+    missing = fake_home / ('a' * 75) / ('b' * 75)
+    result = setup.handle_request({'operation': 'mkdir', 'path': str(missing), 'name': 'c' * 80, 'parents': True})
+    assert result['ok'] is False and not (fake_home / ('a' * 75)).exists()
+
+
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"

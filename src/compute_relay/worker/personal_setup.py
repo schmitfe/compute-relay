@@ -222,7 +222,7 @@ class PersonalWorker(Worker):
                     result = await remote_setup(self.session, "browse", path=receipt["path"])
                     result["created"] = receipt["created"]
                 else:
-                    result = await remote_setup(self.session, "mkdir", path=task["request"]["path"], name=task["request"]["name"])
+                    result = await remote_setup(self.session, "mkdir", **task["request"])
                     if result.get("ok") is True:
                         updated = deepcopy(self.state)
                         updated["last_folder_task"] = task["id"]

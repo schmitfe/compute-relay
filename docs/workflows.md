@@ -13,6 +13,19 @@ Only success dependencies are supported. Graphs must be acyclic; inputs must
 refer to explicitly declared producer outputs and cannot overwrite consumer
 code or other inputs.
 
+Branching and joining are supported: `start → [left, right] → join` is a valid
+diamond DAG. Set `depends_on: ["start"]` on both branches and
+`depends_on: ["left", "right"]` on the join. The join waits for both branches
+to succeed and settle their accounting; artifact edges additionally bind both
+producers' verified outputs. These dependencies are orchestrated by Compute
+Relay, rather than submitted as native Slurm dependency flags.
+
+Outputs are currently collected after each job finishes. To analyze completed
+chunks while other trials continue, use one job per chunk and connect the
+analysis nodes to their corresponding chunk jobs. A growing file from one
+still-running job is not yet exposed as an artifact; live stdout/stderr remains
+available. Streaming immutable chunks is tracked in the roadmap.
+
 The `workflows:write` scope supplements ordinary job scopes. Creating a revision
 requires `jobs:write`; starting and advancing require `jobs:execute`; artifact
 edges also require `artifacts:read`; cancellation requires `jobs:cancel`.

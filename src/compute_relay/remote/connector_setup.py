@@ -2,7 +2,7 @@
 
 The complete source may be sent to the protected remote Python interpreter.
 There are no broker imports, shell commands, or file-content reads or writes.
-Only the explicitly requested mkdir operation creates one directory, mode 0700.
+Only explicitly requested mkdir operations create directories, mode 0700.
 Symlink resolution is explicit in returned canonical paths; directory handles
 subsequently refuse symlink substitutions while opening that canonical path.
 """
@@ -167,12 +167,39 @@ def _check_directory_path(fd, path):
         raise SetupError("DIRECTORY_CHANGED") from None
 
 
-def mkdir(path, name):
+def mkdir(path, name, parents=False):
     if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name)
             or name in {".", ".."}):
         raise SetupError("INVALID_DIRECTORY_NAME")
+    if type(parents) is not bool:
+        raise SetupError("INVALID_REQUEST")
     home = _home_path()
-    parent = _canonical_existing(_path(path))
+    path = _path(path)
+    try:
+        parent = _canonical_existing(path)
+    except FileNotFoundError:
+        if not parents:
+            raise
+        selection = validate_root(path)
+        _path(posixpath.join(selection["path"], name), root_allowed=False, job_root=True)
+        parent = selection["existing_parent"]
+        fd = _open_directory(parent)
+        previous_umask = os.umask(0o077)
+        try:
+            for component in selection["path"][len(parent):].strip("/").split("/"):
+                _check_directory_path(fd, parent)
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(component, getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+                parent = posixpath.join(parent, component)
+                _check_directory_path(fd, parent)
+        finally:
+            os.umask(previous_umask)
+            os.close(fd)
     child_path = _path(posixpath.join(parent, name), root_allowed=False, job_root=True)
     parent_fd = _open_directory(parent)
     child_fd = None
@@ -265,8 +292,8 @@ def handle_request(request):
             return browse(request.get("path", ""))
         if operation == "validate_root" and set(request) == {"operation", "path"}:
             return validate_root(request["path"])
-        if operation == "mkdir" and set(request) == {"operation", "path", "name"}:
-            return mkdir(request["path"], request["name"])
+        if operation == "mkdir" and set(request) in ({"operation", "path", "name"}, {"operation", "path", "name", "parents"}):
+            return mkdir(request["path"], request["name"], parents=request.get("parents", False))
         raise SetupError("INVALID_REQUEST")
     except SetupError as error:
         return {"ok": False, "error_code": error.code}

@@ -46,11 +46,22 @@ def test_personal_form_does_not_require_operator_roots_and_gets_do_not_queue_wor
     assert response.status_code == 200 and not ConnectorTask.objects.exists()
 
 
+def test_single_cluster_is_selected_and_offline_connector_keeps_the_form(personal):
+    response = personal.human.get(target_path(personal, 'new/'))
+    assert b'Check/create directory' in response.content
+    assert b'Use this location for' in response.content
+    personal.worker.setup_ready = False
+    personal.worker.save(update_fields=['setup_ready'])
+    response = personal.human.post(target_path(personal, 'new/'), document(personal))
+    assert response.status_code == 200 and b'Start your personal connector' in response.content
+    assert not ConnectorTask.objects.exists()
+
+
 @pytest.mark.parametrize("created", [False, True])
 def test_exact_personal_directory_can_be_saved_and_used_for_advisory_project_inventory(personal, created):
     registration = queue(personal)
     assert registration.task.kind == "mkdir"
-    assert registration.task.request == {"path": "/scratch/researcher", "name": "results"}
+    assert registration.task.request == {"path": "/scratch/researcher", "name": "results", "parents": True}
     assert not StorageTarget.objects.exists()
     result = {"ok": True, "path": registration.root, "parent": "/scratch/researcher", "entries": [],
         "writable": True, "created": created}

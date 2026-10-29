@@ -6,8 +6,8 @@
 {% if registration.target_id %}<p class="notice">This storage location is saved for {{ project.name }}.</p><p><a href="/projects/{{ project.id }}/storage/">View project storage locations</a></p>
 {% elif expired %}<p class="error">This directory request expired. Start a new check; nothing is registered automatically.</p>
 {% elif waiting %}<p role="status">Waiting for your personal connector to check or create this directory. Keep its terminal running. This request expires after five minutes.</p><script>setTimeout(() => location.reload(), 1500);</script>
-{% elif task.state == "failed" %}<p class="error">The directory could not be confirmed: {{ task.error_code }}. Check that its parent exists, that the final name is an ordinary directory and that your HPC account has write access.</p>
-{% elif task.state == "succeeded" and resolved_root %}<p class="notice">{% if task.result.created %}The connector created the final directory component.{% else %}The directory already existed. Its contents and permissions were preserved.{% endif %} Review the confirmed directory above, then save this storage location.</p>
+{% elif task.state == "failed" %}<p class="error">{{ directory_error }}</p><details><summary>Technical details</summary><code>{{ task.error_code }}</code></details>
+{% elif task.state == "succeeded" and resolved_root %}<p class="notice">{% if task.result.created %}The connector created the missing folders.{% else %}The directory already existed. Its contents and permissions were preserved.{% endif %} Review the confirmed directory above, then save this storage location.</p>
 <p>Capacity, filesystem identity and native quotas remain unknown. This registration does not move files, install software or change job staging.</p>
 <form method="post">{% csrf_token %}<input type="hidden" name="project_id" value="{{ project.id }}"><input type="hidden" name="confirmed_root" value="{{ resolved_root }}"><button>Save storage location</button></form>
 {% elif task.state == "succeeded" %}<p class="error">The worker's directory result could not be validated against this request. Start a new check; no storage location has been saved.</p>

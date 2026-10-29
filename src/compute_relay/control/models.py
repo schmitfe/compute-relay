@@ -251,6 +251,10 @@ class JobQuerySet(models.QuerySet):
         return self.select_related("project__owner", "credential").annotate(
             _latest_execution_state=models.Subquery(latest.values("state")[:1]),
             _latest_attempt_state=models.Subquery(latest.values("attempt__state")[:1]),
+            execution_cluster_name=models.Subquery(latest.values("attempt__connection__name")[:1]),
+            execution_cluster_id=models.Subquery(latest.values("attempt__connection_id")[:1], output_field=models.UUIDField()),
+            execution_backend=models.Subquery(latest.values("attempt__connection__backend")[:1]),
+            execution_native_id=models.Subquery(latest.values("attempt__native_identity__job_id")[:1]),
         )
 
 
@@ -283,7 +287,10 @@ class Job(models.Model):
 
     @property
     def display_state_label(self):
-        state = self.display_state
+        return self.state_label(self.display_state)
+
+    @staticmethod
+    def state_label(state):
         return {"succeeded": "Completed", "rejected": "Rejected", "awaiting_approval": "Awaiting approval",
                 "settlement_pending": "Awaiting accounting", "submission_uncertain": "Submission uncertain"}.get(
                     state, state.replace("_", " ").capitalize())

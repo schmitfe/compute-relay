@@ -53,7 +53,7 @@ def confirmed_directory_root(registration):
         return None
     if (len(root) > 240 or result.get("ok") is not True or result.get("writable") is not True
             or type(result.get("created")) is not bool or result.get("parent") != posixpath.dirname(root)
-            or task.request != {"path": posixpath.dirname(registration.root), "name": posixpath.basename(registration.root)}
+            or task.request != {"path": posixpath.dirname(registration.root), "name": posixpath.basename(registration.root), "parents": True}
             or posixpath.basename(root) != task.request["name"]):
         return None
     return root
@@ -113,7 +113,7 @@ def target_current(target):
 
 
 def queue_personal_target(user, connection, root, name, roles, revision, submission_id, *, project):
-    """Queue one existing-parent mkdir; this does not expand the worker job scope."""
+    """Create the human-selected directory; this does not expand worker job scope."""
     from compute_relay.control.connector_setup import enqueue, locked_connection, own_connection
     _project_connection(user, project, connection)
     reference = own_connection(user, connection.id)
@@ -126,7 +126,7 @@ def queue_personal_target(user, connection, root, name, roles, revision, submiss
             or not isinstance(roles, list) or not roles or any(role not in ROLES for role in roles)
             or len(set(roles)) != len(roles) or len(posixpath.basename(root)) > 80):
         raise BrokerError("INVALID_STORAGE", "Choose a name, planning uses and a directory with a final component up to 80 characters.")
-    payload = {"path": posixpath.dirname(root), "name": posixpath.basename(root)}
+    payload = {"path": posixpath.dirname(root), "name": posixpath.basename(root), "parents": True}
     with transaction.atomic():
         current, _, _ = locked_connection(reference)
         # locked_connection already locks assigned projects before Connection.

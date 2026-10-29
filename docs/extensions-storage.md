@@ -30,10 +30,11 @@ their running worker. Browsing is
 requested by human POSTs, and GET pages only display task status. Form selections
 are retained when returning from the browser.
 
-Select **Check/create directory** to queue one fixed connector operation. If the
-final component is missing, the worker creates that one private directory under
-an existing parent; missing parents, existing files and final symbolic links are
-rejected. Existing directories keep their contents and permissions. The check
+Select **Check/create directory** to queue one fixed connector operation. The
+worker creates missing folders along the selected path as private directories
+(0700), using your cluster account. Existing directories keep their contents
+and permissions; existing files and final symbolic links are rejected. Parent
+creation is bounded by the path limit and refuses symlink substitutions. The check
 expires after five minutes and does not register the location automatically.
 Review its result and select **Save storage location**. The review shows both the
 requested path and the worker's canonical directory when a parent alias resolves
