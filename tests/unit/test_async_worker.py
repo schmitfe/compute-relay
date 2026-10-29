@@ -57,6 +57,37 @@ def test_terminal_output_failure_keeps_final_accounting(configured):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failed_item", [0, 1])
+def test_batch_collection_failure_does_not_lose_other_outputs_or_final_accounting(configured, failed_item):
+    from copy import deepcopy
+
+    async def scenario():
+        c = configured
+        leases = [{**deepcopy(c.lease), "operation": "observe", "id": str(uuid4()), "attempt_id": str(uuid4())}
+            for _ in range(2)]
+        for index, lease in enumerate(leases):
+            lease["native_identity"] = {"job_id": str(index + 1), "attempt_id": lease["attempt_id"]}
+
+        class PartialFailure(Backend):
+            async def output_manifest(self, native, *, manifest):
+                if native["attempt_id"] == leases[failed_item]["attempt_id"]:
+                    raise OSError("private fixture storage failure")
+                return await super().output_manifest(native, manifest=manifest)
+
+        backend = PartialFailure()
+        c.worker.backend_factory = lambda _: backend
+        await c.worker._execute_attempts(leases)
+        reports = [body for _, path, body in c.control.calls if path.endswith("/report")]
+        assert len(reports) == 2 and backend.submitted == 0
+        for index, report in enumerate(reports):
+            assert report["observation"]["accounting"] == {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}
+            assert report["collection_state"] == ("failed" if index == failed_item else "complete")
+            assert c.journal.read_report(leases[index]["attempt_id"]) is None
+            assert "private" not in str(report)
+
+    asyncio.run(scenario())
+
+
 def test_tampered_package_never_dispatches_and_poll_explicitly_clears_sync_extensions(configured):
     async def scenario():
         c = configured

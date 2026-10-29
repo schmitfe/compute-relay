@@ -185,7 +185,7 @@ class Worker:
                     previous = self.journal.read(work.attempt_id)
                     work.verify(connection, previous, self.extensions)
                     native = native_for(lease, previous)
-                    if work.operation in {"observe", "cancel"} and not native:
+                    if work.operation in {"observe", "cancel", "cleanup"} and not native:
                         raise ValueError("Management operation has no native identity")
                     saved = self.journal.read_report(work.attempt_id)
                     result = replay_result(saved, lease, work.manifest_sha256, native)
@@ -215,6 +215,17 @@ class Worker:
             for lease, work, native, _, result, renewal, item_lock, previous in contexts:
                 if work.operation in {"submit", "reconcile"}:
                     result = await self._submission(lease, backend, work.manifest, work.files, previous)
+                elif result is None and work.operation == "cleanup":
+                    try:
+                        confirmed = await self.client.request("POST", f"/internal/v1/attempts/{work.attempt_id}/dispatch", {
+                            "lease_id": lease["id"], "generation": lease["generation"], "manifest_sha256": work.manifest_sha256,
+                            "connection_revision_sha256": work.manifest["connection_revision_sha256"]})
+                        if not confirmed.get("authorized"):
+                            raise ControlError("CLEANUP_DENIED")
+                        cleaned = await backend.cleanup(native, manifest=work.manifest)
+                        result = {"outcome": "cleaned", "native_identity": native, "cleanup": cleaned}
+                    except Exception:
+                        result = {"outcome": "cleanup_failed", "native_identity": native}
                 elif result is None and work.operation == "cancel":
                     try:
                         cancelled = await backend.cancel(native, manifest=work.manifest)

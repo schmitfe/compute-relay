@@ -41,7 +41,11 @@ def boundary(*methods, exempt=True):
                     return JsonResponse(response[0], status=response[1])
                 return response if isinstance(response, HttpResponseBase) else JsonResponse(response)
             except BrokerError as exc:
-                return JsonResponse({"error": {"code": exc.code, "message": exc.message, "details": exc.details}}, status=exc.status)
+                response = JsonResponse({"error": {"code": exc.code, "message": exc.message, "details": exc.details}}, status=exc.status)
+                retry = exc.details.get("retry_after_seconds")
+                if exc.status == 429 and type(retry) is int and retry > 0:
+                    response["Retry-After"] = str(retry)
+                return response
             except ObjectDoesNotExist:
                 return JsonResponse({"error": {"code": "NOT_FOUND", "message": "Object not found."}}, status=404)
             except (ValueError, TypeError, KeyError, DjangoValidationError, SchemaValidationError, binascii.Error):
@@ -454,10 +458,12 @@ def human_attempt_diagnostics(job, attempts):
             and connection.worker.owner_id == job.project.owner_id and not connection.worker.revoked)
         result.append({**build_attempt_diagnostics(attempt), "outputs": outputs,
             "is_resolved": attempt.state in services.TERMINAL and attempt.accounting_state in {"settled", "released"}
-                and not attempt.collection_pending and attempt.collection_state == "complete",
+                and not attempt.collection_pending and attempt.collection_state in {"complete", "cleaned"},
+            "cleaned_paths": {entry["path"] for entry in attempt.log_state.get("cleanup", {}).get("outputs", [])},
             "can_cancel": attempt.state not in services.TERMINAL and not attempt.cancel_requested,
             "cancellation_pending": attempt.cancel_requested and attempt.state not in services.TERMINAL,
-            "can_collect": bool(recoverable and attempt.native_identity and services.terminal_observation(attempt.observation)
+            "can_collect": bool(recoverable and attempt.remote_cleanup.get("state") not in {"queued", "running", "complete"}
+                and attempt.native_identity and services.terminal_observation(attempt.observation)
                 and not attempt.collection_pending and (attempt.collection_state == "failed" or any(not row["artifact"] for row in outputs)))})
     return result
 

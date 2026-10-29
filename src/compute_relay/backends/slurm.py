@@ -228,6 +228,9 @@ class SlurmBackend:
         return await self._call("output_chunk", native_identity=native_identity, path=path, offset=offset,
             version=version, **self._management(manifest))
 
+    async def cleanup(self, native_identity, *, manifest):
+        return await self._call("cleanup", native_identity=native_identity, **self._management(manifest))
+
     async def discover(self) -> dict:
         return parse_discovery(await self._call("discover"), self.connection)
 

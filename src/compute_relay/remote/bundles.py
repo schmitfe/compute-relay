@@ -20,7 +20,7 @@ from .protocol import JOB_PROTOCOL
 
 DISCOVERY_PROTOCOL = "slurm-discovery/v1"
 COMMON_COMPONENTS = ("prelude.py", "filesystem.py", "scheduler.py")
-JOB_COMPONENTS = ("protocol.py", "jobs.py", "collection.py", "status.py", "job_dispatch.py")
+JOB_COMPONENTS = ("protocol.py", "jobs.py", "collection.py", "status.py", "cleanup.py", "job_dispatch.py")
 DISCOVERY_COMPONENTS = (
     "discovery_config.py", "probes.py", "module_catalog.py", "software.py", "discovery.py",
 )

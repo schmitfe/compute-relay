@@ -211,8 +211,26 @@ def _defer_recovery(row, now):
 def store_uploaded_blob(project, data, *, maximum=None):
     """Only explicit receipt of these bytes establishes an independent grant."""
     blob = store_blob(project, data, maximum=maximum)
-    UploadGrant.objects.get_or_create(blob=blob)
+    with transaction.atomic():
+        Project.objects.select_for_update().get(id=project.id)
+        if not Blob.objects.filter(id=blob.id, project=project, cleanup_pending=False).exists():
+            raise BrokerError("CLEANUP_PENDING", "Cleanup changed this object; retry the upload after it finishes.", 409)
+        UploadGrant.objects.get_or_create(blob=blob)
     return blob
+
+
+def _check_capacity(project, pool, size, pending):
+    for scope, resource, used, limit, requested in (
+        ("project", "stored_bytes", project.storage_used + project.storage_reserved, settings.PROJECT_STORAGE_LIMIT, size),
+        ("installation", "stored_bytes", pool.used + pool.reserved, settings.GLOBAL_STORAGE_LIMIT, size),
+        ("project", "stored_objects", project.object_count + pending, settings.MAX_OBJECTS, 1),
+        ("project", "incomplete_transfers", pending, MAX_PENDING_UPLOADS, 1),
+    ):
+        if used + requested > limit:
+            raise BrokerError("STORAGE_QUOTA", f"The {scope} {resource.replace('_', ' ')} limit "
+                f"is exhausted ({used} of {limit}). Free capacity before adding more.", 409,
+                {"scope": scope, "resource": resource, "used": used, "limit": limit,
+                 "remaining": max(0, limit - used), "requested": requested})
 
 
 def store_blob(project, data, *, maximum=None):
@@ -233,13 +251,12 @@ def store_blob(project, data, *, maximum=None):
             pool = StoragePool.objects.select_for_update().get(id=1)
             existing = Blob.objects.filter(project=current, sha256=digest).first()
             if existing:
+                if existing.cleanup_pending:
+                    raise BrokerError("CLEANUP_PENDING", "Finish the pending cleanup before uploading these bytes again.", 409)
                 read_blob(existing)
                 return existing
             pending = UploadReservation.objects.filter(project=current, state="reserved").count()
-            if (current.storage_used + current.storage_reserved + len(data) > settings.PROJECT_STORAGE_LIMIT
-                    or pool.used + pool.reserved + len(data) > settings.GLOBAL_STORAGE_LIMIT
-                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= MAX_PENDING_UPLOADS):
-                raise BrokerError("STORAGE_QUOTA", "Project or installation storage quota is exhausted.", 409)
+            _check_capacity(current, pool, len(data), pending)
             current.storage_reserved += len(data)
             pool.reserved += len(data)
             current.save(update_fields=["storage_reserved"])
@@ -285,6 +302,8 @@ def begin_transfer(project, digest, size, binding, *, uploaded=False):
     reconcile_uploads(limit=8)
     with _writer_lock(project.id):
         existing = Blob.objects.filter(project=project, sha256=digest, size_bytes=size).first()
+        if existing and existing.cleanup_pending:
+            raise BrokerError("CLEANUP_PENDING", "Finish the pending cleanup before uploading these bytes again.", 409)
         current = UploadReservation.objects.filter(project=project, sha256=digest, size_bytes=size,
             binding=binding, state="reserved").first()
         # A hash-only request must never turn a retained output into an upload grant.
@@ -311,10 +330,7 @@ def begin_transfer(project, digest, size, binding, *, uploaded=False):
             StoragePool.objects.get_or_create(id=1)
             pool = StoragePool.objects.select_for_update().get(id=1)
             pending = UploadReservation.objects.filter(project=project, state="reserved").count()
-            if (current.storage_used + current.storage_reserved + size > settings.PROJECT_STORAGE_LIMIT
-                    or pool.used + pool.reserved + size > settings.GLOBAL_STORAGE_LIMIT
-                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= MAX_PENDING_UPLOADS):
-                raise BrokerError("STORAGE_QUOTA", "Transfer exceeds the storage quota.", 409)
+            _check_capacity(current, pool, size, pending)
             current.storage_reserved += size
             pool.reserved += size
             current.save(update_fields=["storage_reserved"])

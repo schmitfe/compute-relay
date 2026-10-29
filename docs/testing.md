@@ -12,6 +12,7 @@ uv run --locked --extra test python tools/check_contracts.py
 uv run --locked --extra test python -m unittest discover -s tests/contracts -v
 uv run --locked --extra test python tools/local_smoke.py
 uv run --locked --extra test python tools/local_smoke.py --mode budgeted
+uv run --locked --extra test python tools/local_smoke.py --mode budgeted --mcp-jobs 100
 uv run --locked --extra test python tools/package_smoke.py
 ```
 
@@ -37,6 +38,12 @@ need registry access for build/runtime packages. `--skip-launch` is available
 only for diagnosing packaging; that option does not establish launcher acceptance.
 
 The fake backend never executes uploaded code in the portal or connector.
+The bounded MCP burst starts the real stdio MCP server and four-thread Waitress
+portal, prepares up to 100 distinct jobs with stable-key replays, executes them
+and verifies every output digest and exact settled accounting. Concurrent health
+and authenticated portal probes must all succeed. It prints aggregate counts
+and latency rather than committing a benchmark report or fixture credentials.
+CI includes this burst in its existing runtime workflow.
 Passing synthetic tests does not establish actual Slurm behavior or operating-
 system isolation. SQLite uses immediate write transactions; admission and
 settlement correctness must not depend solely on a process-local mutex.

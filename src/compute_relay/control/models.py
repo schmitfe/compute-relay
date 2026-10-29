@@ -147,6 +147,7 @@ class Project(models.Model):
     storage_used = models.BigIntegerField(default=0)
     storage_reserved = models.BigIntegerField(default=0)
     object_count = models.PositiveIntegerField(default=0)
+    admission_state = models.JSONField(default=dict)
 
 
 class ProjectCredential(models.Model):
@@ -203,6 +204,7 @@ class Blob(models.Model):
     project = models.ForeignKey(Project, on_delete=models.PROTECT)
     sha256 = models.CharField(max_length=64)
     size_bytes = models.PositiveBigIntegerField()
+    cleanup_pending = models.BooleanField(default=False)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -230,6 +232,7 @@ class InputSource(models.Model):
 
 class MetadataPool(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    admission_state = models.JSONField(default=dict)
 
 
 class MetadataUsage(models.Model):
@@ -356,6 +359,7 @@ class Attempt(models.Model):
     collection_pending = models.BooleanField(default=False)
     collection_state = models.CharField(max_length=20, default="pending")
     collection_failures = models.PositiveIntegerField(default=0)
+    remote_cleanup = models.JSONField(default=dict)
     log_state = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now)
 

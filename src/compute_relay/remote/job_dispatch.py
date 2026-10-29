@@ -9,6 +9,7 @@ import pwd
 import re
 
 from .collection import output_transfer, read_logs
+from .cleanup import cleanup
 from .jobs import own_record, reconcile, submission_time_matches, submit, stage_input
 from .protocol import JOB_OPERATIONS, JOB_PROTOCOL
 from .scheduler import scheduler
@@ -26,6 +27,8 @@ def execute_jobs(config, request):
         return stage_input(config, request)
     if op == "observe":
         return observe(config, request)
+    if op == "cleanup":
+        return cleanup(config, request)
     identity = request["native_identity"]
     if not re.fullmatch(r"[0-9]{1,20}", identity.get("job_id", "")):
         raise ValueError("Invalid native job ID")

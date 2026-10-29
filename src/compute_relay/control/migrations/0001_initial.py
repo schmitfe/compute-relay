@@ -42,6 +42,7 @@ class Migration(migrations.Migration):
                 ('collection_pending', models.BooleanField(default=False)),
                 ('collection_state', models.CharField(default='pending', max_length=20)),
                 ('collection_failures', models.PositiveIntegerField(default=0)),
+                ('remote_cleanup', models.JSONField(default=dict)),
                 ('log_state', models.JSONField(default=dict)),
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
             ],
@@ -52,6 +53,7 @@ class Migration(migrations.Migration):
                 ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ('sha256', models.CharField(max_length=64)),
                 ('size_bytes', models.PositiveBigIntegerField()),
+                ('cleanup_pending', models.BooleanField(default=False)),
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
             ],
         ),
@@ -82,6 +84,7 @@ class Migration(migrations.Migration):
             name='MetadataPool',
             fields=[
                 ('id', models.PositiveSmallIntegerField(default=1, primary_key=True, serialize=False)),
+                ('admission_state', models.JSONField(default=dict)),
             ],
         ),
         migrations.CreateModel(
@@ -289,6 +292,7 @@ class Migration(migrations.Migration):
                 ('storage_used', models.BigIntegerField(default=0)),
                 ('storage_reserved', models.BigIntegerField(default=0)),
                 ('object_count', models.PositiveIntegerField(default=0)),
+                ('admission_state', models.JSONField(default=dict)),
                 ('connections', models.ManyToManyField(to='broker.connection')),
                 ('environments', models.ManyToManyField(to='broker.environment')),
                 ('owner', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to=settings.AUTH_USER_MODEL)),

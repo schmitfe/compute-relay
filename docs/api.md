@@ -155,10 +155,19 @@ Use an error envelope:
 | `404` | Missing object or inaccessible cross-project reference without existence disclosure |
 | `409` | `IDEMPOTENCY_CONFLICT`, `REVISION_CHANGED`, `POLICY_CHANGED`, invalid lifecycle transition, `BUDGET_UNAVAILABLE`, `PROJECT_PAUSED` |
 | `413` | Request/file/package exceeds cap |
-| `429` | Bounded admission/API rate limit, with retry interval |
+| `429` | `RATE_LIMITED`; project or installation burst exhausted, with retry seconds and `Retry-After` |
 | `503` | Temporary service dependency failure; new admissions fail closed |
 
 Login required, pending human review, and queued work normally appear as structured workflow states on a successful request. A later unknown submission returns a state/reconciliation explanation, not a misleading HTTP error inviting blind resubmission. Raw SSH exceptions, secrets, connection command lines and private paths are never passed through to agents.
+
+`allowance.admission` describes outstanding job slots and separate creation and
+execution token buckets for the project and installation. Keys share these
+bounds. `409 BACKLOG_LIMIT` returns current usage/headroom and unknown retry
+timing; completion or cancellation must free a slot. Retained history is bounded
+by logical metadata bytes, independently of lifetime compute submissions.
+`STORAGE_QUOTA` and `METADATA_QUOTA` identify the exhausted resource/scope and
+include its usage, limit and remaining capacity; increasing CPU allowance does
+not enlarge those quotas. See [runtime admission limits](runtime.md#burst-outstanding-work-and-retained-data-limits).
 
 Resource rejections identify every exceeded dimension instead of requiring the agent to guess:
 

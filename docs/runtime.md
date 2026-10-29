@@ -36,6 +36,14 @@ stack to the installation's private `web.log` without stopping the server. This
 is available to web processes started with this version; it exposes no HTTP
 diagnostic endpoint and prints no frame-local values.
 
+The launcher also checks the identity-bound health endpoint every 15 seconds.
+After three consecutive failed checks it requests one stack dump from its own
+web child, leaving the service and jobs running. It captures another dump only
+after health has recovered and a new sustained outage starts. Dumps stay in
+private `web.log`; the launcher does not signal a PID read from a request or a
+stale runtime file. This preserves evidence for the unresolved stall rather
+than treating a restart as a fix.
+
 Read the launcher's PID from the installation's private `runtime.json`. On Linux,
 `ps -o pid=,args= --ppid LAUNCHER_PID` identifies its web subprocess running
 `-m compute_relay.local_web`. Replace the PID placeholders with those verified
@@ -59,8 +67,13 @@ SQLite application, and four Waitress request threads without contacting a clust
 | Eight writers preparing 640 jobs, with a 64 MiB fixture metadata allowance | 1,123 temporary publication conflicts recovered; maximum health latency 217 ms |
 | 641 retained jobs and 1,001 seeded terminal upload receipts, followed by 128 unique-name preparations | Receipt pruning retained exactly 1,000 rows; 293 temporary publication conflicts recovered; maximum health latency 263 ms |
 | Four clients stopped reading 4 MiB/24 MiB artifact replies; 16 clients disconnected before receiving preparation replies | Stable-key retries recovered 16 distinct jobs; maximum health latency 3 ms |
+| Actual stdio MCP server, eight client lanes, 100 jobs and 100 stable-key preparation replays through four-thread Waitress | 100 distinct executions and verified outputs; exactly 100 synthetic CPU-core-seconds settled, zero reserved; all 948 portal/health probes succeeded, maximum latency 191 ms |
 
 Cold request-handler imports completed concurrently in the receipt-pruning probe.
+The MCP fixture completed in 63.5 seconds while both full Python test suites
+were running. It covers the actual MCP protocol process rather than invoking
+its facade directly; it still uses a synthetic backend and proves no native
+Slurm or SSH behavior. Reproduce it with `tools/local_smoke.py --mode budgeted --mcp-jobs 100`.
 These probes did not reproduce the original stall; they do not establish a fix.
 The [responsiveness roadmap item](roadmap.md) remains open pending a captured
 recurrence and a regression test for its actual cause. Server thread counts and
@@ -108,7 +121,7 @@ recovery of existing results through a current owned connector.
 
 Allowance uses CPU core-hours/GPU device-hours with exact seconds available.
 Project capacity separately shows stored/reserved bytes, pending transfers,
-objects, retained job records, active retry receipts, module definitions/runs and
+objects, outstanding work, burst capacity, active retry receipts, module definitions/runs and
 archived identities, with installation limits where applicable. These read-only
 logical counters neither scan the disk nor promise physical free space. Optional
 environment-build pages show whether a ready environment is actually permitted;
@@ -196,6 +209,37 @@ If a retry can reuse verified bytes already published by another transfer, it
 releases its own redundant partial reservation immediately. Other transfers'
 reservations and independent input-upload authority remain unchanged.
 
+### Burst, outstanding-work and retained-data limits
+
+Job creation and execution requests each have a durable token bucket at project
+and installation scope. A new project can create 500 jobs in a burst; its bucket
+refills at 60 requests per minute. Installation buckets allow 1,000 initially
+and refill at 300 per minute. Preparation does not spend execution tokens.
+Multiple keys share both bounds, and exact idempotent retries spend neither a
+second token nor another outstanding slot. Rejected transactions roll back
+their rate charges, reservations and identities together.
+
+Outstanding work defaults to 1,000 slots per project and 5,000 per installation.
+Unexecuted draft/prepared packages, pending reviews and unresolved attempts
+consume slots. A first execution replaces its draft slot; another execution
+needs another slot. Completion frees its slot after accounting and collection
+close out; cancellation or rejection of unused work frees its slot without
+deleting durable history. Explicit output recovery and worker reports remain
+available at capacity. Reopening output recovery can temporarily exceed the
+ceiling, while further new work stays blocked. Workflows wait for capacity and
+resume the same node instead of treating throttling as a policy rejection.
+
+`allowance.admission` and the portal show project and installation headroom.
+`429 RATE_LIMITED` includes retry seconds and a `Retry-After` header;
+`409 BACKLOG_LIMIT` identifies the full scope but cannot predict when a job will
+finish. Spending allowance, lifetime submission policy, concurrent execution,
+traffic rates, outstanding work and retained storage are separate bounds.
+Operators can adjust `BROKER_PROJECT_ADMISSION_BURST`,
+`BROKER_INSTALLATION_ADMISSION_BURST`, `BROKER_PROJECT_ADMISSION_PER_MINUTE`,
+`BROKER_INSTALLATION_ADMISSION_PER_MINUTE`,
+`BROKER_MAX_PROJECT_OUTSTANDING_JOBS` and
+`BROKER_MAX_INSTALLATION_OUTSTANDING_JOBS`; all must be positive.
+
 Logical metadata charges default to 32 MiB per project and 256 MiB across the
 installation. Job request/manifests, idempotency responses and extension
 definition/run documents consume these charges even when their source blobs
@@ -203,7 +247,6 @@ deduplicate. Additional record limits apply:
 
 | Metadata family | Per project | Per installation |
 | --- | ---: | ---: |
-| Charged job records | 1000 | 10,000 |
 | Active idempotency responses | 10,000 | 100,000 |
 | Combined extension definitions/runs | 1000 | 10,000 |
 | Archived job identities | 10,000 | 100,000 |
@@ -214,7 +257,9 @@ The controller retains at most 16 report receipts per attempt; pruned older
 generations fail the ordinary stale-lease fence. Attempts, accounting entries
 and execution identities remain durable. Metadata exhaustion rejects new
 metadata admissions with `METADATA_QUOTA`; it does not block valid worker
-accounting reports. See [maintenance](deployment.md#inspect-and-compact-local-metadata).
+accounting reports. Errors identify the exhausted scope, resource, usage, limit
+and remaining headroom. Retained jobs have a logical byte charge rather than a
+second lifetime job-count cap. See [maintenance](deployment.md#inspect-and-compact-local-metadata).
 Compacting old idempotency responses frees active key slots. Their small
 identity tombstones still consume logical byte quota and prevent an old key
 from executing again.
@@ -316,9 +361,9 @@ were exhausted by publication contention. One portal stall during preparation
 remains unexplained. Object capacity was raised from 1,000 to 10,000 after the
 former limit was reached at only 506 KiB. The test also reached the normal
 32 MiB logical-metadata ceiling after 788 admissions; its temporary 64 MiB test
-override was removed afterward. These are admission/retention bounds, not burst
-rate controls. The [roadmap](roadmap.md) tracks collection backpressure, portal
-responsiveness, outstanding-work limits and local/remote artifact cleanup.
+override was removed afterward. Those retained-data bounds remain independent
+of the burst and outstanding-work controls described above. The [roadmap](roadmap.md)
+tracks remaining real-site acceptance, portal-stall diagnosis and retention work.
 
 ## Bundled modules
 

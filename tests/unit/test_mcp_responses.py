@@ -184,6 +184,10 @@ def allowance_payload():
         "debt": {"cpu_core_seconds": 0, "gpu_device_seconds": 0},
         "jobs": {"limit": 10, "admitted": 2, "remaining": 8, "active": 1,
             "active_limit": 2, "awaiting_approval": 1},
+        "admission": {"outstanding": {scope: {"used": 100, "limit": 1000, "remaining": 900}
+            for scope in ("project", "installation")}, "rates": {
+                operation: {scope: {"limit": 500, "per_minute": 60, "remaining": 0, "retry_after_seconds": 1}
+                    for scope in ("project", "installation")} for operation in ("create", "execute")}},
         "compute": {"connections": [{"id": str(uuid4()), "catalog": "repeated-discovery" * 1000}]}}
 
 
@@ -195,9 +199,11 @@ def test_allowance_summary_keeps_budget_and_submission_limits_without_repeated_c
     assert summary["reserved_awaiting_approval"]["cpu_core_seconds"] == 60
     assert summary["available"]["cpu_core_seconds"] == 780
     assert summary["admission_expires_at"] == allowance_payload["admission_expires_at"]
+    assert summary["admission"] == allowance_payload["admission"]
     assert "compute" not in summary and "per_job_limits" not in summary
     assert len(json.dumps(summary)) * 10 < len(json.dumps(allowance_payload))
     summary["available"]["cpu_core_seconds"] = 0
+    summary["admission"]["rates"]["create"]["project"]["remaining"] = 500
     assert allowance_payload == original
 
 

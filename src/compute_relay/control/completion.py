@@ -85,6 +85,8 @@ def job_snapshot(credential, job, *, attempt_cursor=0, limit=20):
             blockers.append({"code": "ACCOUNTING_PENDING", "attempt_id": str(attempt.id)})
         if attempt.collection_pending:
             blockers.append({"code": "COLLECTION_PENDING", "attempt_id": str(attempt.id)})
+        elif attempt.collection_state == "cleaned":
+            blockers.append({"code": "OUTPUTS_CLEANED", "attempt_id": str(attempt.id)})
         elif attempt.collection_state == "failed":
             blockers.append({"code": "COLLECTION_FAILED", "attempt_id": str(attempt.id)})
         elif attempt.state == "succeeded" and declared and (missing is None or missing):
