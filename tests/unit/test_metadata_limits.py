@@ -14,12 +14,12 @@ from test_support.unit_test_control import broker, budgeted, dispatched, prepare
 def test_duplicate_blob_drafts_have_independent_count_and_byte_charges(broker, settings):
     job = prepared_job(broker)
     before = Blob.objects.count()
-    settings.MAX_PROJECT_DRAFT_JOBS = 1
+    settings.MAX_PROJECT_OUTSTANDING_JOBS = 1
     with pytest.raises(BrokerError) as exc:
         services.create_job(broker.credential, job.request)
-    assert exc.value.code == "METADATA_QUOTA"
+    assert exc.value.code == "BACKLOG_LIMIT"
     assert Job.objects.count() == 1 and Blob.objects.count() == before
-    settings.MAX_PROJECT_DRAFT_JOBS = 100
+    settings.MAX_PROJECT_OUTSTANDING_JOBS = 100
     settings.PROJECT_METADATA_LIMIT = metadata_usage(broker.project)["logical_bytes"] + 1000
     with pytest.raises(BrokerError) as exc:
         services.create_job(broker.credential, job.request)
@@ -159,3 +159,25 @@ print('bounded')
     process = subprocess.run([sys.executable, "-c", script], env=environment, text=True, capture_output=True, timeout=30)
     assert process.returncode == 0, process.stderr
     assert process.stdout.strip() == "bounded"
+
+
+@pytest.mark.parametrize("scope", ["project", "installation"])
+def test_metadata_byte_quota_error_identifies_the_exhausted_scope_and_headroom(broker, settings, scope):
+    settings.PROJECT_METADATA_LIMIT = 10 if scope == "project" else 100
+    settings.GLOBAL_METADATA_LIMIT = 10
+    reserve_metadata(broker.project, "job", "existing", 6)
+    with pytest.raises(BrokerError) as error:
+        reserve_metadata(broker.project, "job", "another", 5)
+    assert error.value.code == "METADATA_QUOTA"
+    assert error.value.details == {"scope": scope, "resource": "metadata_bytes", "used": 6,
+                                  "limit": 10, "remaining": 4, "requested": 5}
+    assert metadata_usage(broker.project)["logical_bytes"] == 6
+
+
+def test_generic_definitions_share_capacity_with_extension_subtypes(broker, settings):
+    settings.MAX_PROJECT_DEFINITIONS = 1
+    reserve_metadata(broker.project, "workflow_revision", "workflow", 1)
+    with pytest.raises(BrokerError) as error:
+        reserve_metadata(broker.project, "definition", "generic", 1)
+    assert error.value.details == {"scope": "project", "resource": "definition_records", "used": 1,
+                                  "limit": 1, "remaining": 0}

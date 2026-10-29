@@ -107,6 +107,8 @@ def _refresh(run):
         run.state = "awaiting_approval"
     elif "waiting_budget" in states:
         run.state = "waiting_budget"
+    elif "waiting_capacity" in states:
+        run.state = "waiting_capacity"
     else:
         run.state = "running"
     run.save(update_fields=["state"])
@@ -172,23 +174,23 @@ def advance(run, credential=None, *, maximum=2):
             artifact = Artifact.objects.select_related("blob", "attempt__job").get(id=edge["artifact_id"])
             authorize_input_artifact(credential, artifact)
             sources[edge["path"]] = (artifact.blob, artifact)
-        with transaction.atomic():
-            Project.objects.select_for_update().get(id=credential.project_id)
-            current = WorkflowNodeRun.objects.select_for_update().get(id=node.id)
-            if current.execution_request_id or (current.claim_expires_at and current.claim_expires_at > timezone.now()):
-                continue
-            if not current.job_id:
-                created, _ = core.create_job(credential, request, input_sources=sources)
-                job = Job.objects.get(id=created["id"])
-                job.extension_name = "workflows"
-                job.save(update_fields=["extension_name"])
-                current.job = job
-                current.resolved_inputs = inputs
-            current.state = "preparing"
-            current.claim_expires_at = timezone.now() + timedelta(seconds=120)
-            current.save()
-        processed += 1
         try:
+            with transaction.atomic():
+                Project.objects.select_for_update().get(id=credential.project_id)
+                current = WorkflowNodeRun.objects.select_for_update().get(id=node.id)
+                if current.execution_request_id or (current.claim_expires_at and current.claim_expires_at > timezone.now()):
+                    continue
+                processed += 1
+                if not current.job_id:
+                    created, _ = core.create_job(credential, request, input_sources=sources)
+                    job = Job.objects.get(id=created["id"])
+                    job.extension_name = "workflows"
+                    job.save(update_fields=["extension_name"])
+                    current.job = job
+                    current.resolved_inputs = inputs
+                current.state = "preparing"
+                current.claim_expires_at = timezone.now() + timedelta(seconds=120)
+                current.save()
             # Generated blob reservations must commit independently of metadata.
             core.prepare_job(current.job)
             with transaction.atomic():
@@ -206,11 +208,12 @@ def advance(run, credential=None, *, maximum=2):
                 locked.error_code = ""
                 locked.save()
         except BrokerError as exc:
-            WorkflowNodeRun.objects.filter(id=current.id).update(state="waiting_budget" if exc.code in {
-                "BUDGET_UNAVAILABLE", "ACTIVE_JOB_LIMIT", "TOTAL_JOB_LIMIT"} else "blocked_policy",
-                error_code=exc.code, claim_expires_at=None, next_check_at=timezone.now() + timedelta(seconds=30))
+            state = ("waiting_capacity" if exc.code in {"RATE_LIMITED", "BACKLOG_LIMIT"} else
+                "waiting_budget" if exc.code in {"BUDGET_UNAVAILABLE", "ACTIVE_JOB_LIMIT", "TOTAL_JOB_LIMIT"} else "blocked_policy")
+            WorkflowNodeRun.objects.filter(id=node.id).update(state=state, error_code=exc.code,
+                claim_expires_at=None, next_check_at=timezone.now() + timedelta(seconds=exc.details.get("retry_after_seconds") or 30))
         except (ValueError, ValidationError):
-            WorkflowNodeRun.objects.filter(id=current.id).update(state="blocked_policy", error_code="INVALID_NODE_REQUEST",
+            WorkflowNodeRun.objects.filter(id=node.id).update(state="blocked_policy", error_code="INVALID_NODE_REQUEST",
                 claim_expires_at=None, next_check_at=timezone.now() + timedelta(seconds=30))
     _refresh(run)
     return serialize_run(run)

@@ -7,12 +7,35 @@ isolate credentials from another process with the same local account's access.
 See the
 [security boundaries](docs/security.md) and [runtime limits](docs/runtime.md).
 
-Use the repository's private vulnerability-reporting feature if the maintainer
-has enabled it. Otherwise contact the repository owner through an existing
-trusted private channel. Do not post credentials or disclose sensitive
-institutional details in a public issue. Maintainers should
-publish a verified reporting channel, supported versions and response
-responsibilities before claiming release support.
+Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/schmitfe/compute-relay/security/advisories/new).
+This repository's reporting endpoint was verified enabled on 2026-10-29.
+Do not post credentials or sensitive institutional details in a public issue.
+If GitHub reporting is unavailable, use an existing trusted private channel to
+the repository owner; there is no public email address designated for reports.
+
+The repository owner, [@schmitfe](https://github.com/schmitfe), is responsible
+for initial triage, coordinating fixes and disclosure. Response is best effort
+during the alpha; there is no guaranteed acknowledgement or resolution time.
+
+## Supported versions and installations
+
+Only the current `main` revision receives alpha fixes. Earlier alpha commits
+and separate historical release branches are not maintained. Update to the
+current revision when reproducing a report, preserving outstanding-job evidence
+and following the [fresh-setup policy](docs/deployment.md#alpha-updates-and-fresh-setup).
+Restart and crash recovery within one installation version remain supported.
+
+The tested scope is standard CPython on Linux using SQLite, the local Waitress
+portal and system OpenSSH. Python versions are declared once in
+`[tool.compute-relay.ci].python-versions` in [pyproject.toml](pyproject.toml)
+and each runs the full CI matrix. Free-threaded Python, other operating systems
+and site-specific Slurm behavior are not established by that matrix. Real-site
+support requires recorded acceptance for its authentication, accounting and
+filesystem settings. See [testing guidance](docs/testing.md#real-cluster-acceptance).
+
+A supported release must name its supported revision/version range and target
+classes, pass their acceptance checks and retain a working private reporting
+channel. Publishing this alpha policy does not declare a stable release.
 
 Reports should identify the affected version/commit, installation settings and
 violated boundary, with a minimal synthetic reproduction. Do not probe real

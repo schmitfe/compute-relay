@@ -379,3 +379,48 @@ def test_producer_output_recovery_keeps_consumer_waiting(workflow_broker):
     services.advance(run)
     consumer.refresh_from_db()
     assert consumer.job_id is not None
+
+
+@pytest.mark.parametrize("operation", ["create", "execute"])
+def test_workflow_waits_for_rate_capacity_then_resumes_the_same_node(workflow_broker, settings, monkeypatch, operation):
+    context = workflow_broker
+    budgeted(context)
+    now = [timezone.now() + timedelta(hours=1)]
+    monkeypatch.setattr(timezone, "now", lambda: now[0])
+    settings.PROJECT_ADMISSION_BURST = 1
+    run = start(context)
+    if operation == "execute":
+        now[0] += timedelta(seconds=1)
+        core.request_execution(Job.objects.get(project=context.project), context.credential)
+    result = services.advance(run)
+    node = run.nodes.get(key="simulate")
+    assert result["state"] == node.state == "waiting_capacity" and node.error_code == "RATE_LIMITED"
+    assert node.execution_request_id is None
+    assert (node.job_id is None) == (operation == "create")
+    saved_job_id = node.job_id
+    assert node.next_check_at == now[0] + timedelta(seconds=1)
+    now[0] += timedelta(seconds=1)
+    services.advance(run)
+    node.refresh_from_db()
+    assert node.execution_request_id and node.state == "authorized" and node.error_code == ""
+    if saved_job_id:
+        assert node.job_id == saved_job_id
+
+
+def test_workflow_waits_for_backlog_capacity_until_unused_draft_is_archived(workflow_broker, settings, monkeypatch):
+    from compute_relay.control.maintenance import compact_draft_jobs
+    context = workflow_broker
+    budgeted(context)
+    now = [timezone.now() + timedelta(hours=1)]
+    monkeypatch.setattr(timezone, "now", lambda: now[0])
+    settings.MAX_PROJECT_OUTSTANDING_JOBS = 1
+    run = start(context)
+    result = services.advance(run)
+    node = run.nodes.get(key="simulate")
+    assert result["state"] == "waiting_capacity" and node.error_code == "BACKLOG_LIMIT"
+    assert node.job_id is None and Attempt.objects.count() == 0
+    assert compact_draft_jobs(owner=context.owner, before=now[0] + timedelta(seconds=1), apply=True)["archived"] == 1
+    now[0] += timedelta(seconds=30)
+    services.advance(run)
+    node.refresh_from_db()
+    assert node.execution_request_id and node.state == "authorized" and Attempt.objects.count() == 1

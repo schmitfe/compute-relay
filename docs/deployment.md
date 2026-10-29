@@ -130,6 +130,38 @@ journal and native identity. Changes to installed helper code cannot turn a
 submission intent into a second submission; new submissions require the current
 prepared package. Stored helper source is never executed during recovery.
 
+## Manual file cleanup
+
+Use **Preview file cleanup** on a project or job page while the portal is
+running. Review the selected batch, save and verify any results you need, then
+confirm the local or remote action separately. Confirmation expires after ten
+minutes and is rejected if the selected files or references change.
+
+Local cleanup previews up to 100 objects with their file lengths and recorded
+storage charges. It protects active/uncertain executions, unfinished accounting
+or collection, active transfers, uploaded inputs, job/definition references and
+optional-module provenance. It removes eligible result attachments before
+unlinking their owned regular files, retaining a durable deletion intent and
+storage charge until completion. An interrupted batch can be previewed again to
+resume; it never grants new input authority to deleted bytes. Jobs, prepared
+packages, bounded logs, submission journals and accounting remain recorded.
+
+Remote cleanup previews up to 100 ordinary Slurm attempts and queues work for
+their existing connector. It can wait while that connector is offline. The
+worker rechecks authority, exact native/journal/manifest identity and terminal
+scheduler evidence before removing an owned attempt directory. It never follows
+symlinks, crosses filesystems or deletes managed environments/module roots.
+Submission journals remain, so interrupted deletion and lost replies cannot
+turn into another compute submission. Remote lengths are measured by the worker
+when it runs; the portal does not promise remote free-space savings in advance.
+Once remote cleanup is queued, output recovery cannot reopen those directories.
+
+Cleanup is explicit; there is no age-based deletion service. Uploaded inputs,
+managed environments, unindexed filesystem orphans, backups and SQLite/WAL
+allocation are not reclaimed by these buttons. Local object byte/object quotas
+are released once deletion is complete. This is separate from metadata
+compaction below; increasing compute allowance does not enlarge either quota.
+
 ## Inspect and compact local metadata
 
 With the launcher and connectors stopped, preview a bounded maintenance batch:

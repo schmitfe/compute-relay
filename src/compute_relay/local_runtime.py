@@ -139,6 +139,24 @@ def _stop_server(process):
             process.kill();process.wait(timeout=5)
 
 
+def _watch_health(process, origin, installation_id, instance_id, stop):
+    misses, captured = 0, False
+    while not stop.wait(15):
+        if process.poll() is not None:
+            return
+        if _health(origin, installation_id, instance_id):
+            misses, captured = 0, False
+        elif not captured:
+            misses += 1
+            if misses >= 3:
+                try:
+                    process.send_signal(signal.SIGUSR1)
+                except OSError:
+                    return
+                captured = True
+                print("Portal health checks are failing. Thread stacks were requested in private web.log; the service has not been restarted.", flush=True)
+
+
 def _run_locked(state, args):
     installation, bootstrap = configure(state, args)
     origin = f"http://127.0.0.1:{installation['port']}"
@@ -167,7 +185,7 @@ def _run_locked(state, args):
         raise LocalStateError("Could not initialize local state. See the private startup.log in the state directory.")
     installation["initialized"] = True
     state.write("installation.json", installation)
-    process = None
+    process = monitor = None
     stop = threading.Event()
     previous_handlers = {}
 
@@ -190,6 +208,10 @@ def _run_locked(state, args):
             time.sleep(0.1)
         state.write("runtime.json", {"schema_version": "1.0", "origin": origin,
             "installation_id": installation["installation_id"], "instance_id": instance_id, "pid": os.getpid()})
+        monitor = threading.Thread(target=_watch_health,
+            args=(process, origin, installation["installation_id"], instance_id, stop),
+            name="portal-health", daemon=True)
+        monitor.start()
         print(f"Compute Relay is ready: {origin}/", flush=True)
         print(f"State: {state.directory}", flush=True)
         portal_url = origin
@@ -217,6 +239,8 @@ def _run_locked(state, args):
         print("Stopping Compute Relay…", flush=True)
     finally:
         stop.set()
+        if monitor is not None:
+            monitor.join(timeout=2)
         _stop_server(process)
         for kind, handler in previous_handlers.items():
             signal.signal(kind, handler)

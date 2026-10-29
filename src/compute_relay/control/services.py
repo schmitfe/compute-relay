@@ -66,6 +66,7 @@ def idempotent(project, operation, key, payload, action):
 
 
 def allowance(project):
+    from .admission import admission_snapshot
     grant = Grant.objects.get(project=project)
     limit = grant.policy["allowance"]
     job_limit = grant.policy.get("max_total_jobs", DEFAULT_MAX_TOTAL_JOBS)
@@ -75,6 +76,7 @@ def allowance(project):
         count=Count("id"), cpu=Sum("reservation_cpu"), gpu=Sum("reservation_gpu"))
     return {
         "project_id": str(project.id), "mode": grant.policy["mode"], "paused": project.paused,
+        "admission": admission_snapshot(project),
         "per_job_limits": {field: grant.policy["per_job_limits"][field]
                            for field in ("cpu_cores", "gpu_devices", "memory_mib", "time_limit_seconds")},
         "policy_revision": grant.policy["revision"], "admission_expires_at": grant.policy["admission_expires_at"],
@@ -139,6 +141,8 @@ def create_job(credential, document, previous=None, *, input_sources=None, trust
         if blob.project_id != project.id or blob.sha256 != item["sha256"] or blob.size_bytes != item["size_bytes"]:
             raise BrokerError("INPUT_SOURCE_CHANGED", "The sealed input source changed.", 409)
         descriptors.append((item, blob, source_kind, artifact))
+    from .admission import admit
+    admit(project, "create")
     identifier = uuid.uuid4()
     # Reserve the duplicate manifest/request plus bounded generated descriptors
     # and row overhead before writing a draft. Duplicate blobs do not evade this.
@@ -360,6 +364,8 @@ def request_execution(job, credential):
     grant = Grant.objects.select_for_update().get(project=job.project)
     connection = job.project.connections.get(id=job.request["connection_id"])
     requirements = execution_approval(job, credential, grant.policy, connection)
+    from .admission import admit
+    admit(project, "execute", additional=int(job.state not in {"draft", "prepared"} or job.execution_requests.exists()))
     execution = ExecutionRequest.objects.create(job=job, credential=credential, approval_requirements=requirements)
     attempt = None
     if not requirements["requires_human_approval"]:
@@ -495,7 +501,8 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
     with transaction.atomic():
         candidates = (Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection")
             .filter(connection__worker=worker, next_poll_at__lte=now)
-            .filter(~Q(accounting_state__in=["settled", "released"]) | Q(collection_pending=True))
+            .filter(~Q(accounting_state__in=["settled", "released"]) | Q(collection_pending=True)
+                | Q(remote_cleanup__state__in=["queued", "running"]))
             .exclude(id__in=exclude_attempt_ids)
             .filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now))
             .filter(management if management_only else management | submission)
@@ -522,7 +529,8 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
                 # Do not skip over an older submission, cancellation, recovery
                 # or another connection just to fill a batch.
                 for extra in candidates[:STATUS_BATCH_SIZE - 1]:
-                    if not extra.native_identity or extra.cancel_requested or extra.connection_id != attempt.connection_id:
+                    if (not extra.native_identity or extra.cancel_requested or extra.connection_id != attempt.connection_id
+                            or extra.remote_cleanup.get("state") in {"queued", "running"}):
                         break
                     files = list(extra.job.files.select_related("blob"))
                     size = _lease_size_bound(extra, files)
@@ -545,8 +553,12 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
 def _defer_lease(attempt, now):
     # The candidate savepoint has rolled back its generation and lease. Keep
     # funds reserved, isolate its error, and let other jobs make progress.
-    Attempt.objects.filter(id=attempt.id).update(error_code="LEASE_PREPARATION_FAILED",
-        next_poll_at=now + timedelta(seconds=30))
+    if attempt.remote_cleanup.get("state") in {"queued", "running"}:
+        Attempt.objects.filter(id=attempt.id).update(
+            remote_cleanup={"state": "failed", "error_code": "CLEANUP_PREPARATION_FAILED"})
+    else:
+        Attempt.objects.filter(id=attempt.id).update(error_code="LEASE_PREPARATION_FAILED",
+            next_poll_at=now + timedelta(seconds=30))
     logging.getLogger(__name__).warning("Attempt lease preparation deferred")
 
 
@@ -563,7 +575,14 @@ def _lease_size_bound(attempt, entries):
 
 def _lease_attempt(attempt, entries, now):
     from compute_relay.extensions import control_names
-    if attempt.cancel_requested and attempt.native_identity and attempt.error_code != "CANCEL_IDENTITY_MISMATCH":
+    if attempt.remote_cleanup.get("state") in {"queued", "running"}:
+        from .remote_cleanup import blocked
+        reason = blocked(attempt)
+        if reason:
+            raise BrokerError("CLEANUP_PROTECTED", reason, 409)
+        operation = "cleanup"
+        attempt.remote_cleanup = {"state": "running"}
+    elif attempt.cancel_requested and attempt.native_identity and attempt.error_code != "CANCEL_IDENTITY_MISMATCH":
         operation = "cancel"
     elif attempt.dispatch_started and not attempt.native_identity:
         operation = "reconcile"
@@ -576,7 +595,7 @@ def _lease_attempt(attempt, entries, now):
     attempt.operation = operation
     if attempt.error_code == "LEASE_PREPARATION_FAILED":
         attempt.error_code = ""
-    attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation", "error_code"])
+    attempt.save(update_fields=["generation", "lease_id", "lease_expires_at", "lease_deadline_at", "operation", "error_code", "remote_cleanup"])
     files = {item.path: {"sha256": item.blob.sha256, "size_bytes": item.blob.size_bytes}
         if item.blob.size_bytes > INLINE_BYTES else base64.b64encode(read_blob(item.blob)).decode("ascii")
         for item in entries} if operation == "submit" else {}
@@ -646,6 +665,15 @@ def dispatch(worker, attempt_id, data):
             # issuance's FK checks under a project lock without a reverse wait.
             User.objects.select_for_update(no_key=True).get(id=actor_id)
         attempt = checked_lease(worker, attempt_id, data)
+        if attempt.operation == "cleanup":
+            from .remote_cleanup import blocked
+            reason = blocked(attempt, leased=True)
+            if reason or attempt.remote_cleanup.get("state") != "running":
+                raise BrokerError("CLEANUP_PROTECTED", reason or "Remote cleanup was not requested.", 409)
+            if (data.get("manifest_sha256") != attempt.job.manifest_sha256
+                    or data.get("connection_revision_sha256") != attempt.connection.revision_sha256):
+                raise BrokerError("REVISION_CHANGED", "Cleanup package or connection binding changed.", 409)
+            return {"authorized": True}
         if attempt.operation != "submit" or attempt.dispatch_started or attempt.state != "authorized" or attempt.accounting_state != "reserved":
             raise BrokerError("RECONCILIATION_REQUIRED", "Submission intent already exists; reconcile instead.", 409)
         credential = attempt.execution_request.credential
@@ -736,6 +764,14 @@ def _report_replay(worker, attempt_id, data, payload_hash):
     return receipt.response if receipt else None
 
 
+def _save_report_receipt(attempt, data, payload_hash, response, extension_data=None):
+    WorkerReport.objects.create(lease_id=data["lease_id"], attempt=attempt, generation=attempt.generation,
+        payload_sha256=payload_hash, response=response, extension_data=extension_data or {})
+    retained = list(WorkerReport.objects.filter(attempt=attempt).order_by("-generation", "lease_id")
+        .values_list("lease_id", flat=True)[:MAX_REPORT_RECEIPTS_PER_ATTEMPT])
+    WorkerReport.objects.filter(attempt=attempt).exclude(lease_id__in=retained).delete()
+
+
 def report(worker, attempt_id, data):
     _validate_report_fields(data)
     extension_data = data.get("extension_data", {})
@@ -752,6 +788,11 @@ def report(worker, attempt_id, data):
             validate_report_outcome(attempt.operation, outcome)
         except ValueError:
             raise BrokerError("INVALID_REPORT", "Result does not match the leased operation.", 409) from None
+        if attempt.operation == "cleanup":
+            from .remote_cleanup import accept_report
+            response = accept_report(attempt, data)
+            _save_report_receipt(attempt, data, payload_hash, response)
+            return response
         if outcome == "rejected" and (attempt.native_identity or data.get("native_identity") or not attempt.dispatch_started):
             raise BrokerError("INVALID_REPORT", "A known scheduler job cannot release funds as nonaccepted.", 409)
         if data.get("native_identity"):
@@ -844,14 +885,11 @@ def report(worker, attempt_id, data):
         attempt.next_poll_at = timezone.now() + timedelta(seconds=delay)
         attempt.save()
         response = {"accepted": True, "attempt": serialize_attempt(attempt)}
-        WorkerReport.objects.create(lease_id=data["lease_id"], attempt=attempt, generation=attempt.generation, payload_sha256=payload_hash, response=response, extension_data=extension_data)
         # Polling an indefinitely unknown scheduler job must not grow durable
         # metadata forever. The latest receipt includes the current generation;
         # a final settled/released generation cannot receive another lease.
         # Removed generations fail checked_lease instead of executing again.
-        retained = list(WorkerReport.objects.filter(attempt=attempt).order_by("-generation", "lease_id")
-            .values_list("lease_id", flat=True)[:MAX_REPORT_RECEIPTS_PER_ATTEMPT])
-        WorkerReport.objects.filter(attempt=attempt).exclude(lease_id__in=retained).delete()
+        _save_report_receipt(attempt, data, payload_hash, response, extension_data)
         if attempt.job.extension_name:
             def notify_extension():
                 try:
@@ -890,7 +928,10 @@ def cancel_attempt(attempt):
 def retry_collection(attempt):
     """Revisit the same finished native allocation without admitting compute."""
     with transaction.atomic():
+        Project.objects.select_for_update().get(id=attempt.job.project_id)
         attempt = Attempt.objects.select_for_update().get(id=attempt.id)
+        if attempt.remote_cleanup.get("state") in {"queued", "running", "complete"}:
+            raise BrokerError("OUTPUT_CLEANUP_REQUESTED", "Remote output cleanup was requested. Collection cannot reopen these files.", 409)
         if not attempt.native_identity or not terminal_observation(attempt.observation):
             raise BrokerError("ATTEMPT_ACTIVE", "Output recovery requires a finished native job.", 409)
         attempt.collection_pending = True

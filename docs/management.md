@@ -109,6 +109,13 @@ are displayed as untrusted text. A failed decision keeps its comment for the mat
 request. Section links reach exact files, decisions and result actions; old
 resolved attempts and raw scheduler facts/logs can be expanded as needed.
 
+**Preview file cleanup**, on project and job pages, offers separate local-file
+and remote-directory confirmations. It protects active work and shared inputs;
+save and verify any results you need before permanent deletion. Remote cleanup
+waits for the existing connector and retains submission journals and accounting.
+Managed environments stay protected. See [manual cleanup](deployment.md#manual-file-cleanup)
+for batch limits and interruption recovery.
+
 **Request cancellation** uses the same attempt and retains uncertain accounting;
 it remains available when metadata/receipt capacity is full. **Retry output
 collection** recovers the declared outputs of a finished native job without
@@ -119,10 +126,12 @@ sizes. Downloads do not acknowledge all results or validate their science. Use
 the initialized workspace's helper guide for repeatable verified export.
 
 The allowance display uses CPU core-hours and GPU device-hours, with exact
-seconds available. Local storage and retained-record headroom are separate from
-lifetime executions. Completed jobs continue consuming retained records; raising
-the lifetime limit does not enlarge metadata or file capacity. Physical artifact
-cleanup is still a roadmap item.
+seconds available. Local storage, logical metadata, outstanding work and burst
+headroom are separate from lifetime executions. Completed jobs release their
+outstanding slots after accounting and collection close out, while retained
+metadata and files keep their own charges. Raising the lifetime limit does not
+enlarge those capacities. Manual file cleanup is available above; automatic
+retention remains on the roadmap.
 
 Visible dashboard/project/cluster/review status sections refresh from saved
 broker data. Editing a comment or setting is preserved. Discovery and cluster

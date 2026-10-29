@@ -192,11 +192,13 @@ def build_attempt_diagnostics(attempt):
     accounting_state = raw_accounting if isinstance(raw_accounting, str) and raw_accounting in _ACCOUNTING else "unknown"
     notices = []
     collection_state = getattr(attempt, "collection_state", None)
-    if collection_state not in {"pending", "complete", "retry_pending", "failed"}:
+    if collection_state not in {"pending", "complete", "retry_pending", "failed", "cleaned"}:
         collection_state = "unknown"
     log_state = getattr(attempt, "log_state", {})
     log_updates = [value["updated_at"] for value in log_state.values()
         if isinstance(value, dict) and isinstance(value.get("updated_at"), str)] if isinstance(log_state, dict) else []
+    if collection_state == "cleaned":
+        notices.append("Retained output files were manually cleaned up. Compute outcome and accounting remain recorded.")
     if collection_state == "retry_pending" and not connection_removed:
         notices.append("Output collection will retry automatically. Compute will not run again.")
     elif collection_state == "retry_pending":

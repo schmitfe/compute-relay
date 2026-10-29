@@ -44,8 +44,8 @@ class ProjectForm(forms.Form):
     max_gpus = forms.IntegerField(min_value=0, max_value=16, initial=0, label="Maximum GPUs per job")
     memory_mib = forms.IntegerField(min_value=128, max_value=16777216, initial=1024, label="Maximum memory per job (MiB)")
     wall_minutes = forms.IntegerField(min_value=1, max_value=10080, initial=10, label="Maximum scheduler time per job (minutes)")
-    max_active_jobs = forms.IntegerField(min_value=1, max_value=1000, initial=2, label="Concurrent jobs",
-        help_text="Up to 1,000 active jobs per project; cluster scheduling and account limits still apply. This is separate from the connector's bounded SSH command concurrency.")
+    max_active_jobs = forms.IntegerField(min_value=1, max_value=1000, initial=2, label="Concurrent executions",
+        help_text="Authorized, queued and running executions count. Drafts and waiting reviews have a separate outstanding-work limit; creation and execution requests also have burst rate limits. Cluster and account limits still apply.")
     max_total_jobs = forms.IntegerField(required=False, min_value=0, max_value=1000000, initial=1000,
         label="Lifetime execution limit", help_text="Lifetime execution authorizations across every API key. Failures and cancellations still count. Zero blocks new executions.")
     expires_at = LocalDateTime(label="New execution allowed until (Europe/Berlin)")

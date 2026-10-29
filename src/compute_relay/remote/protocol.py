@@ -5,7 +5,7 @@ import json
 
 JOB_PROTOCOL = "slurm-jobs/v1"
 STATUS_BATCH_SIZE = 32
-MANAGEMENT_OPERATIONS = frozenset({"observe", "cancel", "reconcile", "logs", "output_manifest", "output_chunk"})
+MANAGEMENT_OPERATIONS = frozenset({"observe", "cancel", "reconcile", "logs", "output_manifest", "output_chunk", "cleanup"})
 JOB_OPERATIONS = MANAGEMENT_OPERATIONS | {"submit", "stage_input"}
 
 

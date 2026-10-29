@@ -53,6 +53,12 @@ acceptance. See [completion and its consistency limits](investigations.md).
 
 ## Output recovery without another compute run
 
+Human owners can explicitly reclaim eligible results through
+[manual job/project cleanup](deployment.md#manual-file-cleanup). Intentional
+local deletion is recorded as `collection_state: cleaned`; it is distinct from
+failed or missing collection. Remote cleanup is separately confirmed and
+preserves submission journals. Agent credentials do not authorize deletion.
+
 Execution state, accounting and `collection_state` are separate. A successful
 native job can have `collection_state=retry_pending` or `failed`. Each worker
 shares one asynchronous lock across output-write requests so its collectors do

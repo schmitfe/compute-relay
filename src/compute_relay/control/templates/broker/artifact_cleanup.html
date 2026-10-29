@@ -1,0 +1,28 @@
+{% extends "broker/base.html" %}{% block title %}File cleanup · {{ project.name }}{% endblock %}{% block content %}
+{% include "broker/project_navigation.html" with current_page="File cleanup" %}
+{% if job %}<p><a href="/review/{{ job.id }}/">Back to {{ job.name }}</a></p>{% endif %}
+<h1>File cleanup{% if job %} · {{ job.name }}{% endif %}</h1>
+<p>Remove local result files you no longer need{% if not job %} and unused internal files older than one day{% endif %}. Download and verify results you want to keep first. Deletion cannot be undone.</p>
+<p>Active or uncertain executions, unfinished accounting, pending or failed collection, uploads, shared inputs and results referenced by jobs or optional modules are protected. Job identities, prepared packages, logs and accounting stay recorded.</p>
+<p>Local file deletion and remote directory cleanup are separate actions. Managed environments and directories retained by optional modules are protected.</p>
+{% if completed %}<p class="notice" role="status">Cleanup finished. The preview below reflects the remaining files.</p>{% endif %}
+<section><h2>Local file cleanup</h2>
+<p><strong>{{ cleanup.rows|length }} object{{ cleanup.rows|length|pluralize }}</strong> · <strong>{{ cleanup.bytes|filesizeformat }}</strong> on disk · {{ cleanup.accounted_bytes|filesizeformat }} of recorded storage usage.</p>
+{% if cleanup.more %}<p class="notice">This preview is limited to 100 objects. Repeat after this batch to review the next files.</p>{% endif %}
+{% if cleanup.rows %}<div class="table-scroll"><table><thead><tr><th>File / object</th><th>Size on disk</th><th>Status</th></tr></thead><tbody>
+{% for object in cleanup.rows %}<tr><td>{% for artifact_id, attempt_id, path in object.outputs %}<code>{{ path }}</code><br>{% empty %}{% if object.pending %}Previously approved deletion{% else %}Unused internal object{% endif %}<br>{% endfor %}<small>SHA-256 {{ object.sha256 }}</small></td><td>{{ object.disk_bytes|filesizeformat }}</td><td>{% if object.pending %}Resume interrupted deletion{% else %}Ready for deletion{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+<form method="post">{% csrf_token %}<input type="hidden" name="cleanup_scope" value="local"><input type="hidden" name="preview_token" value="{{ preview_token }}"><p><label><input type="checkbox" name="confirm" value="delete" required> I have saved the files I need and want to permanently delete this batch.</label></p><button class="reject">Delete previewed local files</button></form>
+<p class="helptext">Confirmation expires after ten minutes. Changes to files or their references require a fresh preview. Interrupted deletion can be resumed here.</p>
+{% else %}<p>No local files can currently be reclaimed safely. Protected files are kept.</p>{% endif %}</section>
+<section><h2>Remote attempt directories</h2>
+<p>Queue cleanup through the cluster's existing connector. The worker verifies the exact finished scheduler allocation and its owned directory before deleting files. Local result copies, submission journals and accounting stay recorded.</p>
+<p>Remote byte counts are established by the worker during cleanup. No SSH connection or remote directory scan runs in this page. Cleanup may wait for the connector to reconnect; <a href="">refresh this preview</a> to check its saved status.</p>
+{% if remote_queued %}<p class="notice" role="status">The remote cleanup request was processed. Current saved statuses appear below.</p>{% endif %}
+{% if remote_cleanup.more %}<p class="notice">This preview covers the first 100 attempts. A job's own cleanup page can show its attempts directly.</p>{% endif %}
+{% if remote_cleanup.rows %}<div class="table-scroll"><table><thead><tr><th>Job / attempt</th><th>Cleanup status</th><th>Action</th></tr></thead><tbody>
+{% for attempt in remote_cleanup.rows %}<tr><td>{{ attempt.job }}<br><small>{{ attempt.id }}</small></td><td>{{ attempt.state }}</td><td>{% if attempt.eligible %}Ready for cleanup{% else %}{{ attempt.reason }}{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% if remote_cleanup.eligible_count %}<form method="post">{% csrf_token %}<input type="hidden" name="cleanup_scope" value="remote"><input type="hidden" name="preview_token" value="{{ remote_token }}"><p><label><input type="checkbox" name="confirm" value="delete" required> Permanently remove the {{ remote_cleanup.eligible_count }} eligible remote attempt director{{ remote_cleanup.eligible_count|pluralize:"y,ies" }} shown above.</label></p><button class="reject">Queue previewed remote cleanup</button></form><p class="helptext">Confirmation expires after ten minutes. The worker rechecks safety before deletion. Removed remote files can no longer be recovered through output collection.</p>{% endif %}
+{% else %}<p>No remote attempt directories currently need cleanup.</p>{% endif %}</section>
+{% endblock %}

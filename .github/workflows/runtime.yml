@@ -64,7 +64,7 @@ jobs:
       - name: Exercise reviewed and budgeted synthetic jobs
         run: |
           uv run --locked --extra test python tools/local_smoke.py
-          uv run --locked --extra test python tools/local_smoke.py --mode budgeted
+          uv run --locked --extra test python tools/local_smoke.py --mode budgeted --mcp-jobs 100
       - name: Check all bundled migrations
         run: BROKER_EXTENSIONS=storage,environments,workflows,investigations uv run --locked --extra test python -m django makemigrations --check --dry-run --settings=compute_relay.control.settings
       - name: Build and verify a clean installed wheel

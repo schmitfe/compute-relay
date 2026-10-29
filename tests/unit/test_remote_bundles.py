@@ -29,7 +29,7 @@ def digest(value):
 
 def test_fixed_bundles_are_deterministic_stdlib_programs_with_complete_sources():
     expected = {
-        "jobs": {"prelude.py", "filesystem.py", "scheduler.py", "protocol.py", "jobs.py", "collection.py", "status.py", "job_dispatch.py", "entrypoint.py"},
+        "jobs": {"prelude.py", "filesystem.py", "scheduler.py", "protocol.py", "jobs.py", "collection.py", "status.py", "cleanup.py", "job_dispatch.py", "entrypoint.py"},
         "discovery": {"prelude.py", "filesystem.py", "scheduler.py", "discovery_config.py", "probes.py", "module_catalog.py", "software.py", "discovery.py", "entrypoint.py"},
     }
     expected["availability"] = {"prelude.py", "filesystem.py", "scheduler.py", "availability.py", "entrypoint.py"}

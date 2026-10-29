@@ -11,12 +11,14 @@ from . import live_updates
 from . import object_lookup
 from . import local_connectors
 from . import transfers
-from . import recovery, availability, completion
+from . import recovery, availability, completion, artifact_cleanup
 
 urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
     path("", views.dashboard), path("login/", views.signin), path("logout/", views.signout),
     path("review/<uuid:job_id>/", views.review),
+    path("review/<uuid:job_id>/cleanup/", artifact_cleanup.portal),
+    path("projects/<uuid:project_id>/cleanup/", artifact_cleanup.portal),
     path("review/<uuid:job_id>/attempts/<uuid:attempt_id>/<str:action>/", views.human_attempt_action),
     path("review/<uuid:job_id>/results/<uuid:artifact_id>/", views.human_artifact),
     path("ui/live/dashboard/", live_updates.snapshot, {"kind": "dashboard"}),

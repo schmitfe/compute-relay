@@ -15,7 +15,7 @@ from uuid import UUID
 from compute_relay.transfer import FileReference, INLINE_BYTES, MAX_FILE_BYTES
 
 
-Operation = Literal["submit", "reconcile", "observe", "cancel"]
+Operation = Literal["submit", "reconcile", "observe", "cancel", "cleanup"]
 
 
 class CancellationStatus(StrEnum):
@@ -30,6 +30,7 @@ REPORT_OUTCOMES = {
     "reconcile": frozenset({"submitted", "submission_uncertain", "rejected"}),
     "observe": frozenset({"observed"}),
     "cancel": frozenset({"cancel_requested", "cancel_unknown", "cancel_identity_mismatch", "observed"}),
+    "cleanup": frozenset({"cleaned", "cleanup_failed"}),
 }
 TERMINAL_OBSERVATION_STATES = frozenset({"completed", "succeeded", "failed", "cancelled", "expired"})
 

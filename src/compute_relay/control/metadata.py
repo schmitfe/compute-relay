@@ -16,7 +16,6 @@ from .models import AuditEvent, IdempotencyRecord, MetadataPool, MetadataUsage, 
 
 
 RECORD_LIMITS = {
-    "job": ("MAX_PROJECT_DRAFT_JOBS", 1000, "MAX_INSTALLATION_DRAFT_JOBS", 10000),
     "idempotency": ("MAX_PROJECT_IDEMPOTENCY_KEYS", 10000, "MAX_INSTALLATION_IDEMPOTENCY_KEYS", 100000),
     "definition": ("MAX_PROJECT_DEFINITIONS", 1000, "MAX_INSTALLATION_DEFINITIONS", 10000),
     "retired_job": ("MAX_PROJECT_RETIRED_JOBS", 10000, "MAX_INSTALLATION_RETIRED_JOBS", 100000),
@@ -48,19 +47,29 @@ def reserve_metadata(project, kind, object_id, size_bytes):
         project_rows = MetadataUsage.objects.filter(project=project)
         project_size = project_rows.aggregate(total=Sum("size_bytes"))["total"] or 0
         total = MetadataUsage.objects.aggregate(total=Sum("size_bytes"))["total"] or 0
-        names = RECORD_LIMITS.get(kind, RECORD_LIMITS["definition"])
-        # Every extension definition/run shares a cap, regardless of its subtype.
-        group = ["job"] if kind == "job" else ["idempotency"] if kind == "idempotency" else ["retired_job"] if kind == "retired_job" else None
-        group_rows = MetadataUsage.objects.filter(kind__in=group) if group else MetadataUsage.objects.exclude(kind__in=["job", "idempotency", "retired_job"])
-        if kind == "idempotency":
-            # Retained tombstones still prevent replay and consume byte quota,
-            # but response compaction frees active key slots for future work.
-            group_rows = IdempotencyRecord.objects.filter(compacted=False)
-        if ((current is None and (group_rows.filter(project=project).count() >= _limit(names[0], names[1])
-                    or group_rows.count() >= _limit(names[2], names[3])))
-                or project_size - prior + size_bytes > _limit("PROJECT_METADATA_LIMIT", 32 * 1024 * 1024)
-                or total - prior + size_bytes > _limit("GLOBAL_METADATA_LIMIT", 256 * 1024 * 1024)):
-            raise BrokerError("METADATA_QUOTA", "Project or installation metadata capacity is exhausted.", 409)
+        # Retained jobs use byte capacity; unfinished work has a separate admission bound.
+        if kind != "job" and current is None:
+            names = RECORD_LIMITS.get(kind, RECORD_LIMITS["definition"])
+            group_rows = (MetadataUsage.objects.filter(kind=kind) if kind in {"idempotency", "retired_job"}
+                else MetadataUsage.objects.exclude(kind__in=["job", "idempotency", "retired_job"]))
+            if kind == "idempotency":
+                # Compaction frees response slots while durable replay identities keep their byte charge.
+                group_rows = IdempotencyRecord.objects.filter(compacted=False)
+            for scope, rows, name, default in [("project", group_rows.filter(project=project), *names[:2]),
+                                                ("installation", group_rows, *names[2:])]:
+                used, limit = rows.count(), _limit(name, default)
+                if used >= limit:
+                    raise BrokerError("METADATA_QUOTA", f"The {scope} {kind} record limit is exhausted "
+                        f"({used} of {limit}). Compact unused records before adding more.", 409,
+                        {"scope": scope, "resource": kind + "_records", "used": used, "limit": limit, "remaining": 0})
+        for scope, used, name, default in [("project", project_size, "PROJECT_METADATA_LIMIT", 32 * 1024**2),
+                                            ("installation", total, "GLOBAL_METADATA_LIMIT", 256 * 1024**2)]:
+            limit = _limit(name, default)
+            if used - prior + size_bytes > limit:
+                raise BrokerError("METADATA_QUOTA", f"The {scope} logical metadata limit is exhausted "
+                    f"({used} of {limit} bytes). Compact unused records before adding more.", 409,
+                    {"scope": scope, "resource": "metadata_bytes", "used": used, "limit": limit,
+                     "remaining": max(0, limit - used), "requested": size_bytes - prior})
         MetadataUsage.objects.update_or_create(project=project, kind=kind, object_id=str(object_id),
                                               defaults={"size_bytes": size_bytes})
 
@@ -108,7 +117,7 @@ def capacity_rows(project):
     from .storage import MAX_PENDING_UPLOADS
     current = Project.objects.get(id=project.id)
     pool = StoragePool.objects.filter(id=1).first()
-    kinds = {"job": Q(kind="job"), "retired_job": Q(kind="retired_job"),
+    kinds = {"retired_job": Q(kind="retired_job"),
              "definition": ~Q(kind__in=["job", "idempotency", "retired_job"])}
     metadata = MetadataUsage.objects.aggregate(
         global_bytes=Sum("size_bytes"), project_bytes=Sum("size_bytes", filter=Q(project=project)),
@@ -133,11 +142,23 @@ def capacity_rows(project):
     row("Incomplete transfers", pending, MAX_PENDING_UPLOADS)
     row("Logical metadata", metadata["project_bytes"] or 0, _limit("PROJECT_METADATA_LIMIT", 32 * 1024**2),
         metadata["global_bytes"] or 0, _limit("GLOBAL_METADATA_LIMIT", 256 * 1024**2), bytes=True)
-    for kind, label in [("job", "Retained job records"), ("idempotency", "Active retry receipts"),
+    for kind, label in [("idempotency", "Active retry receipts"),
                         ("definition", "Module definitions and runs"), ("retired_job", "Archived job identities")]:
         names = RECORD_LIMITS[kind]
         row(label, metadata["project_" + kind], _limit(names[0], names[1]),
             metadata["global_" + kind], _limit(names[2], names[3]))
+    from .admission import admission_snapshot
+    admission = admission_snapshot(project)
+    work = admission["outstanding"]
+    row("Outstanding jobs", work["project"]["used"], work["project"]["limit"],
+        work["installation"]["used"], work["installation"]["limit"])
+    for operation, label in [("create", "Job creation burst"), ("execute", "Execution request burst")]:
+        capacity = admission["rates"][operation]
+        project_rate, global_rate = capacity["project"], capacity["installation"]
+        row(label, project_rate["limit"] - project_rate["remaining"], project_rate["limit"],
+            global_rate["limit"] - global_rate["remaining"], global_rate["limit"])
+        rows[-1].update(retry_after_seconds=max(project_rate["retry_after_seconds"], global_rate["retry_after_seconds"]),
+            project_per_minute=project_rate["per_minute"], global_per_minute=global_rate["per_minute"])
     return rows
 
 

@@ -61,6 +61,15 @@ def compact_allowance(payload):
     if isinstance(payload.get("jobs"), dict):
         result["jobs"] = _fields(payload["jobs"],
             ("limit", "admitted", "remaining", "active", "active_limit", "awaiting_approval"))
+    if isinstance(payload.get("admission"), dict):
+        admission = payload["admission"]
+        result["admission"] = {"outstanding": {
+            scope: _fields(_object(admission.get("outstanding")).get(scope), ("used", "limit", "remaining"))
+            for scope in ("project", "installation")}, "rates": {
+                operation: {scope: _fields(_object(_object(admission.get("rates")).get(operation)).get(scope),
+                    ("limit", "per_minute", "remaining", "retry_after_seconds"))
+                    for scope in ("project", "installation")}
+                for operation in ("create", "execute")}}
     return deepcopy(result)
 
 
