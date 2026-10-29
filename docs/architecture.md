@@ -163,6 +163,13 @@ Slurm does not supply a broker-wide exactly-once submit transaction. Persist a s
 
 Use integer allocated resource-seconds: `cpu_core_seconds` and `gpu_device_seconds`. Requested utilization, process CPU time, GPU busy percentage and billing TRES are different quantities. Requested Slurm limits are whole-minute multiples in version one. Reserve effective allocated resources multiplied by requested walltime: 8 cores and 1 GPU for 3,600 seconds reserve 28,800 core-seconds and 3,600 GPU-seconds. No termination, overtime or cleanup interval is added. Requested walltime is the sole reservation duration; no separate charge-duration field is retained. Settlement charges actual Slurm-reported elapsed allocated resources in full, even when usage exceeds the reservation; debt blocks new admissions. This reservation model does not promise a physical upper bound on site usage. Separate GPU-type buckets or explicit weights are later features; initially each grant has an allowed GPU-type set so dissimilar devices are not silently treated as equivalent. [Slurm time-limit behavior](https://slurm.schedmd.com/sbatch.html)
 
+Selecting all discovered GPU types can explicitly permit scheduler-chosen GPU
+hardware. The project stores this intent separately from its selected type set;
+generic requests require current complete partition discovery to remain covered
+at admission and dispatch. An empty selection denies GPU use. A partial
+selection cannot become generic merely because discovery later shrinks.
+See [GPU request permissions](api.md) and [Slurm GRES requests](https://slurm.schedmd.com/gres.html).
+
 The admission invariant for each resource dimension is:
 
 ```text

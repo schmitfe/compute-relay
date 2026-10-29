@@ -141,9 +141,9 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         duration = positive_int(resources["time_limit_seconds"], "walltime", minimum=60, maximum=604800)
         if duration % 60:
             raise BackendError("Walltime must be a whole number of minutes")
-        if gpus:
+        if gpus and "gpu_type" in resources:
             _name(resources["gpu_type"])
-        elif "gpu_type" in resources:
+        elif not gpus and "gpu_type" in resources:
             raise BackendError("A zero-GPU request cannot select a GPU type")
         profile = connection.get("site_profile", {})
         if connection.get("backend") == "fake":
@@ -227,7 +227,8 @@ def prepare(request: dict, environment: dict, connection: dict, job_revision_id:
         for key, value in slurm.items():
             lines.append(f"#SBATCH --{key}={value}")
         if gpus:
-            lines.append(f"#SBATCH --gres=gpu:{resources['gpu_type']}:{gpus}")
+            gpu_type = resources.get("gpu_type")
+            lines.append(f"#SBATCH --gres=gpu:{gpu_type + ':' if gpu_type else ''}{gpus}")
         lines += ["", "# The helper sets cwd to this immutable attempt's staged directory.",
                   "# It adds only --comment=broker-attempt:<attempt UUID> for reconciliation.",
                   "set -euo pipefail"]

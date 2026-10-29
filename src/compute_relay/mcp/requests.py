@@ -39,8 +39,8 @@ def client_job_schema():
     descriptions = {
         "nodes": "Number of nodes; exactly 1 is supported.",
         "cpus": "Requested CPU cores. Account for both process workers and numerical-library threads.",
-        "gpus": "Requested GPU devices; 0 for a CPU job. A positive count requires gpu_type.",
-        "gpu_type": "Site GPU type from get_project_context. Required when gpus > 0; omit when gpus = 0. This selects hardware, not a VRAM reservation.",
+        "gpus": "Requested GPU devices; 0 for a CPU job. A positive count may omit gpu_type only on this connection's untyped_gpu_partitions in get_project_context.",
+        "gpu_type": "Allowed site GPU type from get_project_context. May be omitted on untyped_gpu_partitions; omit when gpus = 0. This selects hardware, not a VRAM reservation.",
         "memory_mib": "Total host RAM for the allocation, in MiB (1 MiB = 1048576 bytes). This does not request GPU VRAM.",
         "time_limit_seconds": "Requested walltime in seconds, in whole minutes (multiple of 60). This determines the maximum compute reservation.",
     }
@@ -50,6 +50,7 @@ def client_job_schema():
     resources["examples"] = [
         {"nodes": 1, "cpus": 2, "gpus": 0, "memory_mib": 1024, "time_limit_seconds": 60},
         {"nodes": 1, "cpus": 4, "gpus": 1, "gpu_type": "a100", "memory_mib": 8192, "time_limit_seconds": 600},
+        {"nodes": 1, "cpus": 4, "gpus": 1, "memory_mib": 8192, "time_limit_seconds": 600},
     ]
     return schema
 

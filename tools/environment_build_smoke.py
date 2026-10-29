@@ -96,7 +96,7 @@ def run(base_url, demo_file, timeout, *, platform_tag="linux-x86_64", python_maj
         "cpu_hours": "2", "gpu_hours": "0", "max_cpus": "1", "max_gpus": "0", "memory_mib": "512",
         "wall_minutes": "1", "charge_minutes": "2", "max_active_jobs": "2", "max_total_jobs": "2",
         "expires_at": expiry, "connections": [demo["connection_id"]], "environments": [demo["environment_id"]],
-        "allowed_gpu_types": ""}
+        "allowed_gpu_types": []}
     human.request("POST", "/projects/new/", project_fields, form=True, binary=True)
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
     require(match is not None, "Disposable environment project creation failed")

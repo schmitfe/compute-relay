@@ -201,15 +201,15 @@ def test_cluster_automatic_execution_is_explicit_opt_in_and_can_be_unchecked(sna
 
 @pytest.mark.parametrize("field, value", [("maximum_cpus", 0), ("maximum_cpus", 1025),
     ("maximum_gpus", -1), ("maximum_gpus", 17), ("maximum_memory_mib", 127),
-    ("maximum_memory_mib", 16777217), ("maximum_time_limit_seconds", 61),
-    ("maximum_time_limit_seconds", 604860), ("maximum_cpus", "")])
+    ("maximum_memory_mib", 16777217), ("maximum_wall_minutes", "1.5"),
+    ("maximum_wall_minutes", 10081), ("maximum_wall_minutes", 0), ("maximum_cpus", "")])
 def test_final_owner_edits_require_supported_finite_limits(field, value):
     form = ClusterConfigurationForm(form_data(**{field: value}), snapshot={})
     assert not form.is_valid()
 
 
 @pytest.mark.parametrize("field, value", [("maximum_cpus", 129), ("maximum_gpus", 9),
-    ("maximum_memory_mib", 512001), ("maximum_time_limit_seconds", 172860)])
+    ("maximum_memory_mib", 512001), ("maximum_wall_minutes", 2881)])
 def test_owner_edits_cannot_exceed_known_selected_partition_ceiling(snapshot, field, value):
     form = ClusterConfigurationForm(form_data(**{field: value}), snapshot=snapshot)
     assert not form.is_valid() and field in form.errors
@@ -242,6 +242,16 @@ def test_cluster_configuration_accepts_resources_without_separate_timing_fields(
     form = ClusterConfigurationForm(form_data(), snapshot=snapshot)
     assert form.is_valid(), form.errors
     assert not any("margin_seconds" in field for field in form.site_profile())
+
+
+@pytest.mark.parametrize("minutes", [1, 10, 10080])
+def test_cluster_form_converts_whole_minutes_to_exact_seconds(minutes):
+    form = ClusterConfigurationForm(form_data(maximum_wall_minutes=minutes), snapshot={})
+    assert form.is_valid(), form.errors
+    profile = form.site_profile()
+    assert profile["maximum_time_limit_seconds"] == minutes * 60
+    assert "maximum_wall_minutes" not in profile
+    assert ClusterConfigurationForm(snapshot={}, current_profile=profile).initial["maximum_wall_minutes"] == minutes
 
 
 

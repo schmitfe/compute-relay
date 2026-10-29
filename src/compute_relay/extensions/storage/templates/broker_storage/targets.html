@@ -1,4 +1,4 @@
-{% extends "broker/base.html" %}{% block content %}
+{% extends "broker/base.html" %}{% block title %}Project storage{% endblock %}{% block content %}
 <p><a href="/">Projects</a> / Storage</p><h1>Project storage</h1>
 <p>Choose a project to manage its input data, work, environment, result and scratch locations. Each location belongs to one project and one cluster; budgets and default choices are configured on that project's Storage page.</p>
 <section><h2>Your managed projects</h2><ul>{% for row in projects %}<li><a href="/projects/{{ row.project.id }}/storage/"><strong>{{ row.project.name }}</strong></a> · {{ row.target_count }} location{{ row.target_count|pluralize }}</li>{% empty %}<li>No projects are available for storage administration. Open a project you own or ask its owner for the project-admin role.</li>{% endfor %}</ul></section>

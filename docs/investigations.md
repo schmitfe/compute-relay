@@ -126,6 +126,9 @@ for tool-only clients. Tool descriptions focus on their own operation. Resource
 fields expose primitive types, constraints, units and CPU/GPU examples without
 the conditional intersection that some clients render as `unknown & unknown`.
 Canonical validation still enforces GPU type/count consistency before mutation.
+Generic GPU requests are allowed only on the connection's advertised
+`untyped_gpu_partitions`; the broker rechecks project permission at admission
+and dispatch.
 Host `memory_mib` requests RAM; GPU VRAM depends on the selected hardware.
 
 ## Verification

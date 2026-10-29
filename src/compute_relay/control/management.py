@@ -2,6 +2,7 @@
 
 import functools
 import json
+import shlex
 from decimal import Decimal, ROUND_CEILING
 from datetime import datetime
 from uuid import UUID
@@ -116,7 +117,8 @@ def project_policy(project, data, revision):
     return {"schema_version": "1.0", "project_id": str(project.id), "revision": revision, "mode": data["mode"],
             "allowed_connection_ids": sorted(str(c.id) for c in data["connections"]),
             "allowed_environment_revision_sha256": sorted(set(e.revision_sha256 for e in data["environments"])),
-            "allowed_gpu_types": data["gpu_types"], "max_active_jobs": data["max_active_jobs"], "max_total_jobs": data.get("max_total_jobs", 1000),
+            "allowed_gpu_types": data["gpu_types"], "allow_untyped_gpus": data["allow_untyped_gpus"],
+            "max_active_jobs": data["max_active_jobs"], "max_total_jobs": data.get("max_total_jobs", 1000),
             "per_job_limits": {"cpu_cores": data["max_cpus"], "gpu_devices": data["max_gpus"], "memory_mib": data["memory_mib"],
                                "time_limit_seconds": data["wall_minutes"] * 60},
             "allowance": {"cpu_core_seconds": data["cpu_seconds"], "gpu_device_seconds": data["gpu_seconds"]},
@@ -161,7 +163,7 @@ def project_initial(project):
             "max_active_jobs": policy["max_active_jobs"], "max_total_jobs": policy.get("max_total_jobs", 1000),
             "expires_at": datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")),
             "connections": project.connections.all(), "environments": project.environments.all(),
-            "allowed_gpu_types": ", ".join(policy["allowed_gpu_types"]), "paused": project.paused}
+            "allowed_gpu_types": list(policy["allowed_gpu_types"]), "paused": project.paused}
 
 
 @human_view
@@ -182,7 +184,7 @@ def project_detail(request, project_id):
     if request.method == "POST" and form.is_valid():
         try:
             save_project(request.user, form.cleaned_data, project)
-            return redirect(f"/projects/{project.id}/")
+            return redirect(f"/projects/{project.id}/#project-settings")
         except BrokerError as exc:
             error = exc.message
     from uuid import uuid4
@@ -194,9 +196,10 @@ def project_detail(request, project_id):
         "approval": approval_requirements(policy, "inherit", connection.configuration)}
         for connection in project.connections.filter(owner=request.user, enabled=True, archived=False,
             setup_complete=True, worker__revoked=False, id__in=policy["allowed_connection_ids"]).order_by("name", "id")]
+    from .portal_jobs import job_list_context
     return render(request, "broker/project_detail.html", {"project": project, "form": form, "error": error,
         "keys": project.projectcredential_set.order_by("-created_at"), "allowance": services.allowance(project),
-        "jobs": Job.objects.with_summary().filter(project=project).order_by("-created_at", "-id")[:100],
+        **job_list_context(request, [project]),
         "resource_targets": resource_targets, "rotation_nonce": str(uuid4())})
 
 
@@ -207,7 +210,8 @@ def key_new(request, project_id):
     form = KeyForm(request.POST if request.method == "POST" else None, project=project)
     if request.method == "POST" and form.is_valid():
         credential, secret = issue_key(project, request.user, form.cleaned_data)
-        return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project}, status=201)
+        return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project,
+            "init_command": "compute-relay init-mcp --broker-url " + shlex.quote(request.build_absolute_uri("/").rstrip("/"))}, status=201)
     return render(request, "broker/key_form.html", {"form": form, "project": project, "creating": True})
 
 
@@ -219,7 +223,8 @@ def key_rotate(request, project_id, key_id):
     human_permission(request.user, project, "viewer")
     credential = get_object_or_404(ProjectCredential, id=key_id, project=project)
     credential, secret = rotate_key(project, credential, request.user, request.POST.get("submission_id"))
-    return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project, "rotated": True}, status=201)
+    return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project, "rotated": True,
+        "init_command": "compute-relay init-mcp --broker-url " + shlex.quote(request.build_absolute_uri("/").rstrip("/"))}, status=201)
 
 
 @human_view
@@ -233,7 +238,7 @@ def key_revoke(request, project_id, key_id):
         credential.revoked = True
         credential.save(update_fields=["revoked"])
         services.audit(project, request.user.id, "credential.revoked", credential.id)
-    return redirect(f"/projects/{project.id}/")
+    return redirect(f"/projects/{project.id}/#api-keys")
 
 
 @human_view
@@ -258,7 +263,7 @@ def key_edit(request, project_id, key_id):
                 setattr(credential, key, data["expires_at"] if key == "expires_at" else value)
             credential.save(update_fields=["name", "expires_at", "scopes", "allowed_connection_ids", "execution_mode"])
             services.audit(project, request.user.id, "credential.permissions_updated", credential.id)
-        return redirect(f"/projects/{project.id}/")
+        return redirect(f"/projects/{project.id}/#api-keys")
     return render(request, "broker/key_form.html", {"form": form, "project": project, "credential": credential})
 
 
@@ -332,15 +337,18 @@ def cluster_toggle(request, connection_id):
 
 @human_view
 def environments(request, connection_id):
+    from .connector_setup import personal
     if request.method != "GET":
         return HttpResponseNotAllowed(["GET"])
     connection = get_object_or_404(owned_connections(request.user), id=connection_id)
     recipes = owned_environments(request.user).filter(connection=connection).order_by("name", "id")
-    return render(request, "broker/environments.html", {"cluster": connection, "selected_cluster": connection, "environments": recipes})
+    return render(request, "broker/environments.html", {"cluster": connection, "selected_cluster": connection, "environments": recipes,
+        "personal_configuration": connection.owner_id == request.user.id and personal(connection)})
 
 
 @human_view
 def environment_new(request, connection_id):
+    from .connector_setup import personal
     connection = get_object_or_404(owned_connections(request.user), id=connection_id)
     initial = {"connection": str(connection.id), "kind": request.GET.get("kind", "system"),
                "interpreter": request.GET.get("interpreter", "/usr/bin/python3"), "prefix": request.GET.get("prefix", "")}
@@ -430,6 +438,7 @@ def environment_new(request, connection_id):
             services.audit(None, request.user.id, "environment.created", environment.id)
             return redirect(f"/clusters/{connection.id}/environments/")
     return render(request, "broker/environment_form.html", {"form": form, "cluster": connection, "selected_cluster": connection,
+        "personal_configuration": connection.owner_id == request.user.id and personal(connection),
         "task": task, "observation": observation,
         "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
         "inspection_ready": "personal_environments_v1" in connection.worker.connector_features})

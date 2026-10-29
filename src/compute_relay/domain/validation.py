@@ -97,8 +97,8 @@ def validate(schema_name, document):
         allocation, requested = document["maximum_allocation"], request["resources"]
         if allocation["cpu_cores"] < requested["cpus"] or allocation["gpu_devices"] < requested["gpus"]:
             raise ValueError("Allocation envelope is below requested resources")
-        if allocation["gpu_devices"] and not requested.get("gpu_type"):
-            raise ValueError("GPU allocation requires an explicit GPU type")
+        if allocation["gpu_devices"] and not requested["gpus"]:
+            raise ValueError("GPU allocation requires a positive GPU request")
         if allocation["time_limit_seconds"] != requested["time_limit_seconds"]:
             raise ValueError("Walltime changed after request preparation")
         duration = requested["time_limit_seconds"]

@@ -55,4 +55,5 @@ def reply(context, task, **changes):
 def configuration_fields(context, **changes):
     result = {key: ", ".join(value) if isinstance(value, list) else value for key, value in context.site.items()
         if key != "automatic_execution_allowed"}
+    result["maximum_wall_minutes"] = result.pop("maximum_time_limit_seconds") // 60
     return {**result, "remote_root": "/scratch/researcher/jobs", "connection_revision": context.connection.revision_sha256, **changes}

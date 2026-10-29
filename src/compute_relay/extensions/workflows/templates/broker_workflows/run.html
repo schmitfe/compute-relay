@@ -1,5 +1,5 @@
-{% extends "broker/base.html" %}{% block content %}
-<p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / <a href="/projects/{{ project.id }}/workflows/">Workflows</a></p>
+{% extends "broker/base.html" %}{% block title %}{{ run.revision.name }}{% endblock %}{% block content %}
+{% include "broker/project_navigation.html" with current_page=run.revision.name parent_section="workflows" parent_label="Workflows" advanced=True %}
 <h1>{{ run.revision.name }}</h1><p>Run state: <strong>{{ summary.state }}</strong></p>
 <p>Downstream inputs bind exact retained producer artifacts. Review each prepared node before approving execution when the project or key requires confirmation.</p>
 <section><div class="table-scroll"><table><thead><tr><th>Node</th><th>State</th><th>Job / review</th><th>Details</th></tr></thead><tbody>

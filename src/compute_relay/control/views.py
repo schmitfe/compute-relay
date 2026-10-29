@@ -11,9 +11,9 @@ from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.http.response import HttpResponseBase
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt, csrf_protect, ensure_csrf_cookie
 from django.views.decorators.debug import sensitive_post_parameters
 from jsonschema.exceptions import ValidationError as SchemaValidationError
@@ -238,13 +238,12 @@ def execution_requests(request, job_id):
 
 @boundary("POST")
 def cancel_execution_request(request, job_id, execution_id):
-    credential, job = scope(request, "jobs:cancel", job_id=job_id)
+    _, job = scope(request, "jobs:cancel", job_id=job_id)
     document = body(request)
     if document:
         raise BrokerError("INVALID_REQUEST", "Cancellation accepts an empty object.")
     execution = job.execution_requests.get(id=execution_id)
-    return idem(request, credential, f"{execution_id}:cancel", document,
-                lambda: services.cancel_execution_request(execution))
+    return services.cancel_execution_request(execution)
 
 
 @boundary("POST", exempt=False)
@@ -263,9 +262,11 @@ def decisions(request, job_id):
 
 @boundary("POST")
 def cancel(request, attempt_id):
-    credential, attempt = scope(request, "jobs:cancel", attempt_id=attempt_id)
+    _, attempt = scope(request, "jobs:cancel", attempt_id=attempt_id)
     document = body(request)
-    return idem(request, credential, f"{attempt_id}:cancel", document, lambda: services.cancel_attempt(attempt))
+    if document:
+        raise BrokerError("INVALID_REQUEST", "Cancellation accepts an empty object.")
+    return services.cancel_attempt(attempt)
 
 
 @boundary("GET")
@@ -433,8 +434,32 @@ def dashboard(request):
     if not current_user_active(request.user):
         return HttpResponse("The active local owner is required.", status=403)
     projects = Project.objects.filter(owner=request.user)
-    return render(request, "broker/dashboard.html", {"projects": projects,
-        "jobs": Job.objects.with_summary().filter(project__in=projects).order_by("-created_at", "-id")[:100]})
+    from .portal_jobs import job_list_context
+    return render(request, "broker/dashboard.html", {"projects": projects, **job_list_context(request, projects)})
+
+
+def human_attempt_diagnostics(job, attempts):
+    """Read saved result metadata once; polling never opens retained objects."""
+    from .job_diagnostics import build_attempt_diagnostics
+    attempts = list(attempts)
+    declared = job.request.get("outputs", [])
+    artifacts = {(artifact.attempt_id, artifact.path): artifact for artifact in
+        Artifact.objects.filter(attempt__in=attempts, path__in=declared).select_related("blob")}
+    result = []
+    for attempt in attempts:
+        outputs = [{"path": path, "artifact": artifacts.get((attempt.id, path))} for path in declared]
+        connection = attempt.connection
+        recoverable = (connection.owner_id == job.project.owner_id
+            and not connection.archived and connection.setup_complete
+            and connection.worker.owner_id == job.project.owner_id and not connection.worker.revoked)
+        result.append({**build_attempt_diagnostics(attempt), "outputs": outputs,
+            "is_resolved": attempt.state in services.TERMINAL and attempt.accounting_state in {"settled", "released"}
+                and not attempt.collection_pending and attempt.collection_state == "complete",
+            "can_cancel": attempt.state not in services.TERMINAL and not attempt.cancel_requested,
+            "cancellation_pending": attempt.cancel_requested and attempt.state not in services.TERMINAL,
+            "can_collect": bool(recoverable and attempt.native_identity and services.terminal_observation(attempt.observation)
+                and not attempt.collection_pending and (attempt.collection_state == "failed" or any(not row["artifact"] for row in outputs)))})
+    return result
 
 
 @csrf_protect
@@ -454,8 +479,7 @@ def review(request, job_id):
             try:
                 if action == "cancel":
                     execution = job.execution_requests.get(id=document["execution_request_id"])
-                    services.idempotent(job.project, f"{job_id}:cancel-review:{request.user.id}",
-                        request.POST.get("idempotency_key"), document, lambda: services.cancel_execution_request(execution))
+                    services.cancel_execution_request(execution)
                 else:
                     services.idempotent(job.project, f"{job_id}:decision:{request.user.id}", request.POST.get("idempotency_key"), document,
                                         lambda: services.decide(job, request.user, document))
@@ -463,15 +487,57 @@ def review(request, job_id):
             except BrokerError as exc:
                 error = exc.message
         import uuid
-        from .job_diagnostics import build_attempt_diagnostics
         detail = services.serialize_job(job, package=True)
+        if error:
+            for execution in detail["execution_requests"]:
+                if execution["id"] == request.POST.get("execution_request_id"):
+                    execution["draft_comment"] = request.POST.get("comment", "")[:4000]
         from .review_text import prepare_review_files
         prepare_review_files(detail["files"])
         response = render(request, "broker/review.html", {"job": job, "detail": detail, "manifest_text": json.dumps(job.manifest, indent=2),
-                                                      "attempt_diagnostics": [build_attempt_diagnostics(a) for a in job.attempts.select_related("connection").order_by("-created_at")],
+                                                      "attempt_diagnostics": human_attempt_diagnostics(job, job.attempts.select_related("connection__worker").order_by("-created_at")),
                                                       "allowance": services.allowance(job.project), "error": error, "idempotency_key": str(uuid.uuid4())})
         response["Cache-Control"] = "no-store, private"
         response["Pragma"] = "no-cache"
         return response
     except (BrokerError, ObjectDoesNotExist):
         return HttpResponse("Review is unavailable for this account.", status=403, content_type="text/plain")
+
+
+from .management import human_view
+
+
+@human_view
+def human_attempt_action(request, job_id, attempt_id, action):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    job = get_object_or_404(Job, id=job_id)
+    human_permission(request.user, job.project, "approver")
+    attempt = get_object_or_404(Attempt.objects.select_related("connection"), id=attempt_id, job=job)
+    if action not in {"cancel", "collect"}:
+        raise BrokerError("INVALID_REQUEST", "Choose cancellation or output recovery.")
+    if action == "cancel":
+        # Durable cancellation intent is already idempotent and must work at quota.
+        services.cancel_attempt(attempt)
+        return redirect(f"/review/{job.id}/")
+    from .forms import owned_connections
+    if not owned_connections(request.user).filter(id=attempt.connection_id,
+            setup_complete=True, worker__owner=request.user, worker__revoked=False).exists():
+        raise BrokerError("CONNECTION_DENIED", "This cluster is unavailable for output recovery.", 409)
+    services.retry_collection(attempt)
+    return redirect(f"/review/{job.id}/")
+
+
+@human_view
+def human_artifact(request, job_id, artifact_id):
+    if request.method != "GET":
+        return HttpResponseNotAllowed(["GET"])
+    from pathlib import PurePosixPath
+    from django.http import FileResponse
+    from .storage import open_verified_blob
+    job = get_object_or_404(Job, id=job_id)
+    human_permission(request.user, job.project, "viewer")
+    artifact = get_object_or_404(Artifact.objects.select_related("blob"), id=artifact_id, attempt__job=job,
+        path__in=job.request.get("outputs", []))
+    return FileResponse(open_verified_blob(artifact.blob), as_attachment=True,
+        filename=PurePosixPath(artifact.path).name, content_type="application/octet-stream")

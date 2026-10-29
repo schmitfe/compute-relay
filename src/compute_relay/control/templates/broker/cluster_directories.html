@@ -1,6 +1,6 @@
-{% extends "broker/base.html" %}
+{% extends "broker/base.html" %}{% block title %}Choose a working directory · {{ cluster }}{% endblock %}
 {% block content %}
-<p><a href="/clusters/{{ cluster.id }}/configuration/">← Cluster configuration</a></p>
+{% include "broker/cluster_navigation.html" with cluster_section="directories" current="Working directory" personal_configuration=True %}
 <h1>Choose a working directory on {{ cluster }}</h1>
 <p>Browse folders through your running personal connector. Only directory names and access metadata are returned. Use New folder to create a private directory before selecting it.</p>
 {% if not connector_ready %}<p class="notice">Restart your personal connector with the updated broker environment to enable directory browsing.</p>{% endif %}

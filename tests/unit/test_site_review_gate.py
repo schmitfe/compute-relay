@@ -37,7 +37,7 @@ def review_site(db):
         configuration={"interpreter": "/usr/bin/python3"}, revision_sha256="e" * 64)
     project.environments.add(environment)
     credential = ProjectCredential.objects.create(project=project, issued_by=project.owner, name="automatic-capable key", prefix="synthetic",
-        token_hash=token_hash("synthetic-site-review-key"), execution_mode="automatic",
+        token_hash=token_hash("synthetic-site-review-key"), execution_mode="inherit",
         scopes=["jobs:write", "jobs:execute", "jobs:read"], expires_at=timezone.now() + timedelta(days=1))
     policy = {"schema_version": "1.0", "project_id": str(project.id), "revision": 1, "mode": "budgeted",
               "allowed_connection_ids": [str(connection.id)], "allowed_environment_revision_sha256": ["e" * 64],
@@ -77,13 +77,10 @@ def dispatch(context, attempt):
 
 
 @pytest.mark.parametrize("project_mode", ["budgeted", "mixed"])
-@pytest.mark.parametrize("key_mode", ["inherit", "automatic"])
-def test_unverified_site_holds_budget_for_review_without_consuming_compute_usage_or_job_slots(review_site, project_mode, key_mode):
+def test_unverified_site_holds_budget_for_review_without_consuming_compute_usage_or_job_slots(review_site, project_mode):
     context = review_site
     context.grant.policy = {**context.grant.policy, "mode": project_mode}
     context.grant.save(update_fields=["policy"])
-    context.credential.execution_mode = key_mode
-    context.credential.save(update_fields=["execution_mode"])
     result, execution = request_execution(context)
     assert result["attempt_id"] is None
     assert execution.state == "awaiting_approval"

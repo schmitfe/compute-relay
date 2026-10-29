@@ -1,5 +1,6 @@
-{% extends "broker/base.html" %}
+{% extends "broker/base.html" %}{% block title %}Remove cluster{% endblock %}
 {% block content %}
+{% include "broker/cluster_navigation.html" with cluster_section="remove" current="Remove cluster" %}
 <h1>Remove {{ cluster_name }}?</h1>
 <p>This removes the cluster from your active configurations. Your recorded jobs, results and accounting history are retained.</p>
 <p>No files, software environments or jobs on the cluster will be deleted. A personal connector used only by this configuration will lose access to the service. Shared service connectors stay available.</p>
@@ -27,6 +28,6 @@
   {% else %}
   <button type="submit" name="action" value="remove">Remove cluster configuration</button>
   {% endif %}
-  <a href="/clusters/">Cancel</a>
+  <a href="{{ cancel_url }}">Cancel</a>
 </form>
 {% endblock %}

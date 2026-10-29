@@ -44,9 +44,12 @@ def _force_requested(request):
 
 
 def _confirmation(request, registration=None, connection=None):
+    from .connector_setup import personal
     _active_configuration(registration, connection)
     unfinished = _unfinished(connection)
     return render(request, "broker/cluster_remove.html", {"cluster_name": registration.name if registration else connection.name,
+        "cluster": connection, "setup": registration, "personal_configuration": bool(connection and personal(connection)),
+        "cancel_url": f"/clusters/{connection.id}/" if connection else f"/clusters/setup/{registration.id}/",
         "setup_revision": str(registration.revision) if registration else None,
         "connection_revision_sha256": connection.revision_sha256 if connection else None,
         "busy": bool(unfinished["attempts"]), "unfinished": unfinished,

@@ -33,7 +33,6 @@
         "time_limit_seconds": {"type": "integer", "minimum": 60, "maximum": 604800, "multipleOf": 60}
       },
       "allOf": [
-        {"if": {"properties": {"gpus": {"minimum": 1}}, "required": ["gpus"]}, "then": {"required": ["gpu_type"]}},
         {"if": {"properties": {"gpus": {"const": 0}}, "required": ["gpus"]}, "then": {"not": {"required": ["gpu_type"]}}}
       ]
     },

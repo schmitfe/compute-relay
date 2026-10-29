@@ -1,5 +1,5 @@
-{% extends "broker/base.html" %}{% block content %}
-<h1>Investigations · {{ project.name }}</h1>
+{% extends "broker/base.html" %}{% block title %}Investigations · {{ project.name }}{% endblock %}{% block content %}
+{% include "broker/project_navigation.html" with current_page="Investigations" advanced=True %}<h1>Investigations</h1>
 <p>An investigation records a question, a finite experiment plan and a closing report. Each job uses the project's ordinary review and budget rules.</p>
 <table><tr><th>Investigation</th><th>Scope</th><th>Created</th></tr>{% for investigation in investigations %}<tr><td><a href="/investigations/{{ investigation.id }}/">{{ investigation.name }}</a></td><td>{{ investigation.state }}</td><td>{{ investigation.created_at }}</td></tr>{% empty %}<tr><td colspan="3">No investigations recorded.</td></tr>{% endfor %}</table>
 {% endblock %}

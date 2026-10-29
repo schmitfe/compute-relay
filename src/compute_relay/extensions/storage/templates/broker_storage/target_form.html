@@ -1,5 +1,5 @@
-{% extends "broker/base.html" %}{% block content %}
-<p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / <a href="/projects/{{ project.id }}/storage/">Storage</a> / Add location</p><h1>Add a storage location to {{ project.name }}</h1>
+{% extends "broker/base.html" %}{% block title %}Add a storage location to {{ project.name }}{% endblock %}{% block content %}
+{% include "broker/project_navigation.html" with current_page="Add location" parent_section="storage" parent_label="Storage" advanced=True %}<h1>Add a storage location</h1>
 <p>Choose a cluster. Personal connectors let you choose a directory under your own HPC account; managed workers provide operator-approved roots.</p>
 <ul>{% for item in clusters %}<li><a href="?connection={{ item.id }}">{{ item.name }}</a></li>{% empty %}<li>Assign one of your clusters to this project before adding its storage locations.</li>{% endfor %}</ul>
 <section>{% if form.personal %}<p class="notice">Saving has two steps: <strong>Check/create directory</strong> asks your running connector to open the directory, creating its final component only if needed and its parent already exists. Then review the result and select <strong>Save storage location</strong>. Existing files, symbolic links and missing parents are rejected; existing directories and their permissions are preserved. This does not move files or change the cluster's job working directory.</p>

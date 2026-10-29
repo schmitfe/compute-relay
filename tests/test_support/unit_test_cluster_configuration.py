@@ -17,4 +17,4 @@ def snapshot():
 def form_data(**changes):
     return {"partitions": "cpu, gpu", "accounts": "science", "qos": "normal",
         "maximum_cpus": 128, "maximum_gpus": 8, "maximum_memory_mib": 512000,
-        "maximum_time_limit_seconds": 172800, **changes}
+        "maximum_wall_minutes": 2880, **changes}

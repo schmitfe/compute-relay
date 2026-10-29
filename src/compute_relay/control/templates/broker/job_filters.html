@@ -1,0 +1,4 @@
+<form method="get" action="{{ job_list_path }}#jobs" class="row job-filters">
+<label for="job-state">Show jobs</label><select name="job_state" id="job-state">{% for value, label in job_filters %}<option value="{{ value }}"{% if job_state == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+<button>Show jobs</button></form>
+<p class="helptext">Unresolved executions include awaiting review, running or uncertain attempts, unfinished accounting and failed or pending output collection.</p>

@@ -25,7 +25,7 @@ def render_resources(snapshot):
     rendered = render_to_string("broker/cluster_detail.html", {"cluster": cluster, "scheduler_partitions": partition_resources(snapshot),
         "snapshot_text": "saved JSON", "software": {}, "profile": {}, "csrf_token": "synthetic-token",
         "user": SimpleNamespace(id=1, is_authenticated=False)})
-    return rendered.split("<section><h2>Saved scheduler resources</h2>", 1)[1].split("</section>", 1)[0]
+    return rendered.split("<summary>Saved scheduler resources</summary>", 1)[1].split("</section>", 1)[0]
 
 
 def test_nodes_are_grouped_per_partition_and_overlaps_are_counted_independently():

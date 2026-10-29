@@ -264,6 +264,7 @@ def _results(jobs):
 
 @human_view
 def check(request, connection_id):
+    from .connector_setup import personal
     connection = _owned_connection(request.user, connection_id)
     configuration = _configuration(connection)
     blocked = ""
@@ -285,6 +286,7 @@ def check(request, connection_id):
             return redirect(f"/review/{job.id}/")
     recent = list(Job.objects.with_summary().filter(project=configuration.project).order_by("-created_at")[:10]) if configuration else []
     return render(request, "broker/cluster_test.html", {"cluster": connection, "form": form, "configuration": configuration,
+        "personal_configuration": personal(connection),
         "plan": plan, "blocked_reason": blocked, "source": SOURCE.decode(), "recent_jobs": recent, "recent_results": _results(recent),
         "allowance": services.allowance(configuration.project) if configuration else None,
         "initial_cpu_allowance": CPU_ALLOWANCE, "initial_job_limit": TOTAL_JOBS})

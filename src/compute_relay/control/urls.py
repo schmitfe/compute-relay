@@ -17,6 +17,8 @@ urlpatterns = [
     path("healthz", views.health), path("health/live", views.health),
     path("", views.dashboard), path("login/", views.signin), path("logout/", views.signout),
     path("review/<uuid:job_id>/", views.review),
+    path("review/<uuid:job_id>/attempts/<uuid:attempt_id>/<str:action>/", views.human_attempt_action),
+    path("review/<uuid:job_id>/results/<uuid:artifact_id>/", views.human_artifact),
     path("ui/live/dashboard/", live_updates.snapshot, {"kind": "dashboard"}),
     path("ui/live/<str:kind>/<uuid:object_id>/", live_updates.snapshot),
     path("projects/new/", management.project_new), path("projects/<uuid:project_id>/", management.project_detail),

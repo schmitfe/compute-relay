@@ -14,9 +14,11 @@ def test_shared_configuration_form_links_errors_to_fields_and_groups():
     assert not form.is_valid()
     page = render_to_string("broker/configuration_form.html", {"form": form})
     for name in ("count", "clusters"):
-        assert f'href="#id_{name}"' in page
+        assert f'href="#field_{name}"' in page
+        assert f'id="field_{name}" tabindex="-1"' in page
         assert f'id="id_{name}_error"' in page
         assert page.index(f'id="id_{name}"') < page.index(f'id="id_{name}_error"')
     assert 'aria-describedby="id_count_helptext id_count_error"' in page
     assert 'aria-invalid="true"' in page
     assert 'href="#"' not in page
+    assert '<legend>Clusters</legend>' in page

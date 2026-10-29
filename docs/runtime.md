@@ -89,6 +89,34 @@ the MCP adapter's client and operations with the same project credential and
 broker authorization. Intermediate responses can stay outside model context;
 HTTP requests, human review and scheduler waits still apply.
 
+The portal groups project policy, allowance, resource ceilings and access;
+cluster and environment grants can be changed together. New connections use
+Slurm without a backend selector, and SSH overrides are under advanced settings.
+Editable cluster walltime and SSH lifetime use minutes; saved worker profiles
+and API accounting retain integer seconds. Key confirmation follows project
+policy or always requires review; the equivalent old automatic choice is mapped
+to Follow project policy by a small data migration. No old runtime mode remains.
+
+Dashboard and project jobs share 50-row pages with All, Unresolved and Awaiting
+review filters. Live updates keep the selected page/filter and unsent edits;
+failed review submissions retain the matching comment. Separate pending-review
+notifications show the oldest 20 requests and their total count. Job pages offer
+safe cancellation, collection retry and verified attachment downloads for declared
+results, plus workspace-export guidance. Cancellation and collection keep the
+original attempt and accounting; neither admits compute again. Cancellation
+needs no additional retry-receipt capacity. Disabling new access does not block
+recovery of existing results through a current owned connector.
+
+Allowance uses CPU core-hours/GPU device-hours with exact seconds available.
+Project capacity separately shows stored/reserved bytes, pending transfers,
+objects, retained job records, active retry receipts, module definitions/runs and
+archived identities, with installation limits where applicable. These read-only
+logical counters neither scan the disk nor promise physical free space. Optional
+environment-build pages show whether a ready environment is actually permitted;
+storage settings remain advisory planning estimates. See the
+[review and implemented scope](portal-usability-review.md) and remaining
+[human/site acceptance work](roadmap.md).
+
 ## Preparation, approval, and accounting
 
 A job revision binds the exact source files, generated batch script, environment

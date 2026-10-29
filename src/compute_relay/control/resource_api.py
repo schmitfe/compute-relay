@@ -8,6 +8,7 @@ from compute_relay.domain.allocation import allocated_cpus
 from .auth import connection_allowed
 from .connection_identity import public_ssh_identity
 from .execution_policy import approval_requirements
+from .gpu_permissions import untyped_gpu_partitions
 from .models import Connection, Grant
 
 
@@ -54,6 +55,7 @@ def compute_context(credential):
             "capabilities": {field: value for field, value in connection.configuration.get("site_profile", {}).items()
                              if field in PUBLIC_PROFILE_FIELDS},
             "effective_limits": effective_resource_limits(policy, connection.configuration, backend=connection.backend),
+            "untyped_gpu_partitions": untyped_gpu_partitions(policy, connection),
             "availability": public_availability(connection),
             **approval_requirements(policy, credential.execution_mode, connection.configuration),
             "connection_revision_sha256": connection.revision_sha256,

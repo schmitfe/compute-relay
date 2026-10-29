@@ -14,7 +14,6 @@ from .auth import human_permission
 from .errors import BrokerError
 from .execution_policy import approval_requirements
 from .local_auth import current_user_active
-from .job_diagnostics import build_attempt_diagnostics
 from .models import Connection, ExecutionRequest, Grant, Job, Project
 from .resource_api import job_approval_requirements, resource_validation
 
@@ -33,14 +32,14 @@ def _pending(request, projects):
     return _render(request, "live_pending_reviews", {"pending_count": pending.count(), "pending": pending[:20]})
 
 
-def _jobs(request, projects):
-    jobs = Job.objects.with_summary().filter(project__in=projects).order_by("-created_at", "-id")[:100]
-    return _render(request, "job_list", {"jobs": jobs})
+def _jobs(request, projects, page_path):
+    from .portal_jobs import job_list_context
+    return _render(request, "job_list", job_list_context(request, projects, page_path=page_path))
 
 
 def _dashboard(request):
     return {"fragments": {
-        "live-job-list": _jobs(request, _projects(request.user, "viewer")),
+        "live-job-list": _jobs(request, _projects(request.user, "viewer"), "/"),
         "live-review-notifications": _pending(request, _projects(request.user, "approver")),
     }}
 
@@ -49,9 +48,9 @@ def _project(request, object_id):
     project = Project.objects.get(id=object_id)
     human_permission(request.user, project, "project_admin")
     return {"fragments": {
-        "live-job-list": _jobs(request, [project]),
+        "live-job-list": _jobs(request, [project], f"/projects/{project.id}/"),
         "live-review-notifications": _pending(request, [project]),
-        "live-project-allowance": _render(request, "live_project_allowance", {"allowance": services.allowance(project)}),
+        "live-project-allowance": _render(request, "live_project_allowance", {"project": project, "allowance": services.allowance(project)}),
     }}
 
 
@@ -79,12 +78,12 @@ def _review(request, object_id):
     # pending requests without scanning every historical request/decision.
     requests_by_id = {execution["id"]: execution for execution in recent_requests + awaiting_requests}
     visible_requests = sorted(requests_by_id.values(), key=lambda execution: (execution["created_at"], str(execution["id"])))
-    attempts = job.attempts.select_related("connection").order_by("-created_at", "-id")
+    attempts = job.attempts.select_related("connection__worker").order_by("-created_at", "-id")
     unresolved = ~Q(state__in=services.TERMINAL) | ~Q(accounting_state__in=["settled", "released"])
     # An older running attempt must keep moving even if this job already has
     # many finished attempts. Retain existing older history in the browser.
-    changing = list(attempts.filter(unresolved)[:100])
-    recent = list(attempts.exclude(unresolved)[:10])
+    changing = list(attempts.filter(unresolved | Q(collection_pending=True) | Q(collection_state="failed"))[:100])
+    recent = list(attempts.exclude(unresolved | Q(collection_pending=True) | Q(collection_state="failed"))[:10])
     visible_attempts = sorted(changing + recent, key=lambda attempt: (attempt.created_at, str(attempt.id)), reverse=True)
 
     def execution_context(execution):
@@ -95,6 +94,8 @@ def _review(request, object_id):
             "budget_reservation": {"state": execution["reservation_state"],
                 "cpu_core_seconds": execution["reservation_cpu"], "gpu_device_seconds": execution["reservation_gpu"]}}
 
+    from .views import human_attempt_diagnostics
+    diagnostics = human_attempt_diagnostics(job, visible_attempts)
     return {"fragments": {
         "live-job-summary": _render(request, "live_job_summary", {"job": job}),
         "live-review-allowance": _render(request, "live_review_allowance", {"allowance": services.allowance(job.project)}),
@@ -105,9 +106,8 @@ def _review(request, object_id):
             "execution": execution_context(execution),
             "idempotency_key": str(uuid4())})}
         for execution in visible_requests],
-        "attempts": [{"id": str(attempt.id), "html": _render(request, "live_attempt", {
-            "diagnostics": build_attempt_diagnostics(attempt)})}
-            for attempt in visible_attempts]}
+        "attempts": [{"id": item["attempt_id"], "html": _render(request, "live_attempt", {"diagnostics": item, "collapsed": index > 0})}
+            for index, item in enumerate(diagnostics)]}
 
 
 def _cluster(request, object_id):

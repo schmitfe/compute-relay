@@ -186,6 +186,25 @@ def test_real_verified_settled_build_publishes_without_broadening_project_grant(
     assert build.environment_id == before
 
 
+@pytest.mark.parametrize("permit", [False, True])
+def test_portal_only_offers_permission_for_a_ready_unpermitted_environment(context, permit):
+    build, attempt = executed(context)
+    metadata = finalization(build, attempt)
+    attempt.state, attempt.accounting_state = "succeeded", "settled"
+    attempt.save()
+    context.services.sync_attempt(attempt, metadata)
+    build.refresh_from_db()
+    if permit:
+        context.services.promote(build, context.owner)
+    browser = Client()
+    browser.force_login(context.owner)
+    response = browser.get(f"/projects/{context.project.id}/environment-builds/")
+    assert response.status_code == 200
+    assert (b"Permit this environment for project jobs" in response.content) is not permit
+    assert (b"Allowed for project jobs" in response.content) is permit
+    assert b"Ready environments need an explicit administrator permission" not in response.content
+
+
 @pytest.mark.parametrize("withdraw", ["revoked", "scope", "connection"])
 def test_auto_permission_requires_current_creating_key_authority(context, withdraw):
     from compute_relay.extensions.environments.inventory import INVENTORY_PROGRAM

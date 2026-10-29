@@ -31,6 +31,8 @@ def parse_discovery(response: dict, connection: dict) -> dict:
         if len(fields) >= 5:
             associations.append(dict(zip(("user", "account", "partition", "qos", "default_qos"), fields[:5])))
     return {
+        "node_inventory_complete": response.get("nodes", {}).get("returncode") == 0
+            and len(nodes) == len(response.get("nodes", {}).get("stdout", "").splitlines()),
         "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(), "connection_state": "ready",
         "version": response.get("version", {}).get("stdout", "").strip(),
         "nodes": nodes, "partitions": partitions, "scheduler_settings": settings,

@@ -1,16 +1,15 @@
-{% extends "broker/base.html" %}{% load broker_local_runtime %}{% block content %}
+{% extends "broker/base.html" %}{% load broker_local_runtime %}{% block title %}{{ cluster }}{% endblock %}{% block content %}
 {% local_connector_start_available as local_start %}
-<p><a href="/clusters/">Clusters</a> / {{ cluster }}</p>
+{% include "broker/cluster_navigation.html" with cluster_section="overview" %}
 <h1 data-discovery-state="{{ cluster.discovery_state }}" data-configuration-confirmed="{{ cluster.configuration_confirmed|yesno:'true,false' }}">{{ cluster }}</h1>
 <p class="helptext" data-live-page data-live-url="/ui/live/cluster/{{ cluster.id }}/"><span data-live-status role="status">Saved connector and discovery status update automatically while this page is visible.</span></p>
 <div id="live-cluster-status" data-live-fragment>{% include "broker/live_cluster_status.html" %}</div>
-<nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a>{% if personal_configuration %}<a href="/clusters/{{ cluster.id }}/configuration/">Cluster configuration</a><a href="/clusters/{{ cluster.id }}/directories/">Working directory</a>{% endif %}</nav>
 {% if cluster.owner_id == user.id %}<p><a href="/clusters/{{ cluster.id }}/remove/">Remove cluster configuration</a></p>{% endif %}
 {% if cluster.owner_id == user.id %}<p><a class="button" href="/clusters/{{ cluster.id }}/test/">Test cluster</a></p>{% endif %}
 <p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }}</p>
 <p>Job directory: <code>{{ cluster.configuration.remote_root|default:"Not configured" }}</code></p>
 {% if personal_connector_allowed %}
-<section><h2>Personal connector</h2>
+<section id="connector"><details{% if not cluster.setup_complete %} open{% endif %}><summary>Connect to this cluster</summary>
 <p>Run this cluster's connector on your device. SSH authentication, key passphrases and second-factor prompts remain local.</p>
 {% if local_start %}
 <form method="post" action="/clusters/{{ cluster.id }}/start-local/">{% csrf_token %}<input type="hidden" name="setup_revision" value="{% if personal_setup %}{{ personal_setup.revision }}{% endif %}"><button>Start connector locally</button></form>
@@ -22,7 +21,7 @@
 <p>Leave the SSH key path empty to open a native file picker on your device at interactive startup. Use <code>--choose-identity</code> to select another key, or <code>--identity-file /absolute/path/to/key</code> without a graphical session. The key is never uploaded. If needed, set its private permissions locally with <code>chmod 600 /absolute/path/to/key</code>.</p>
 <p>Setup does not submit a compute job or enable automatic spending.</p>
 {% if local_start %}</details>{% endif %}
-</section>
+</details></section>
 {% endif %}
 <section>
 <div class="row">
@@ -34,7 +33,7 @@
 <p>Grant this cluster in project settings. A key can further restrict its project's clusters. Disabling new access preserves accounting for submitted jobs.</p>
 </section>
 {% if cluster.discovery_snapshot %}
-<section><h2>Saved scheduler resources</h2>
+<section><details><summary>Saved scheduler resources</summary>
 <p>Observed: <strong>{{ cluster.discovery_snapshot.observed_at }}</strong><br>{{ cluster.discovery_snapshot.version }}</p>
 <p>These are advertised total capacities from saved discovery. Live partition and node states are not displayed here.</p>
 {% for partition in scheduler_partitions %}
@@ -48,7 +47,7 @@
 </tbody></table></div>{% else %}<p>No node inventory reported{% if cluster.backend == "fake" %} (simulated cluster){% endif %}.</p>{% endif %}
 </details>
 {% empty %}<p>No partition or node inventory reported{% if cluster.backend == "fake" %} (simulated cluster){% endif %}.</p>{% endfor %}
-<p>Partitions can overlap. Visible resources do not establish authorization or reserve capacity.</p></section>
+<p>Partitions can overlap. Visible resources do not establish authorization or reserve capacity.</p></details></section>
 {% endif %}
 <section>
 <div class="row"><h2>Environment recipes for this cluster</h2><a class="button" href="/clusters/{{ cluster.id }}/environments/new/">Add environment</a></div>
@@ -56,8 +55,8 @@
 <ul>{% for env in environments %}<li><strong>{{ env.name }}</strong> · {{ env.configuration.kind|default:"system" }} · <code>{{ env.configuration.interpreter }}</code>{% if env.configuration.modules %}<br><small>{{ env.configuration.modules|join:", " }}</small>{% endif %}</li>{% empty %}<li>No recipes configured for this cluster.</li>{% endfor %}</ul>
 <a href="/clusters/{{ cluster.id }}/environments/">View this cluster's environments</a>
 </section>
-<section>
-<h2>Software discovered on this cluster</h2>
+<section><details>
+<summary>Software discovered on this cluster</summary>
 <p>The catalog is saved login-node metadata, observed at {{ cluster.discovery_snapshot.observed_at|default:"an unknown time" }}. Availability on compute nodes needs validation. No installation or module load runs in the broker.</p>
 <div class="row"><h3>Environment Modules / Lmod</h3><a class="button secondary" href="/clusters/{{ cluster.id }}/environments/new/?kind=modules">Select modules for a recipe</a></div>
 <p>Catalog status: {{ software.modules.status|default:"Not discovered" }}{% if software.modules.truncated %} · Inventory truncated{% endif %}</p>
@@ -79,12 +78,12 @@
 {% for env in software.environments %}<tr><td>{{ env.kind }}</td><td><code>{{ env.interpreter }}</code><br><small>{{ env.prefix }}</small></td><td><a href="/clusters/{{ cluster.id }}/environments/new/?kind={{ env.kind|urlencode }}&amp;interpreter={{ env.interpreter|urlencode }}&amp;prefix={{ env.prefix|urlencode }}">Create recipe for this cluster</a></td></tr>{% empty %}<tr><td colspan="3">No additional environment candidates found in configured search roots.</td></tr>{% endfor %}
 </tbody></table></div>
 <p>Discovery searches only configured environment directories. An absent entry can mean its location has not been configured.</p>
-</section>
+</details></section>
 <section><div class="row"><h2>Cluster configuration</h2>{% if personal_configuration %}<a class="button" href="/clusters/{{ cluster.id }}/configuration/">Configure cluster</a>{% endif %}</div>
 {% if not cluster.configuration_confirmed %}<p class="notice">Discovery has completed. Choose the working directory and confirm the cluster configuration before submitting jobs.</p>{% endif %}
 <p>Baseline working directory: <code>{{ cluster.configuration.remote_root }}</code>{% if personal_configuration %} · <a href="/clusters/{{ cluster.id }}/directories/">Browse remote directories</a>{% endif %}</p>
 {% if profile.automatic_execution_allowed != True %}<p class="notice">This cluster configuration requires human confirmation for every execution. Automatic project or API-key settings cannot override it.{% if personal_configuration %} Enable <strong>Allow automatic execution on this cluster</strong> in <a href="/clusters/{{ cluster.id }}/configuration/">Cluster configuration</a> to remove this additional requirement.{% else %} Its operator controls this protected worker setting.{% endif %}</p>{% else %}<p>Automatic execution is allowed by this cluster configuration. Project and API-key confirmation preferences, limits and available allowance still apply.</p>{% endif %}
-<p>Partitions: {{ profile.partitions|join:", " }}<br>Accounts: {{ profile.accounts|join:", " }}<br>Maximum CPUs: {{ profile.maximum_cpus|default:"Not configured" }}<br>Maximum memory (MiB): {{ profile.maximum_memory_mib|default:"Not configured" }}<br>Maximum walltime (seconds): {{ profile.maximum_time_limit_seconds|default:"Not configured" }}</p>
+<p>Partitions: {{ profile.partitions|join:", " }}<br>Accounts: {{ profile.accounts|join:", " }}<br>Maximum CPUs: {{ profile.maximum_cpus|default:"Not configured" }}<br>Maximum memory (MiB): {{ profile.maximum_memory_mib|default:"Not configured" }}<br>Maximum scheduler time (minutes): {% if profile.maximum_time_limit_seconds %}{% widthratio profile.maximum_time_limit_seconds 60 1 %}{% else %}Not configured{% endif %}</p>
 <p>Resource defaults come from discovered capacities and can be adjusted in cluster configuration. Compute reservations use scheduler walltime; discovery alone does not enable unattended spending.</p></section>
 <details><summary>Saved discovery JSON, including historical states</summary><pre>{{ snapshot_text }}</pre></details>
 <script>

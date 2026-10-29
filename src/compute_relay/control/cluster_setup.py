@@ -28,7 +28,6 @@ def canonical_root(value):
 
 class RegistrationForm(forms.Form):
     name = forms.CharField(max_length=80, label="Cluster name")
-    backend = forms.ChoiceField(choices=[("slurm", "Slurm")], initial="slurm")
     host = forms.CharField(max_length=253, label="Login hostname")
     user = forms.CharField(max_length=80, required=False, label="Remote username",
         help_text="Can be filled in later, before connecting the cluster.")
@@ -41,9 +40,9 @@ class RegistrationForm(forms.Form):
     known_hosts = forms.CharField(max_length=4096, required=False, strip=False,
         label="Local known-hosts path (optional)",
         help_text="Use an absolute path or ~/.ssh/known_hosts on your device. If omitted, the connector manages its own host-key confirmation locally.")
-    session_seconds = forms.IntegerField(required=False, min_value=60, max_value=86400,
-        initial=28800, label="Requested SSH session lifetime (seconds)",
-        help_text="Default: 28,800 seconds (8 hours). This does not extend a shorter session permitted by the cluster.")
+    session_minutes = forms.IntegerField(required=False, min_value=1, max_value=1440,
+        initial=480, label="SSH session lifetime (minutes)",
+        help_text="Default: 480 minutes (8 hours). The cluster may require you to sign in again sooner.")
     setup_revision = forms.IntegerField(required=False, min_value=1, widget=forms.HiddenInput)
 
     def clean_host(self):
@@ -66,7 +65,10 @@ class RegistrationForm(forms.Form):
 
     def clean(self):
         data = super().clean()
-        settings = {"session_seconds": data.get("session_seconds") or 28800}
+        if self.data.get("backend", "slurm") != "slurm":
+            self.add_error(None, "Only Slurm clusters can be added here.")
+        data["backend"] = "slurm"
+        settings = {"session_seconds": (data.get("session_minutes") or 480) * 60}
         for field in ("identity_file", "known_hosts"):
             value = data.get(field, "")
             if not value:
@@ -77,6 +79,14 @@ class RegistrationForm(forms.Form):
                 settings[field] = value
         data["connector_settings"] = settings
         return data
+
+    @property
+    def advanced_fields(self):
+        return [self[name] for name in ("port", "remote_root", "identity_file", "known_hosts", "session_minutes")]
+
+    @property
+    def advanced_open(self):
+        return any(field.errors for field in self.advanced_fields)
 
 
 @human_view
@@ -98,7 +108,8 @@ def edit(request, registration_id):
         "name": registration.name, "backend": registration.backend, "host": registration.host,
         "user": registration.remote_user, "port": registration.port, "remote_root": registration.requested_root,
         **{key: value for key, value in registration.connector_settings.items()
-           if key in {"identity_file", "known_hosts", "session_seconds"}},
+           if key in {"identity_file", "known_hosts"}},
+        "session_minutes": registration.connector_settings.get("session_seconds", 28800) // 60,
         "setup_revision": registration.revision})
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():

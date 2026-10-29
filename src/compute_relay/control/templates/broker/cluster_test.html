@@ -1,13 +1,13 @@
-{% extends "broker/base.html" %}{% block content %}
-<p><a href="/clusters/">Clusters</a> / <a href="/clusters/{{ cluster.id }}/">{{ cluster }}</a> / Test</p>
+{% extends "broker/base.html" %}{% block title %}Test {{ cluster }}{% endblock %}{% load broker_resource_limits %}{% block content %}
+{% include "broker/cluster_navigation.html" with cluster_section="test" current="Test cluster" %}
 <h1>Test {{ cluster }}</h1>
 <p>This prepares a tiny CPU-only Python job. You will review its exact files and reservation on the normal approval page before anything runs.</p>
 {% if blocked_reason %}<p class="error">{{ blocked_reason }}</p>{% endif %}
 {% if plan %}<p>The script sleeps for two seconds, prints its hostname and Python version, and writes <code>cluster-check.json</code>. It requests {{ plan.resources.cpus }} CPU{{ plan.resources.cpus|pluralize }}, 128 MiB, no GPUs and a one-minute scheduler walltime. Queueing and cleanup can take longer.</p>
-<p>Compute reservation: <strong>{{ plan.reservation_cpu_seconds }} CPU-core seconds</strong>, using the effective CPU allocation and requested scheduler walltime. Approval, lifetime limits, cancellation and final accounting follow the ordinary job path.</p>{% endif %}
+<p>Compute reservation: <strong>{{ plan.reservation_cpu_seconds|compute_hours }} CPU core-hours ({{ plan.reservation_cpu_seconds }} CPU core-seconds)</strong>, using the effective CPU allocation and requested scheduler walltime. Approval, lifetime limits, cancellation and final accounting follow the ordinary job path.</p>{% endif %}
 <section><h2>Diagnostic allowance</h2>
-{% if configuration %}<p><a href="/projects/{{ configuration.project_id }}/">{{ configuration.project.name }}</a> · Available: {{ allowance.available.cpu_core_seconds }} CPU-core seconds · Reserved: {{ allowance.reserved.cpu_core_seconds }} · Spent: {{ allowance.spent.cpu_core_seconds }} · Lifetime tests admitted: {{ allowance.jobs.admitted }} / {{ allowance.jobs.limit }}</p>
-{% else %}<p>The first prepared test creates a dedicated project with {{ initial_cpu_allowance }} CPU-core seconds, zero GPU allowance, one active job and at most {{ initial_job_limit }} lifetime admitted jobs. Its allowance and internal credential expire after 30 days.</p>{% endif %}
+{% if configuration %}<p><a href="/projects/{{ configuration.project_id }}/">{{ configuration.project.name }}</a> · Available: {{ allowance.available.cpu_core_seconds|compute_hours }} CPU core-hours · Reserved: {{ allowance.reserved.cpu_core_seconds|compute_hours }} · Spent: {{ allowance.spent.cpu_core_seconds|compute_hours }} · Lifetime tests admitted: {{ allowance.jobs.admitted }} / {{ allowance.jobs.limit }}</p>
+{% else %}<p>The first prepared test creates a dedicated project with {{ initial_cpu_allowance|compute_hours }} CPU core-hours ({{ initial_cpu_allowance }} CPU core-seconds), zero GPU allowance, one active job and at most {{ initial_job_limit }} lifetime admitted jobs. Its allowance and internal credential expire after 30 days.</p>{% endif %}
 <p>Repeating a test never refills funds, resets job counts, renews expiry or replaces a revoked credential. Review the existing diagnostic project to change its settings explicitly.</p></section>
 <section><h2>Prepare a test</h2>
 <form method="post">{% csrf_token %}{{ form.non_field_errors }}

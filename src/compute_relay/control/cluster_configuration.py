@@ -25,8 +25,8 @@ class ClusterConfigurationForm(forms.Form):
         help_text="Effective CPUs = ceil(max(requested CPUs, minimum allocation) / unit) × unit. With unit 2, a request for 3 logical CPUs allocates 4. This changes CPU allocation and its reservation, not walltime or execution confirmation. Leave blank for no explicit unit.")
     maximum_gpus = forms.IntegerField(min_value=0, max_value=16, label="Maximum GPUs of one type per job")
     maximum_memory_mib = forms.IntegerField(min_value=128, max_value=16777216, label="Maximum memory per job (MiB)")
-    maximum_time_limit_seconds = forms.IntegerField(min_value=60, max_value=604800, label="Maximum walltime (seconds)",
-        help_text="Use a whole number of minutes. Unknown discovery limits require an explicit finite value.")
+    maximum_wall_minutes = forms.IntegerField(min_value=1, max_value=10080, label="Maximum scheduler time per job (minutes)",
+        help_text="A finite limit is required even when discovery reports no time limit.")
 
     def __init__(self, *args, snapshot, current_profile=None, **kwargs):
         self.snapshot = snapshot
@@ -34,6 +34,8 @@ class ClusterConfigurationForm(forms.Form):
         self.evidence = derive_cluster_configuration(snapshot, self.current_profile)
         initial = {field: ", ".join(self.evidence["site_profile"].get(field, [])) for field in ALLOWLIST_FIELDS}
         initial.update({field: self.evidence["site_profile"].get(field) for field in RESOURCE_BOUNDS})
+        seconds = initial.pop("maximum_time_limit_seconds")
+        initial["maximum_wall_minutes"] = seconds // 60 if seconds is not None else None
         candidate = self.evidence.get("allocation_candidates", {}).get("cpu_allocation_quantum", {})
         self.cpu_allocation_candidate = candidate if isinstance(candidate, dict) else {}
         value = self.cpu_allocation_candidate.get("value")
@@ -50,6 +52,7 @@ class ClusterConfigurationForm(forms.Form):
     @property
     def resource_fields(self):
         fields = [*ALLOWLIST_FIELDS, *RESOURCE_BOUNDS]
+        fields[fields.index("maximum_time_limit_seconds")] = "maximum_wall_minutes"
         fields.insert(fields.index("maximum_cpus") + 1, "cpu_allocation_quantum")
         return [self[field] for field in fields]
 
@@ -57,6 +60,7 @@ class ClusterConfigurationForm(forms.Form):
         data = super().clean()
         if self.errors:
             return data
+        data["maximum_time_limit_seconds"] = data["maximum_wall_minutes"] * 60
         profile = dict(self.current_profile)
         for field in ALLOWLIST_FIELDS:
             values = [value.strip() for value in data[field].split(",") if value.strip()]
@@ -87,7 +91,8 @@ class ClusterConfigurationForm(forms.Form):
         for field in RESOURCE_BOUNDS:
             ceiling = max((item[field] for item in selected if item[field] is not None), default=None)
             if ceiling is not None and profile[field] > ceiling:
-                self.add_error(field, "This exceeds the saved discovered ceiling for the selected partitions.")
+                self.add_error("maximum_wall_minutes" if field == "maximum_time_limit_seconds" else field,
+                    "This exceeds the saved discovered ceiling for the selected partitions.")
         if not self.errors:
             self._site_profile = profile
         return data

@@ -16,6 +16,7 @@ from compute_relay.domain.validation import relative_path, validate
 from compute_relay.domain.lifecycle import terminal_observation, validate_report_outcome
 from .auth import human_permission, require_connection, connection_allowed, require_credential_actor
 from .errors import BrokerError
+from .gpu_permissions import gpu_request_allowed
 from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Connection,
                      Environment, ExecutionRequest, Grant, IdempotencyRecord, Job,
                      JobFile, LedgerEntry, Project, ProjectCredential, WorkerReport, User,
@@ -167,6 +168,9 @@ def prepare_job(job):
     if violations:
         raise resource_error(violations)
     result = prepare(job.request, env, config, str(job.id))
+    if (result["manifest"]["maximum_allocation"]["gpu_devices"] and not job.request["resources"].get("gpu_type")
+            and not gpu_request_allowed(job.project.grant.policy, connection, job.request, result["manifest"]["maximum_allocation"])):
+        raise BrokerError("GPU_TYPE_REQUIRED", "Choose an allowed GPU type. Generic GPU requests require permission for all discovered types on this partition.", 403)
     if job.extension_name:
         from compute_relay.extensions import services_for
         from compute_relay.backends.preparation import canonical_json_bytes
@@ -291,9 +295,8 @@ def authorize(execution_request, *, decision=None):
         raise BrokerError("PROFILE_REVIEW_REQUIRED", "This cluster profile requires human confirmation for each execution.", 409)
     if str(connection.id) not in policy["allowed_connection_ids"] or job.request["environment"]["revision_sha256"] not in policy["allowed_environment_revision_sha256"]:
         raise BrokerError("POLICY_DENIED", "Connection or environment is outside project policy.", 403)
-    gpu_type = job.request["resources"].get("gpu_type")
-    if gpu_type and gpu_type not in policy["allowed_gpu_types"]:
-        raise BrokerError("POLICY_DENIED", "GPU type is outside project policy.", 403)
+    if not gpu_request_allowed(policy, connection, job.request, job.manifest["maximum_allocation"]):
+        raise BrokerError("POLICY_DENIED", "GPU type selection is outside project policy or current discovery is incomplete.", 403)
     if not _within_envelope(job, policy) and not (policy["mode"] == "mixed" and decision):
         from .resource_api import resource_error
         from compute_relay.domain.resource_limits import allocation_violations
@@ -674,7 +677,7 @@ def dispatch(worker, attempt_id, data):
         decision = ApprovalDecision.objects.filter(execution_request=attempt.execution_request, approved=True, consumed_at__isnull=False).first()
         if (str(attempt.connection_id) not in policy["allowed_connection_ids"]
                 or job.request["environment"]["revision_sha256"] not in policy["allowed_environment_revision_sha256"]
-                or (job.request["resources"].get("gpu_type") and job.request["resources"]["gpu_type"] not in policy["allowed_gpu_types"])
+                or not gpu_request_allowed(policy, attempt.connection, job.request, job.manifest["maximum_allocation"])
                 or (not _within_envelope(job, policy) and not (policy["mode"] == "mixed" and decision))
                 or (policy["mode"] == "approval_required" and not decision)
                 or (attempt.connection.configuration.get("site_profile", {}).get("automatic_execution_allowed") is not True and not decision)
@@ -921,3 +924,17 @@ def cancel_attempt(attempt):
             attempt.next_poll_at = timezone.now()
             attempt.save()
         return serialize_attempt(attempt), 202
+
+
+def retry_collection(attempt):
+    """Revisit the same finished native allocation without admitting compute."""
+    with transaction.atomic():
+        attempt = Attempt.objects.select_for_update().get(id=attempt.id)
+        if not attempt.native_identity or not terminal_observation(attempt.observation):
+            raise BrokerError("ATTEMPT_ACTIVE", "Output recovery requires a finished native job.", 409)
+        attempt.collection_pending = True
+        attempt.collection_state = "pending"
+        attempt.collection_failures = 0
+        attempt.next_poll_at = timezone.now()
+        attempt.save(update_fields=["collection_pending", "collection_state", "collection_failures", "next_poll_at"])
+    return {"attempt_id": str(attempt.id), "collection_state": "pending"}, 202

@@ -26,23 +26,35 @@ def test_local_hints_reject_relative_option_and_control_character_values(field, 
     assert not form.is_valid() and field in form.errors
 
 
-@pytest.mark.parametrize("value, expected", [("", 28800), (60, 60), (86400, 86400)])
+@pytest.mark.parametrize("value, expected", [("", 28800), (1, 60), (1440, 86400)])
 def test_optional_session_lifetime_is_finite(value, expected):
-    form = RegistrationForm(registration_data(session_seconds=value, password="never-save", token="never-save"))
+    form = RegistrationForm(registration_data(session_minutes=value, password="never-save", token="never-save"))
     assert form.is_valid(), form.errors
     assert form.cleaned_data["connector_settings"] == {"session_seconds": expected}
 
 
-@pytest.mark.parametrize("value", [59, 86401, "not-an-integer", "28.5"])
+@pytest.mark.parametrize("value", [0, 1441, "not-an-integer", "28.5"])
 def test_invalid_session_lifetime_is_rejected(value):
-    form = RegistrationForm(registration_data(session_seconds=value))
-    assert not form.is_valid() and "session_seconds" in form.errors
+    form = RegistrationForm(registration_data(session_minutes=value))
+    assert not form.is_valid() and "session_minutes" in form.errors
+
+
+def test_advanced_ssh_validation_is_visible_without_reading_keys(management):
+    client = human(management.owner)
+    before = client.get("/clusters/new/")
+    assert b'<summary>Advanced SSH settings and directory hint</summary>' in before.content
+    assert b'<details open><summary>Advanced SSH' not in before.content
+    response = form_post(client, "/clusters/new/", registration_data(identity_file="relative/key"))
+    assert response.status_code == 200
+    assert b'<details open><summary>Advanced SSH' in response.content
+    assert b'href="#field_identity_file"' in response.content
+    assert not ClusterRegistration.objects.exists()
 
 
 def test_registration_create_edit_and_prefill_retain_only_connector_hints(management):
     client = human(management.owner)
     response = form_post(client, "/clusters/new/", registration_data(backend="slurm",
-        identity_file="~/.ssh/science", known_hosts="/private/known-hosts", session_seconds=900,
+        identity_file="~/.ssh/science", known_hosts="/private/known-hosts", session_minutes=15,
         password="not-retained", worker_token="not-retained"))
     assert response.status_code == 302
     setup = ClusterRegistration.objects.get(owner=management.owner)
@@ -50,8 +62,9 @@ def test_registration_create_edit_and_prefill_retain_only_connector_hints(manage
     assert setup.connection_id is None
     edit = client.get(f"/clusters/setup/{setup.id}/edit/")
     assert edit.context["form"].initial["identity_file"] == "~/.ssh/science"
+    assert edit.context["form"].initial["session_minutes"] == 15
     changed = form_post(client, f"/clusters/setup/{setup.id}/edit/", registration_data(
-        backend="slurm", setup_revision=setup.revision, identity_file="/private/second-key", session_seconds=1200))
+        backend="slurm", setup_revision=setup.revision, identity_file="/private/second-key", session_minutes=20))
     assert changed.status_code == 302
     setup.refresh_from_db()
     assert setup.connector_settings == {"identity_file": "/private/second-key", "session_seconds": 1200}
@@ -83,7 +96,7 @@ def test_incomplete_setup_does_not_offer_personal_download(management):
 def test_simulators_are_not_offered_in_personal_cluster_setup(management):
     client = human(management.owner)
     response = form_post(client, "/clusters/new/", registration_data(backend="fake"))
-    assert response.status_code == 200 and "backend" in response.context["form"].errors
+    assert response.status_code == 200 and "Only Slurm" in str(response.context["form"].non_field_errors())
     assert not ClusterRegistration.objects.filter(backend="fake").exists()
 
 

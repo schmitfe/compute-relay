@@ -23,6 +23,8 @@ from .errors import BrokerError
 from .models import Blob, Project, StoragePool, UploadGrant, UploadReservation
 from compute_relay.transfer import CHUNK_BYTES, fingerprint
 
+MAX_PENDING_UPLOADS = 8
+
 
 def blob_path(blob):
     return settings.ARTIFACT_ROOT / str(blob.project_id) / blob.sha256
@@ -236,7 +238,7 @@ def store_blob(project, data, *, maximum=None):
             pending = UploadReservation.objects.filter(project=current, state="reserved").count()
             if (current.storage_used + current.storage_reserved + len(data) > settings.PROJECT_STORAGE_LIMIT
                     or pool.used + pool.reserved + len(data) > settings.GLOBAL_STORAGE_LIMIT
-                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= 8):
+                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= MAX_PENDING_UPLOADS):
                 raise BrokerError("STORAGE_QUOTA", "Project or installation storage quota is exhausted.", 409)
             current.storage_reserved += len(data)
             pool.reserved += len(data)
@@ -311,7 +313,7 @@ def begin_transfer(project, digest, size, binding, *, uploaded=False):
             pending = UploadReservation.objects.filter(project=project, state="reserved").count()
             if (current.storage_used + current.storage_reserved + size > settings.PROJECT_STORAGE_LIMIT
                     or pool.used + pool.reserved + size > settings.GLOBAL_STORAGE_LIMIT
-                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= 8):
+                    or current.object_count + pending >= settings.MAX_OBJECTS or pending >= MAX_PENDING_UPLOADS):
                 raise BrokerError("STORAGE_QUOTA", "Transfer exceeds the storage quota.", 409)
             current.storage_reserved += size
             pool.reserved += size
