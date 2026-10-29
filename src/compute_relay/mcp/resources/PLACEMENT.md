@@ -19,6 +19,13 @@ CPU/GPU/RAM maxima may describe different nodes or partitions. Match the target,
 partition, environment and effective allocation limits. Requested walltime
 determines the reservation; final allocated runtime determines the charge.
 
+For a workload that can use any permitted GPU hardware, a connection's
+`untyped_gpu_partitions` in get_project_context lists partitions where you may
+set `resources.gpus` without `gpu_type`. Slurm then chooses the hardware. Use an
+explicit allowed type whenever the workload needs a specific architecture or
+VRAM size. Empty project GPU permissions deny GPU use; partial permissions
+require an exact type. Site policy may still require typed requests.
+
 For placement across targets, request get_compute_availability(refresh=True)
 then read refresh=False. Check age, status, truncation and visibility. Compare
 queue_pressure.pending_jobs_per_schedulable_node and the matching GPU type's

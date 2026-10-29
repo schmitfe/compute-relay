@@ -12,6 +12,7 @@
     "allowed_connection_ids": {"type": "array", "minItems": 0, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid"}},
     "allowed_environment_revision_sha256": {"type": "array", "minItems": 0, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/digest"}},
     "allowed_gpu_types": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/name"}},
+    "allow_untyped_gpus": {"type": "boolean", "default": false},
     "per_job_limits": {
       "type": "object", "additionalProperties": false,
       "required": ["cpu_cores", "gpu_devices", "memory_mib", "time_limit_seconds"],

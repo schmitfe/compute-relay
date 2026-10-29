@@ -45,8 +45,10 @@ def test_overview_groups_optional_links_below_project_identity(management, setti
     browser = human(management.owner)
     html = browser.get(base).content.decode()
     assert html.index("Project: managed project") < html.index("Advanced project settings")
-    assert '<details id="advanced-project-settings">' in html
-    assert '<a href="#advanced-project-settings">Advanced settings</a>' in html
+    assert '<details class="project-advanced-settings" id="advanced-project-settings">' in html
+    assert html.index('aria-label="Project sections"') < html.index('id="advanced-project-settings"')
+    assert html.count('id="advanced-project-settings"') == 1
+    assert 'href="#advanced-project-settings"' not in html
     assert "Environment build permission" in html and "Environment build policy" not in html
     settings.BROKER_EXTENSIONS = []
     html = browser.get(base).content.decode()

@@ -97,10 +97,10 @@ class PlanningContractTests(unittest.TestCase):
         data["outputs"] = [data["command"]["script"]]
         self.reject_request(data)
 
-    def test_gpu_type_is_required_and_cpu_only_type_is_rejected(self):
+    def test_gpu_type_is_optional_and_cpu_only_type_is_rejected(self):
         data = deepcopy(self.request)
         del data["resources"]["gpu_type"]
-        self.reject_request(data)
+        validate("job-request.schema.json", data)
         data = deepcopy(self.request)
         data["resources"]["gpus"] = 0
         self.reject_request(data)

@@ -51,12 +51,27 @@ class ProjectForm(forms.Form):
     expires_at = LocalDateTime(label="New execution allowed until (Europe/Berlin)")
     connections = forms.ModelMultipleChoiceField(queryset=Connection.objects.none(), required=False, widget=forms.CheckboxSelectMultiple, label="Allowed clusters")
     environments = forms.ModelMultipleChoiceField(queryset=Environment.objects.none(), required=False, widget=forms.CheckboxSelectMultiple, label="Allowed environments")
-    allowed_gpu_types = forms.CharField(required=False, label="Allowed GPU types", help_text="Comma-separated Slurm GRES types, for example a6000, h200.")
+    allowed_gpu_types = forms.MultipleChoiceField(required=False, choices=[], widget=forms.CheckboxSelectMultiple,
+        label="Allowed GPU types",
+        help_text="None selected denies GPU jobs. Select all known types on the allowed clusters to let Slurm choose a type; selecting only some requires an exact selected type. Untyped requests need complete discovery and stay within that known inventory. Cluster limits, project limits and GPU allowance still apply. Refresh cluster discovery if no GPU types are shown.")
     paused = forms.BooleanField(required=False, label="Pause new executions")
 
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["connections"].queryset = owned_connections(user).filter(setup_complete=True)
+        from compute_relay.domain.cluster_configuration import gpu_type_inventory
+        self.gpu_inventories = {}
+        gpu_clusters = {}
+        for connection in self.fields["connections"].queryset.order_by("name", "id"):
+            inventory = gpu_type_inventory(connection.discovery_snapshot,
+                partitions=connection.configuration.get("site_profile", {}).get("partitions"))
+            self.gpu_inventories[connection.id] = inventory
+            for gpu_type in inventory["types"]:
+                gpu_clusters.setdefault(gpu_type, []).append(connection.name)
+        saved_types = set(self.initial.get("allowed_gpu_types", []))
+        self.fields["allowed_gpu_types"].choices = [(gpu_type,
+            gpu_type + " · " + (", ".join(gpu_clusters[gpu_type]) if gpu_type in gpu_clusters
+                else "Previously allowed; not currently discovered")) for gpu_type in sorted(set(gpu_clusters) | saved_types)]
         self.pending_connections = owned_connections(user).filter(setup_complete=False).order_by("name", "id")
         self.fields["connections"].help_text = "Only clusters with completed setup can be granted to a project."
         environments = owned_environments(user).filter(connection__in=self.fields["connections"].queryset).select_related("connection").order_by("connection__name", "connection_id", "name")
@@ -91,10 +106,14 @@ class ProjectForm(forms.Form):
             selected = {connection.id for connection in data["connections"]}
             if any(environment.connection_id not in selected for environment in data["environments"]):
                 self.add_error("environments", "Select the cluster for every allowed environment, or uncheck that environment.")
-        types = [part.strip() for part in data.get("allowed_gpu_types", "").split(",") if part.strip()]
-        if any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}", part) for part in types):
-            self.add_error("allowed_gpu_types", "Use valid Slurm GPU type names.")
-        data["gpu_types"] = sorted(set(types))
+        types = set(data.get("allowed_gpu_types", []))
+        if data.get("max_gpus", 0) > 0 and not types:
+            self.add_error("allowed_gpu_types", "Select at least one allowed GPU type when Maximum GPUs per job is greater than zero.")
+        data["gpu_types"] = sorted(types)
+        inventories = [self.gpu_inventories[connection.id] for connection in data.get("connections", [])]
+        known_types = {gpu_type for inventory in inventories for gpu_type in inventory["types"]}
+        data["allow_untyped_gpus"] = bool(known_types and known_types <= types
+            and all(inventory["complete"] for inventory in inventories))
         for name in ("cpu_hours", "gpu_hours"):
             if name in data:
                 data[name.replace("hours", "seconds")] = int((data[name] * 3600).to_integral_value(rounding=ROUND_FLOOR))

@@ -110,6 +110,29 @@ def _gpus(value):
     return 0, {}, None
 
 
+def gpu_type_inventory(snapshot, partitions=None):
+    """Saved physical GPU names; incomplete evidence never permits generic jobs."""
+    rows = snapshot.get("nodes", [])
+    if not isinstance(rows, list):
+        return {"types": [], "complete": False}
+    selected = set(partitions or [row.get("partition", "").removesuffix("*") for row in rows
+                                 if isinstance(row, dict) and isinstance(row.get("partition"), str)])
+    seen, names = set(), set()
+    complete = snapshot.get("node_inventory_complete") is True
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("partition"), str):
+            complete = False
+            continue
+        partition = row["partition"].removesuffix("*")
+        if partition not in selected:
+            continue
+        seen.add(partition)
+        count, types, warning = _gpus(row.get("gres"))
+        complete = complete and count is not None and warning is None
+        names.update(name for name, count in types.items() if count > 0)
+    return {"types": sorted(names), "complete": bool(selected) and seen == selected and complete}
+
+
 def _supported(field, value, warnings):
     if value is None:
         return None

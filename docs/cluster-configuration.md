@@ -59,8 +59,10 @@ also considered at the observed node CPU ceiling. Partition and cluster totals
 are never summed, and a node appearing in two partitions is never counted as
 extra capacity. These meanings follow [Slurm's partition configuration](https://slurm.schedmd.com/scontrol.html#SECTION_PARTITIONS---SPECIFICATIONS-FOR-CREATE-AND-UPDATE-COMMANDS).
 
-Each current job selects one GPU type. Its suggestion therefore uses the largest
-count of a single GPU family on one node, rather than adding different families.
+GPU-count suggestions conservatively use the largest count of a single GPU
+family on one node, rather than adding different families. Explicit type
+requests remain supported. If project permission covers all known types,
+generic requests can let Slurm choose hardware; this does not raise that ceiling.
 Typed counts are listed separately in the evidence. A generic GPU count may be
 shown with its type explicitly unknown; shared MPS/shard advertisements do not
 become physical GPUs. Duplicate or contradictory GPU advertisements remain
@@ -75,7 +77,7 @@ Missing/malformed time remains unknown. Slurm accepts several duration forms
 and schedules walltime in minutes; see [the job time option](https://slurm.schedmd.com/sbatch.html#OPT_time).
 
 The implementation currently caps suggestions and owner inputs at 1,024 CPUs,
-16 GPUs of one type, 16,777,216 MiB and seven days per job. The evidence explains
+16 GPUs, 16,777,216 MiB and seven days per job. The evidence explains
 when such a cap applies. These are software bounds, not claims about a site's
 physical resources or allowance. Known independent maxima can come from
 different nodes or partitions; their combination is not necessarily schedulable.

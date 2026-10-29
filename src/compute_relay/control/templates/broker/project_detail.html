@@ -1,7 +1,8 @@
-{% extends "broker/base.html" %}{% load broker_extensions broker_resource_limits %}{% block title %}{{ project.name }}{% endblock %}{% block content %}
+{% extends "broker/base.html" %}{% load broker_resource_limits %}{% block title %}{{ project.name }}{% endblock %}{% block content %}
 {% include "broker/project_navigation.html" with overview=True %}
 <h1>{{ project.name }}</h1><p>Owner: {{ project.owner.username }}</p>
-<nav aria-label="Project sections"><a href="#jobs">Jobs</a><a href="#live-project-allowance">Allowance</a><a href="#effective-resource-limits">Current limits</a><a href="#api-keys">Agent keys</a><a href="#project-settings">Project settings</a>{% project_extension_links project as extension_links %}{% if extension_links %}<a href="#advanced-project-settings">Advanced settings</a>{% endif %}</nav>
+<nav aria-label="Project sections"><a href="#jobs">Jobs</a><a href="#live-project-allowance">Allowance</a><a href="#effective-resource-limits">Current limits</a><a href="#api-keys">Agent keys</a><a href="#project-settings">Project settings</a></nav>
+{% include "broker/project_advanced_settings.html" %}
 <p class="helptext" data-live-page data-live-url="/ui/live/project/{{ project.id }}/?{{ job_live_query }}"><span data-live-status role="status">Job states and review requests update automatically. Your settings edits are kept.</span></p>
 <div id="live-review-notifications" data-live-fragment aria-live="polite"></div>
 <section id="jobs"><h2>Project jobs</h2><p>Browse this project's jobs 50 at a time, named by the submitting agent.</p>{% include "broker/job_filters.html" %}<div id="live-job-list" data-live-fragment>{% include "broker/job_list.html" %}</div></section>

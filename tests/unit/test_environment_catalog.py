@@ -95,7 +95,7 @@ def project_data(context, **changes):
     data = {"name": context.project.name, "mode": "approval_required", "cpu_hours": "2", "gpu_hours": "0",
             "max_cpus": "4", "max_gpus": "0", "memory_mib": "8192", "wall_minutes": "5", "charge_minutes": "6",
             "max_active_jobs": "2", "max_total_jobs": "1000", "expires_at": (timezone.now() + timedelta(days=3)).isoformat(),
-            "connections": [str(context.first.id)], "environments": [str(context.first_env.id)], "allowed_gpu_types": ""}
+            "connections": [str(context.first.id)], "environments": [str(context.first_env.id)], "allowed_gpu_types": []}
     data.update(changes)
     return data
 

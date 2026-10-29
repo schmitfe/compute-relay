@@ -4,15 +4,17 @@ from html.parser import HTMLParser
 from importlib import import_module
 from types import SimpleNamespace
 
+import pytest
+
 from django.apps import apps
 from django.db import connection
 
 from test_support.unit_test_management import form_post, human, issued, key_data, management
 from test_support.unit_test_management import SCOPES
 from compute_relay.control.forms import KeyForm
+from compute_relay.control.management import project_initial
 from compute_relay.control.models import ProjectCredential
 from tests.unit.test_management import project_data
-
 
 class Inputs(HTMLParser):
     def __init__(self, html):
@@ -59,6 +61,138 @@ def test_project_can_change_cluster_and_environment_in_one_post_without_javascri
     assert response.status_code == 302
     assert list(context.project.connections.values_list("id", flat=True)) == [context.connections[1].id]
     assert list(context.project.environments.values_list("id", flat=True)) == [context.secondary_environment.id]
+
+
+@pytest.mark.parametrize("creating", [True, False])
+def test_gpu_enabled_project_requires_explicit_types_in_the_form(management, creating):
+    context = management
+    previous_policy = context.grant.policy.copy()
+    count = context.project.__class__.objects.count()
+    path = "/projects/new/" if creating else f"/projects/{context.project.id}/"
+    response = form_post(human(context.owner), path, project_data(context, max_gpus="1", allowed_gpu_types=[]))
+    assert response.status_code == 200
+    assert "allowed_gpu_types" in response.context["form"].errors
+    assert b"None selected denies GPU jobs." in response.content
+    assert b"Select at least one allowed GPU type" in response.content
+    assert context.project.__class__.objects.count() == count
+    context.grant.refresh_from_db()
+    assert context.grant.policy == previous_policy
+
+
+def test_cpu_only_project_accepts_empty_gpu_types(management):
+    context = management
+    response = form_post(human(context.owner), f"/projects/{context.project.id}/",
+        project_data(context, max_gpus="0", gpu_hours="0", allowed_gpu_types=[]))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allowed_gpu_types"] == []
+    assert context.grant.policy["per_job_limits"]["gpu_devices"] == 0
+    assert context.grant.policy["allow_untyped_gpus"] is False
+
+
+def test_gpu_type_permissions_are_unchecked_owned_cluster_checkboxes(management):
+    context = management
+    foreign = context.foreign
+    foreign.discovery_snapshot = {"node_inventory_complete": True,
+        "nodes": [{"partition": "debug", "gres": "gpu:private-type:1"}]}
+    foreign.save(update_fields=["discovery_snapshot"])
+    response = human(context.owner).get("/projects/new/")
+    html = response.content.decode()
+    form = response.context["form"]
+    assert list(form.fields["allowed_gpu_types"].choices) == [("a100", "a100 · owned-0, owned-1")]
+    assert 'type="checkbox" name="allowed_gpu_types"' in html
+    assert '<fieldset class="form-field" id="field_allowed_gpu_types"' in html
+    assert not any(name == "allowed_gpu_types" for name, _ in Inputs(html).checked)
+    assert "private-type" not in html
+    assert "Refresh cluster discovery if no GPU types are shown." in html
+
+
+@pytest.mark.parametrize("selected,expected", [(["a100", "h200"], True), (["a100"], False)])
+def test_gpu_all_and_partial_selection_persist_explicit_scheduler_choice(management, selected, expected):
+    context = management
+    second = context.connections[1]
+    second.discovery_snapshot = {"node_inventory_complete": True,
+        "nodes": [{"partition": "debug", "gres": "gpu:h200:1"}]}
+    second.save(update_fields=["discovery_snapshot"])
+    response = form_post(human(context.owner), f"/projects/{context.project.id}/",
+        project_data(context, allowed_gpu_types=selected))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allowed_gpu_types"] == selected
+    assert context.grant.policy["allow_untyped_gpus"] is expected
+
+
+def test_unselected_cluster_types_do_not_prevent_all_selected_cluster_types(management):
+    context = management
+    second = context.connections[1]
+    second.discovery_snapshot = {"node_inventory_complete": True,
+        "nodes": [{"partition": "debug", "gres": "gpu:h200:1"}]}
+    second.save(update_fields=["discovery_snapshot"])
+    response = form_post(human(context.owner), f"/projects/{context.project.id}/", project_data(context,
+        connections=[str(context.connections[0].id)], allowed_gpu_types=["a100"]))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allow_untyped_gpus"] is True
+
+
+@pytest.mark.parametrize("snapshot", [{}, {"nodes": [{"partition": "debug", "gres": "gpu:a100:1"}]}])
+def test_incomplete_gpu_inventory_retains_saved_types_without_generic_permission(management, snapshot):
+    context = management
+    for cluster in context.connections:
+        cluster.discovery_snapshot = snapshot
+        cluster.save(update_fields=["discovery_snapshot"])
+    response = human(context.owner).get(f"/projects/{context.project.id}/")
+    assert ("allowed_gpu_types", "a100") in Inputs(response.content.decode()).checked
+    assert project_initial(context.project)["allowed_gpu_types"] == ["a100"]
+    if not snapshot:
+        assert b"Previously allowed; not currently discovered" in response.content
+    response = form_post(human(context.owner), f"/projects/{context.project.id}/", project_data(context))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allowed_gpu_types"] == ["a100"]
+    assert context.grant.policy["allow_untyped_gpus"] is False
+
+
+def test_gpu_choices_reject_forged_types_and_csv_input(management):
+    context = management
+    previous_policy = context.grant.policy.copy()
+    for selection in (["invented"], "a100,h200"):
+        response = form_post(human(context.owner), f"/projects/{context.project.id}/",
+            project_data(context, allowed_gpu_types=selection))
+        assert response.status_code == 200
+        assert "allowed_gpu_types" in response.context["form"].errors
+    context.grant.refresh_from_db()
+    assert context.grant.policy == previous_policy
+
+
+def test_one_incomplete_allowed_cluster_blocks_generic_gpu_permission(management):
+    context = management
+    second = context.connections[1]
+    second.discovery_snapshot = {}
+    second.save(update_fields=["discovery_snapshot"])
+    response = form_post(human(context.owner), f"/projects/{context.project.id}/", project_data(context))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allow_untyped_gpus"] is False
+
+
+def test_discovery_changes_do_not_recompute_saved_gpu_permission_until_human_save(management):
+    context = management
+    owner = human(context.owner)
+    response = form_post(owner, f"/projects/{context.project.id}/", project_data(context))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allow_untyped_gpus"] is True
+    for cluster in context.connections:
+        cluster.discovery_snapshot = {}
+        cluster.save(update_fields=["discovery_snapshot"])
+    assert owner.get(f"/projects/{context.project.id}/").status_code == 200
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allow_untyped_gpus"] is True
+    response = form_post(owner, f"/projects/{context.project.id}/", project_data(context))
+    assert response.status_code == 302
+    context.grant.refresh_from_db()
+    assert context.grant.policy["allow_untyped_gpus"] is False
 
 
 def test_no_script_unselected_cluster_recipe_fails_with_reachable_group_error(management):

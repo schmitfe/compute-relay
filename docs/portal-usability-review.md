@@ -195,6 +195,14 @@ or changing/revoking a key returns to the relevant section instead of requiring
 another scroll through job history. These links do not grant permissions or
 change execution policy.
 
+The project overview's advanced disclosure opens directly below its section
+links, without an anchor jump to an earlier menu. GPU types are checkboxes from
+saved cluster discovery. Empty selection denies GPUs, partial selection requires
+a named allowed type, and a complete selection permits type-agnostic Slurm GPU
+requests only while current complete partition evidence remains covered.
+The saved generic-request permission is checked at both admission and dispatch;
+discovery alone never turns a partial selection into an unrestricted one.
+
 Navigation uses positive spacing instead of pulling into preceding metadata.
 Project identity stays in its URL and authenticated API; the redundant UUID line
 was removed from the heading. Job metadata uses its own line, related filter

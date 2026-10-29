@@ -42,7 +42,7 @@ def project_data(context, **changes):
             "max_cpus": "2", "max_gpus": "1", "memory_mib": "512", "wall_minutes": "10",
             "max_active_jobs": "2", "max_total_jobs": "1000", "expires_at": (timezone.now() + timedelta(days=3)).isoformat(),
             "connections": [str(c.id) for c in context.connections], "environments": [str(context.environment.id)],
-            "allowed_gpu_types": "a100"}
+            "allowed_gpu_types": ["a100"]}
     data.update(changes)
     return data
 

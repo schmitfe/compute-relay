@@ -45,6 +45,18 @@ def test_prepare_is_deterministic_and_reserves_requested_walltime(sample):
     verify_package(manifest, prepared["manifest_sha256"], files)
 
 
+@pytest.mark.parametrize("gpu_type,expected", [(None, "gpu:1"), ("a100", "gpu:a100:1")])
+def test_gpu_batch_script_preserves_generic_or_typed_request(sample, gpu_type, expected):
+    request, environment, connection, content = sample
+    request["resources"]["gpus"] = 1
+    connection["site_profile"]["maximum_gpus"] = 1
+    if gpu_type:
+        request["resources"]["gpu_type"] = gpu_type
+    prepared, files = package(sample)
+    assert f"#SBATCH --gres={expected}\n" in prepared["generated_files"]["_broker/batch.sh"]
+    verify_package(prepared["manifest"], prepared["manifest_sha256"], files)
+
+
 def test_canonical_manifest_matches_jcs_for_the_supported_domain(sample):
     prepared, _ = package(sample)
     prepared["manifest"]["request"]["command"]["arguments"] = ["Ünicode", "quote\"\\\n"]

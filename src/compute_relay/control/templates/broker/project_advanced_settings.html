@@ -1,0 +1,7 @@
+{% load broker_extensions %}{% project_extension_links project as extension_links %}{% if extension_links %}
+<details class="project-advanced-settings" id="advanced-project-settings"{% if advanced %} open{% endif %}>
+<summary>Advanced project settings</summary>
+<p class="helptext">Settings and optional tools for {{ project.name }}.</p>
+<nav aria-label="Advanced project settings">{% for link in extension_links %}<a href="{{ link.url }}"{% if request.path == link.url %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}</nav>
+</details>
+{% endif %}

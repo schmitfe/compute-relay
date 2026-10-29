@@ -222,14 +222,13 @@ def test_client_schema_exposes_nested_job_fields_without_remote_references(job_r
 
 
 @pytest.mark.parametrize("mutation", ["missing_resources", "unknown_field", "boolean_cpus", "seconds_not_minutes",
-    "missing_gpu_type", "zero_gpu_type", "invalid_digest", "missing_script", "duplicate_path", "output_overwrites_input"])
+    "zero_gpu_type", "invalid_digest", "missing_script", "duplicate_path", "output_overwrites_input"])
 def test_typed_sdk_requests_validate_canonical_contract_before_http(job_request, mutation):
     request = deepcopy(job_request)
     if mutation == "missing_resources": del request["resources"]
     elif mutation == "unknown_field": request["shell_command"] = "forbidden"
     elif mutation == "boolean_cpus": request["resources"]["cpus"] = True
     elif mutation == "seconds_not_minutes": request["resources"]["time_limit_seconds"] = 61
-    elif mutation == "missing_gpu_type": request["resources"]["gpus"] = 1
     elif mutation == "zero_gpu_type": request["resources"]["gpu_type"] = "a100"
     elif mutation == "invalid_digest": request["environment"]["revision_sha256"] = "invalid"
     elif mutation == "missing_script": request["command"]["script"] = "not-uploaded.py"

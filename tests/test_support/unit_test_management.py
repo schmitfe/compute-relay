@@ -32,6 +32,8 @@ def management(db, settings, tmp_path):
                   "state_directory": str(tmp_path / f"fake-{index}")}
         connections.append(Connection.objects.create(owner=owner, worker=worker, name=f"owned-{index}",
                                                      backend="fake", configuration=config,
+                                                     discovery_snapshot={"node_inventory_complete": True,
+                                                         "nodes": [{"partition": "debug", "gres": "gpu:a100:1"}]},
                                                      revision_sha256=services.digest(config)))
     foreign = Connection.objects.create(owner=outsider, worker=worker, name="private-outsider-cluster",
                                          backend="fake", configuration={}, revision_sha256="f" * 64)

@@ -2,7 +2,7 @@
 {% if form.sections %}
 {% for field in form.hidden_fields %}{{ field }}{% endfor %}
 {% for anchor, title, fields in form.sections %}<fieldset id="{{ anchor }}"><legend><h2>{{ title }}</h2></legend>
-{% for field in fields %}{% if field.name == "allowed_gpu_types" %}<details{% if field.errors or field.value %} open{% endif %}><summary>Restrict GPU types (optional)</summary>{% endif %}{% include "broker/configuration_field.html" with field=field %}{% if field.name == "allowed_gpu_types" %}</details>{% endif %}{% endfor %}
+{% for field in fields %}{% if field.name == "allowed_gpu_types" %}<details{% if field.errors or field.value %} open{% endif %}><summary>GPU type permissions (select none to deny GPU jobs)</summary>{% endif %}{% include "broker/configuration_field.html" with field=field %}{% if field.name == "allowed_gpu_types" %}</details>{% endif %}{% endfor %}
 </fieldset>{% endfor %}
 {% else %}{% for field in form %}{% include "broker/configuration_field.html" with field=field %}{% endfor %}{% endif %}
 {% if form.environment_groups %}<noscript><p>All cluster environments are listed. Check an environment only when its cluster is selected above.</p></noscript>

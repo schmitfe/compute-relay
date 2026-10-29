@@ -117,7 +117,8 @@ def project_policy(project, data, revision):
     return {"schema_version": "1.0", "project_id": str(project.id), "revision": revision, "mode": data["mode"],
             "allowed_connection_ids": sorted(str(c.id) for c in data["connections"]),
             "allowed_environment_revision_sha256": sorted(set(e.revision_sha256 for e in data["environments"])),
-            "allowed_gpu_types": data["gpu_types"], "max_active_jobs": data["max_active_jobs"], "max_total_jobs": data.get("max_total_jobs", 1000),
+            "allowed_gpu_types": data["gpu_types"], "allow_untyped_gpus": data["allow_untyped_gpus"],
+            "max_active_jobs": data["max_active_jobs"], "max_total_jobs": data.get("max_total_jobs", 1000),
             "per_job_limits": {"cpu_cores": data["max_cpus"], "gpu_devices": data["max_gpus"], "memory_mib": data["memory_mib"],
                                "time_limit_seconds": data["wall_minutes"] * 60},
             "allowance": {"cpu_core_seconds": data["cpu_seconds"], "gpu_device_seconds": data["gpu_seconds"]},
@@ -162,7 +163,7 @@ def project_initial(project):
             "max_active_jobs": policy["max_active_jobs"], "max_total_jobs": policy.get("max_total_jobs", 1000),
             "expires_at": datetime.fromisoformat(policy["admission_expires_at"].replace("Z", "+00:00")),
             "connections": project.connections.all(), "environments": project.environments.all(),
-            "allowed_gpu_types": ", ".join(policy["allowed_gpu_types"]), "paused": project.paused}
+            "allowed_gpu_types": list(policy["allowed_gpu_types"]), "paused": project.paused}
 
 
 @human_view

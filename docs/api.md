@@ -85,6 +85,19 @@ Read current `effective_limits` from `list_compute_targets` before sizing work. 
 
 The connections payload also identifies `policy_revision`, project `per_job_limits`, `project_mode`, `project_paused`, `admission_expires_at`, `key_execution_mode`, `allowed_gpu_types` and `as_of`, alongside `connections` and cluster-scoped `environments`. A target reports `requires_human_approval` and its immutable `connection_revision_sha256`. Job detail includes `resource_validation` so a prepared package's effective allocation can be compared with current limits.
 
+GPU permissions use explicit type checkboxes. None selected denies GPU jobs;
+a partial selection requires `resources.gpu_type` to name an allowed type.
+Selecting every discovered type across the project's allowed clusters records
+`allow_untyped_gpus` in its policy. Each connection's `untyped_gpu_partitions`
+reports where an agent may omit `gpu_type`, for example `"gpus": 1` renders
+`--gres=gpu:1`. Admission and dispatch both recheck that current, complete node
+discovery contains no unapproved types on that partition. Unknown/incomplete
+discovery or newly discovered unapproved types block generic requests. Discovery
+alone never upgrades a partial permission. Refresh discovery and explicitly save
+the desired selection to update permissions. Resource ceilings, review and GPU
+device-hour reservations still apply. A site's own Slurm policy may require an
+explicit type even when the project permits generic requests.
+
 Read `get_project_allowance` as well: available CPU/GPU seconds, debt, active jobs, lifetime submissions and expiry can block a job that fits the per-job ceilings. Reserve effective allocated resources multiplied by requested walltime. Final settlement charges actual allocated elapsed time in full, including usage beyond the reservation. No termination, overtime or cleanup interval is added to planning limits.
 
 ## Idempotency and errors
