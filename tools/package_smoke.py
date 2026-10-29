@@ -167,7 +167,7 @@ def main():
              "    compile(source, kind, 'exec')\n"
              "    for component in component_names(kind):\n"
              "        import_module('compute_relay.remote.' + component[:-3])\n"] , cwd=root, env=clean_env)
-        run([python, "-c", "import django,httpx,mcp,waitress,jsonschema,rfc8785; from importlib.metadata import distribution; package=distribution('compute-relay'); assert not any('extra ==' in requirement for requirement in package.requires or [] if requirement.startswith(('httpx','mcp','waitress'))); assert {entry.name for entry in package.entry_points if entry.group == 'console_scripts'} == {'compute-relay'}"] , cwd=root, env=clean_env)
+        run([python, "-c", "import django,httpx,mcp,waitress,jsonschema,rfc8785; from compute_relay.sdk import WorkspaceClient,ProjectFacade,finish; from importlib.metadata import distribution; package=distribution('compute-relay'); assert not any('extra ==' in requirement for requirement in package.requires or [] if requirement.startswith(('httpx','mcp','waitress'))); assert {entry.name for entry in package.entry_points if entry.group == 'console_scripts'} == {'compute-relay'}"] , cwd=root, env=clean_env)
         executable = python.parent / ("compute-relay.exe" if os.name == "nt" else "compute-relay")
         run([executable, "--help"], cwd=root, env=clean_env)
         result = "not requested (--skip-launch)" if args.skip_launch else installed_launcher(python, root, clean_env)

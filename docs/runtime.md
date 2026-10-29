@@ -83,6 +83,12 @@ and verify checksums. See [client setup](local-client-setup.md).
 The package exposes project-local stdio MCP clients. Remote HTTP MCP and OAuth
 are not provided; see the [roadmap](roadmap.md).
 
+An initialized workspace can also use the public [Python SDK](python-sdk.md) to
+prepare, request, monitor and export jobs in a bounded local script. It reuses
+the MCP adapter's client and operations with the same project credential and
+broker authorization. Intermediate responses can stay outside model context;
+HTTP requests, human review and scheduler waits still apply.
+
 ## Preparation, approval, and accounting
 
 A job revision binds the exact source files, generated batch script, environment
