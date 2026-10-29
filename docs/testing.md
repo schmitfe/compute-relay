@@ -1,8 +1,9 @@
 # Testing the local package
 
 Default checks use temporary directories and synthetic identities. They do
-not connect to an institutional cluster. Run from a source checkout with Python
-3.12 or 3.13 and [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/):
+not connect to an institutional cluster. Run from a source checkout with a
+CI-tested Python version (shown in the README badge) and
+[uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```sh
 uv sync --locked --extra test --python 3.13
@@ -42,7 +43,14 @@ settlement correctness must not depend solely on a process-local mutex.
 
 ## CI
 
-CI runs Python 3.12/3.13 on Linux with uv 0.13.6, a pinned setup action and a
+CI reads its Python matrix from `[tool.compute-relay.ci].python-versions` in
+`pyproject.toml`. The README Python badge reads that same list from `main`;
+the CI badge shows the combined runtime workflow status on `main`. To add or
+remove a tested Python version, edit that list and let the full matrix pass
+before merging. `project.requires-python` separately sets the installation
+compatibility floor; it does not claim every newer interpreter has been tested.
+
+The matrix runs on Linux with uv 0.13.6, a pinned setup action and a
 dependency cache keyed by the lock. The runtime workflow installs the test extra
 with `uv sync --locked --extra test` and the committed `uv.lock`; a stale lock
 fails the build. The runtime workflow checks SQLite and contracts, verifies

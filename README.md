@@ -3,11 +3,14 @@
   <img width="504" src="assets/compute-relay-logo-dark.svg#gh-dark-mode-only" alt="Compute Relay" />
 </h1>
 
+[![Python versions](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fschmitfe%2Fcompute-relay%2Fmain%2Fpyproject.toml&query=%24.tool%5B%27compute-relay%27%5D.ci%5B%27python-versions%27%5D&label=Python&logo=python&color=blue)](docs/testing.md)
+[![CI](https://github.com/schmitfe/compute-relay/actions/workflows/runtime.yml/badge.svg?branch=main)](https://github.com/schmitfe/compute-relay/actions/workflows/runtime.yml)
+
 Let Codex, Claude Code and other local MCP clients prepare work for your Slurm
 clusters. Review the exact job before submission, or set project limits for
 automatic execution.
 
-**Development alpha · Python 3.12 or 3.13**
+**Development alpha**
 
 ## Quick start
 

@@ -10,13 +10,35 @@ permissions:
   contents: read
 
 jobs:
+  versions:
+    name: Read Python versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      python: ${{ steps.versions.outputs.python }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - id: versions
+        name: Read the tested versions from pyproject.toml
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib, re, tomllib
+          versions = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["tool"]["compute-relay"]["ci"]["python-versions"]
+          assert versions and all(re.fullmatch(r"3\.\d+", version) for version in versions), "Expected Python 3 minor versions"
+          print("python=" + json.dumps(versions))
+          PY
+
   python:
+    name: Python ${{ matrix.python-version }}
+    needs: versions
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.versions.outputs.python) }}
     env:
       BROKER_PROFILE: local
       UV_PYTHON: ${{ matrix.python-version }}
