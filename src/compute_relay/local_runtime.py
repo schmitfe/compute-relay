@@ -239,7 +239,7 @@ def _run_locked(state, args):
         print("Stopping Compute Relay…", flush=True)
     finally:
         stop.set()
-        if monitor is not None:
+        if monitor is not None and monitor.ident is not None:
             monitor.join(timeout=2)
         _stop_server(process)
         for kind, handler in previous_handlers.items():
