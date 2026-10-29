@@ -1,6 +1,6 @@
 {% extends "broker/base.html" %}{% load broker_local_runtime %}{% block title %}Set up {{ setup.name }}{% endblock %}{% block content %}
 {% local_connector_start_available as local_start %}
-<p><a href="/clusters/">Clusters</a> / {{ setup.name }}</p><h1>Set up {{ setup.name }}</h1>
+{% include "broker/cluster_navigation.html" with cluster_section="setup" %}<h1>Set up {{ setup.name }}</h1>
 <p class="notice">Details saved · Start your personal connector to identify this cluster. This cluster cannot receive jobs yet.</p>
 <section><div class="row"><h2>1. Cluster details</h2><a href="/clusters/setup/{{ setup.id }}/edit/">Edit details</a><a href="/clusters/setup/{{ setup.id }}/remove/">Remove cluster configuration</a></div>
 <p>{{ setup.backend }} · {{ setup.remote_user|default:"Username not set" }}@{{ setup.host }}:{{ setup.port }}</p>

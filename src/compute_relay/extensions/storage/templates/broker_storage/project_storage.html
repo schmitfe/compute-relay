@@ -1,5 +1,5 @@
 {% extends "broker/base.html" %}{% block title %}Storage for {{ project.name }}{% endblock %}{% block content %}
-<p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / Storage</p><h1>Storage for {{ project.name }}</h1>
+{% include "broker/project_navigation.html" with current_page="Storage" advanced=True %}<h1>Storage</h1>
 <p class="notice">Budgets are advisory estimates. They do not enforce filesystem quotas, reserve physical space, or redirect existing jobs. Job storage redirection is not connected in this version. Capacity checks run only when the location owner enables them and the protected worker supports storage.</p>
 {% if can_add %}<p><a class="button" href="/projects/{{ project.id }}/storage/targets/new/">Add storage location</a></p>{% else %}<p>Assign one of your clusters to this project before adding a storage location through its HPC account.</p>{% endif %}
 <section id="project-storage-locations"><h2>This project's storage locations</h2>

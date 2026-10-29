@@ -1,5 +1,5 @@
 {% extends "broker/base.html" %}{% block title %}{% if setup %}Edit {{ setup.name }}{% else %}Add a cluster{% endif %}{% endblock %}{% block content %}
-<p><a href="/clusters/">Clusters</a>{% if setup %} / <a href="/clusters/setup/{{ setup.id }}/">{{ setup.name }}</a>{% endif %}</p>
+{% if setup %}{% include "broker/cluster_navigation.html" with cluster_section="edit" current="Edit cluster details" %}{% else %}{% include "broker/cluster_navigation.html" with current="Add a cluster" %}{% endif %}
 <h1>{% if setup %}Edit cluster details{% else %}Add a cluster{% endif %}</h1>
 <p>Save the login target, then start its connector from the next page. Complete SSH login in the terminal where Compute Relay is running.</p>
 <p class="notice">Saving these details makes no SSH connection and creates no remote directory. Your SSH key, passphrase and second factor stay on the device running the connector. Optional local paths below are hints, not file uploads.</p>

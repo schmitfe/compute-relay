@@ -1,5 +1,5 @@
-{% extends "broker/base.html" %}{% block title %}Workflows{% endblock %}{% block content %}
-<p><a href="/projects/{{ project.id }}/">{{ project.name }}</a> / Workflows</p><h1>Workflows</h1>
+{% extends "broker/base.html" %}{% block title %}Workflows · {{ project.name }}{% endblock %}{% block content %}
+{% include "broker/project_navigation.html" with current_page="Workflows" advanced=True %}<h1>Workflows</h1>
 <p>Static graphs use the project's normal compute, cluster and environment permissions. Each concrete node retains its own execution decision.</p>
-<section><table><thead><tr><th>Run</th><th>State</th><th>Created</th></tr></thead><tbody>{% for run in runs %}<tr><td><a href="/workflows/{{ run.id }}/">{{ run.revision.name }}</a></td><td>{{ run.state }}</td><td>{{ run.created_at }}</td></tr>{% empty %}<tr><td colspan="3">No workflow runs.</td></tr>{% endfor %}</tbody></table></section>
+<section><div class="table-scroll"><table><thead><tr><th>Run</th><th>State</th><th>Created</th></tr></thead><tbody>{% for run in runs %}<tr><td><a href="/workflows/{{ run.id }}/">{{ run.revision.name }}</a></td><td>{{ run.state }}</td><td>{{ run.created_at }}</td></tr>{% empty %}<tr><td colspan="3">No workflow runs.</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}

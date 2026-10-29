@@ -185,6 +185,23 @@ build pages distinguish readiness from permission; storage remains explicitly
 advisory. Shared titles, landmarks, checkbox groups and error targets improve
 keyboard navigation. Polling preserves open diagnostic/capacity disclosures.
 
+Project pages now share a named project breadcrumb, a direct return to the
+project and shortcuts to its settings and agent keys. Optional tools live in
+the same **Advanced project settings** disclosure on every project page,
+including environment build permission, storage, workflows and investigations.
+Nested forms retain their immediate parent in the breadcrumb. Cluster pages
+use the matching cluster context and return pattern. Saving project settings
+or changing/revoking a key returns to the relevant section instead of requiring
+another scroll through job history. These links do not grant permissions or
+change execution policy.
+
+Navigation uses positive spacing instead of pulling into preceding metadata.
+Project identity stays in its URL and authenticated API; the redundant UUID line
+was removed from the heading. Job metadata uses its own line, related filter
+controls stay together and long headings and optional-module tables wrap or
+scroll within the page. Browser checks cover the populated project and build
+permission pages at desktop and narrow widths.
+
 Regression tests cover old unresolved jobs after a burst, live pagination,
 escaped drafts, grants, authority/CSRF boundaries, quota-full cancellation,
 recovery without another admission, verified downloads and minute conversion.

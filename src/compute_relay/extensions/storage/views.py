@@ -85,6 +85,7 @@ def target_new(request, project_id):
 def _retained_selection(document):
     """Retain human form choices, never credentials or arbitrary return URLs."""
     return {"name": document.get("name", "")[:100], "pool": document.get("pool", "")[:40],
+        "root_path": document.get("root_path", "")[:240],
         "enable_probes": "true" if document.get("enable_probes") in {"true", "on"} else "false",
         "roles": [role for role in document.getlist("roles") if role in ROLES],
         "submission_id": document.get("submission_id", "")[:40]}
@@ -126,8 +127,9 @@ def target_directories(request, connection_id, project_id):
     result = task.result if task and task.state == "succeeded" else {}
     select_url = _storage_path(project, "targets/new/?") + urlencode({**selected, "connection": str(connection.id),
         "root_path": result.get("path", "")}, doseq=True)
+    return_url = _storage_path(project, "targets/new/?") + urlencode({**selected, "connection": str(connection.id)}, doseq=True)
     return render(request, "broker_storage/target_directories.html", {"project": project, "cluster": connection, "task": task,
-        "result": result, "selection": selected, "select_url": select_url,
+        "result": result, "selection": selected, "select_url": select_url, "return_url": return_url,
         "connector_ready": "personal_setup_v1" in connection.worker.connector_features,
         "waiting": bool(task and task.state in {"queued", "running"})})
 

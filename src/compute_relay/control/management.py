@@ -183,7 +183,7 @@ def project_detail(request, project_id):
     if request.method == "POST" and form.is_valid():
         try:
             save_project(request.user, form.cleaned_data, project)
-            return redirect(f"/projects/{project.id}/")
+            return redirect(f"/projects/{project.id}/#project-settings")
         except BrokerError as exc:
             error = exc.message
     from uuid import uuid4
@@ -237,7 +237,7 @@ def key_revoke(request, project_id, key_id):
         credential.revoked = True
         credential.save(update_fields=["revoked"])
         services.audit(project, request.user.id, "credential.revoked", credential.id)
-    return redirect(f"/projects/{project.id}/")
+    return redirect(f"/projects/{project.id}/#api-keys")
 
 
 @human_view
@@ -262,7 +262,7 @@ def key_edit(request, project_id, key_id):
                 setattr(credential, key, data["expires_at"] if key == "expires_at" else value)
             credential.save(update_fields=["name", "expires_at", "scopes", "allowed_connection_ids", "execution_mode"])
             services.audit(project, request.user.id, "credential.permissions_updated", credential.id)
-        return redirect(f"/projects/{project.id}/")
+        return redirect(f"/projects/{project.id}/#api-keys")
     return render(request, "broker/key_form.html", {"form": form, "project": project, "credential": credential})
 
 
@@ -336,15 +336,18 @@ def cluster_toggle(request, connection_id):
 
 @human_view
 def environments(request, connection_id):
+    from .connector_setup import personal
     if request.method != "GET":
         return HttpResponseNotAllowed(["GET"])
     connection = get_object_or_404(owned_connections(request.user), id=connection_id)
     recipes = owned_environments(request.user).filter(connection=connection).order_by("name", "id")
-    return render(request, "broker/environments.html", {"cluster": connection, "selected_cluster": connection, "environments": recipes})
+    return render(request, "broker/environments.html", {"cluster": connection, "selected_cluster": connection, "environments": recipes,
+        "personal_configuration": connection.owner_id == request.user.id and personal(connection)})
 
 
 @human_view
 def environment_new(request, connection_id):
+    from .connector_setup import personal
     connection = get_object_or_404(owned_connections(request.user), id=connection_id)
     initial = {"connection": str(connection.id), "kind": request.GET.get("kind", "system"),
                "interpreter": request.GET.get("interpreter", "/usr/bin/python3"), "prefix": request.GET.get("prefix", "")}
@@ -434,6 +437,7 @@ def environment_new(request, connection_id):
             services.audit(None, request.user.id, "environment.created", environment.id)
             return redirect(f"/clusters/{connection.id}/environments/")
     return render(request, "broker/environment_form.html", {"form": form, "cluster": connection, "selected_cluster": connection,
+        "personal_configuration": connection.owner_id == request.user.id and personal(connection),
         "task": task, "observation": observation,
         "waiting": bool(task and task.state in {"queued", "running"} and task.expires_at > timezone.now()),
         "inspection_ready": "personal_environments_v1" in connection.worker.connector_features})

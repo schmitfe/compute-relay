@@ -1,4 +1,5 @@
 {% extends "broker/base.html" %}{% load broker_resource_limits %}{% block title %}{{ job.name }}{% endblock %}{% block content %}
+{% include "broker/project_navigation.html" with project=job.project current_page=job.name %}
 <div id="live-job-summary" data-live-fragment>{% include "broker/live_job_summary.html" %}</div>
 <nav aria-label="Job sections"><a href="#execution-requests">Execution decisions</a>{% if detail.manifest %}<a href="#prepared-package">Prepared files</a>{% endif %}<a href="#attempts">Execution and results</a><a href="#save-results">Save results</a></nav>
 {% if job.state == "archived" %}<p class="notice">This job's unsubmitted package metadata was archived. Its identity and digest remain recorded. Create a fresh job to run new work.</p>{% endif %}

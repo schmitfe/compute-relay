@@ -1,7 +1,6 @@
 {% extends "broker/base.html" %}{% block title %}Add environment on {{ cluster }}{% endblock %}{% block content %}
-<p><a href="/clusters/">Clusters</a> / <a href="/clusters/{{ cluster.id }}/">{{ cluster }}</a> / <a href="/clusters/{{ cluster.id }}/environments/">Environments</a> / Add recipe</p>
+{% include "broker/cluster_navigation.html" with cluster_section="new_environment" current="Add environment" %}
 <h1>Add an environment</h1>
-<nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></nav>
 <p>Select Python modules, Anaconda/Miniforge, or an existing Poetry/venv environment for <strong>{{ cluster }}</strong>. Use <strong>Inspect selection</strong> to find executable paths and existing environments through your running connector, then save a recipe and grant it in project settings.</p>
 <details><summary>What inspection does</summary><p>It loads your selected modules in the cluster login shell and lists existing environments. It never installs packages or runs a project. Conda uses isolated configuration; Poetry environments are found from existing prefixes and its standard cache. You can enter custom paths manually.</p></details>
 {% if not inspection_ready %}<p class="notice">Restart this cluster's connector with the updated Compute Relay package to enable inspection. Manual paths and the saved catalog remain available.</p>{% endif %}

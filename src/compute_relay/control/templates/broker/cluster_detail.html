@@ -1,10 +1,9 @@
 {% extends "broker/base.html" %}{% load broker_local_runtime %}{% block title %}{{ cluster }}{% endblock %}{% block content %}
 {% local_connector_start_available as local_start %}
-<p><a href="/clusters/">Clusters</a> / {{ cluster }}</p>
+{% include "broker/cluster_navigation.html" with cluster_section="overview" %}
 <h1 data-discovery-state="{{ cluster.discovery_state }}" data-configuration-confirmed="{{ cluster.configuration_confirmed|yesno:'true,false' }}">{{ cluster }}</h1>
 <p class="helptext" data-live-page data-live-url="/ui/live/cluster/{{ cluster.id }}/"><span data-live-status role="status">Saved connector and discovery status update automatically while this page is visible.</span></p>
 <div id="live-cluster-status" data-live-fragment>{% include "broker/live_cluster_status.html" %}</div>
-<nav aria-label="Cluster"><a href="/clusters/{{ cluster.id }}/" aria-current="page">Overview</a><a href="/clusters/{{ cluster.id }}/environments/">Environments</a>{% if personal_configuration %}<a href="/clusters/{{ cluster.id }}/configuration/">Cluster configuration</a><a href="/clusters/{{ cluster.id }}/directories/">Working directory</a>{% endif %}</nav>
 {% if cluster.owner_id == user.id %}<p><a href="/clusters/{{ cluster.id }}/remove/">Remove cluster configuration</a></p>{% endif %}
 {% if cluster.owner_id == user.id %}<p><a class="button" href="/clusters/{{ cluster.id }}/test/">Test cluster</a></p>{% endif %}
 <p>{{ cluster.backend }} · {{ cluster.configuration.ssh.user }}@{{ cluster.configuration.ssh.host }}</p>

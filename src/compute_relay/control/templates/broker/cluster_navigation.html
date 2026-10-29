@@ -1,0 +1,23 @@
+<div class="scope-navigation">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><ol>
+<li><a href="/clusters/">Clusters</a></li>
+{% if cluster %}
+<li><span aria-hidden="true">/</span>{% if cluster_section == 'overview' %}<span aria-current="page">{{ cluster }}</span>{% else %}<a href="/clusters/{{ cluster.id }}/">{{ cluster }}</a>{% endif %}</li>
+{% if cluster_section == 'new_environment' %}<li><span aria-hidden="true">/</span><a href="/clusters/{{ cluster.id }}/environments/">Environments</a></li>{% endif %}
+{% if cluster_section == 'directories' %}<li><span aria-hidden="true">/</span><a href="/clusters/{{ cluster.id }}/configuration/">Cluster configuration</a></li>{% endif %}
+{% if cluster_section != 'overview' %}<li><span aria-hidden="true">/</span><span aria-current="page">{{ current }}</span></li>{% endif %}
+{% elif setup %}
+<li><span aria-hidden="true">/</span>{% if cluster_section == 'setup' %}<span aria-current="page">{{ setup.name }}</span>{% else %}<a href="/clusters/setup/{{ setup.id }}/">{{ setup.name }}</a>{% endif %}</li>
+{% if cluster_section != 'setup' %}<li><span aria-hidden="true">/</span><span aria-current="page">{{ current }}</span></li>{% endif %}
+{% else %}<li><span aria-hidden="true">/</span><span aria-current="page">{{ current }}</span></li>{% endif %}
+</ol></nav>
+{% if cluster %}
+{% if cluster_section != 'overview' %}<div class="scope-actions"><a href="/clusters/{{ cluster.id }}/">Back to cluster</a>{% if cluster_section == 'new_environment' %}<a href="/clusters/{{ cluster.id }}/environments/">Back to environments</a>{% elif cluster_section == 'directories' %}<a href="/clusters/{{ cluster.id }}/configuration/">Back to cluster configuration</a>{% endif %}</div>{% endif %}
+<nav aria-label="Cluster sections">
+<a href="/clusters/{{ cluster.id }}/"{% if cluster_section == 'overview' %} aria-current="page"{% endif %}>Overview</a>
+<a href="/clusters/{{ cluster.id }}/environments/"{% if cluster_section == 'environments' %} aria-current="page"{% endif %}>Environments</a>
+{% if personal_configuration %}<a href="/clusters/{{ cluster.id }}/configuration/"{% if cluster_section == 'configuration' %} aria-current="page"{% endif %}>Cluster configuration</a><a href="/clusters/{{ cluster.id }}/directories/"{% if cluster_section == 'directories' %} aria-current="page"{% endif %}>Working directory</a>{% endif %}
+{% if cluster.owner_id == user.id %}<a href="/clusters/{{ cluster.id }}/test/"{% if cluster_section == 'test' %} aria-current="page"{% endif %}>Test cluster</a>{% endif %}
+</nav>
+{% elif setup and cluster_section != 'setup' %}<div class="scope-actions"><a href="/clusters/setup/{{ setup.id }}/">Back to cluster setup</a></div>{% endif %}
+</div>

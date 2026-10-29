@@ -1,5 +1,5 @@
 {% extends "broker/base.html" %}{% block title %}Test {{ cluster }}{% endblock %}{% load broker_resource_limits %}{% block content %}
-<p><a href="/clusters/">Clusters</a> / <a href="/clusters/{{ cluster.id }}/">{{ cluster }}</a> / Test</p>
+{% include "broker/cluster_navigation.html" with cluster_section="test" current="Test cluster" %}
 <h1>Test {{ cluster }}</h1>
 <p>This prepares a tiny CPU-only Python job. You will review its exact files and reservation on the normal approval page before anything runs.</p>
 {% if blocked_reason %}<p class="error">{{ blocked_reason }}</p>{% endif %}

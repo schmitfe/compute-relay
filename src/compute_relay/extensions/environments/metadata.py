@@ -3,5 +3,5 @@
 KEY_SCOPES = [("environments:build", "Build project environments")]
 PROJECT_LINKS = [
     ("Environment builds", "/projects/{project_id}/environment-builds/"),
-    ("Environment build policy", "/projects/{project_id}/environment-build-policy/"),
+    ("Environment build permission", "/projects/{project_id}/environment-build-policy/"),
 ]

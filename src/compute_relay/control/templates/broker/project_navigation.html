@@ -1,0 +1,24 @@
+{% load broker_extensions %}
+<div class="scope-navigation" aria-label="Project navigation">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><ol>
+<li><a href="/">Projects &amp; jobs</a></li>
+<li><span aria-hidden="true">/</span> {% if overview %}<span aria-current="page">Project: {{ project.name }}</span>{% else %}<a href="/projects/{{ project.id }}/">Project: {{ project.name }}</a>{% endif %}</li>
+{% if not overview %}
+{% if parent_section %}<li><span aria-hidden="true">/</span> <a href="/projects/{{ project.id }}/{{ parent_section }}/">{{ parent_label }}</a></li>{% elif parent_anchor %}<li><span aria-hidden="true">/</span> <a href="/projects/{{ project.id }}/#{{ parent_anchor }}">{{ parent_label }}</a></li>{% endif %}
+{% if location_url %}<li><span aria-hidden="true">/</span> <a href="{{ location_url }}">Add location</a></li>{% endif %}
+<li><span aria-hidden="true">/</span> <span aria-current="page">{{ current_page }}</span></li>
+{% endif %}
+</ol></nav>
+<nav class="scope-actions" aria-label="Project">
+{% if not overview %}<a href="/projects/{{ project.id }}/">Back to project</a>{% endif %}
+<a href="/projects/{{ project.id }}/#project-settings">Project settings</a>
+<a href="/projects/{{ project.id }}/#api-keys">Agent keys</a>
+</nav>
+{% project_extension_links project as extension_links %}{% if extension_links %}
+<details id="advanced-project-settings"{% if advanced %} open{% endif %}>
+<summary>Advanced project settings</summary>
+<p class="helptext">Settings and optional tools for {{ project.name }}.</p>
+<nav aria-label="Advanced project settings">{% for link in extension_links %}<a href="{{ link.url }}"{% if request.path == link.url %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}</nav>
+</details>
+{% endif %}
+</div>

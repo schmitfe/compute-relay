@@ -115,6 +115,26 @@ def test_browser_receipt_is_bound_to_project_and_retains_the_enrollment_nonce(pe
     assert ConnectorTask.objects.count() == 1 and not StorageTarget.objects.exists()
 
 
+def test_directory_breadcrumb_returns_to_original_form_without_selecting_browsed_directory(personal):
+    payload = document(personal, action="browse_directory", root_path="/scratch/original", roles=["data", "results"])
+    response = personal.human.post(target_path(personal, "new/"), payload)
+    assert parse_qs(urlsplit(response.url).query)["root_path"] == ["/scratch/original"]
+    page = personal.human.get(response.url)
+    original_url = page.context["return_url"]
+    assert parse_qs(urlsplit(original_url).query)["root_path"] == ["/scratch/original"]
+    response = personal.human.post(target_path(personal, f"directories/{personal.connection.id}/"),
+        {**payload, "path": "/scratch/browsed", "connection_revision": personal.connection.revision_sha256})
+    task = ConnectorTask.objects.get()
+    task.state = "succeeded"
+    task.result = {"ok": True, "path": "/scratch/browsed", "entries": [], "writable": True}
+    task.save(update_fields=["state", "result"])
+    page = personal.human.get(response.url)
+    assert page.context["return_url"] == original_url
+    assert parse_qs(urlsplit(page.context["select_url"]).query)["root_path"] == ["/scratch/browsed"]
+    assert b'name="root_path" value="/scratch/original"' in page.content
+    assert parse_qs(urlsplit(page.context["return_url"]).query)["submission_id"] == [payload["submission_id"]]
+
+
 def test_registration_receipt_cannot_be_confirmed_in_another_project(personal):
     registration = queue(personal)
     assert complete(personal, registration).status_code == 200

@@ -1,10 +1,10 @@
 {% extends "broker/base.html" %}{% block title %}{{ investigation.name }}{% endblock %}{% block content %}
-<h1>{{ investigation.name }}</h1><p>Scope: {{ investigation.state }}</p>
+{% include "broker/project_navigation.html" with current_page=investigation.name parent_section="investigations" parent_label="Investigations" advanced=True %}<h1>{{ investigation.name }}</h1><p>Scope: {{ investigation.state }}</p>
 <h2>Question and deliverable</h2><p>{{ investigation.plan.question }}</p><p>{{ investigation.plan.deliverable }}</p>
 <h2>Core experiments</h2><ul>{% for item in investigation.plan.core_experiments %}<li>{{ item }}</li>{% endfor %}</ul>
 <h2>Required validation</h2><ul>{% for item in investigation.plan.required_validation %}<li>{{ item }}</li>{% empty %}<li>None recorded.</li>{% endfor %}</ul>
 <h2>Stopping rule</h2><p>{{ investigation.plan.stopping_rule }}</p>
 <p>Plan allowance: {{ investigation.plan.budget.cpu_core_seconds }} CPU core-seconds, {{ investigation.plan.budget.gpu_device_seconds }} GPU device-seconds, {{ investigation.plan.budget.max_executions }} executions; up to {{ investigation.plan.diagnostic_limit }} diagnostic experiments. These are instructions for the agents; the project grant enforces compute admission.</p>
-<h2>Jobs</h2><table><tr><th>Stage</th><th>Role</th><th>State</th></tr>{% for member in members %}<tr><td><a href="/review/{{ member.job_id }}/">{{ member.job.name }}</a></td><td>{{ member.role }}</td><td>{{ member.job.display_state_label }}</td></tr>{% empty %}<tr><td colspan="3">No jobs attached.</td></tr>{% endfor %}</table>
+<h2>Jobs</h2><div class="table-scroll"><table><tr><th>Stage</th><th>Role</th><th>State</th></tr>{% for member in members %}<tr><td><a href="/review/{{ member.job_id }}/">{{ member.job.name }}</a></td><td>{{ member.role }}</td><td>{{ member.job.display_state_label }}</td></tr>{% empty %}<tr><td colspan="3">No jobs attached.</td></tr>{% endfor %}</table></div>
 {% if investigation.report %}<h2>Closing report · {{ investigation.conclusion }}</h2><pre>{{ investigation.report }}</pre><p>A closing report records the agent's assessment. It does not prove scientific validity, cancel admitted jobs or settle uncertain accounting.</p>{% endif %}
 {% endblock %}

@@ -1,7 +1,7 @@
 {% extends "broker/base.html" %}
 {% block title %}Configure {{ cluster }}{% endblock %}
 {% block content %}
-<p><a href="/clusters/{{ cluster.id }}/">← {{ cluster }}</a></p>
+{% include "broker/cluster_navigation.html" with cluster_section="configuration" current="Cluster configuration" personal_configuration=True %}
 <h1>Cluster configuration</h1>
 <p>Connect first, then choose the working directory and the resources this connection may use. Initial limits use the largest discovered single-node capacities within the broker's supported job sizes. Partitions may overlap, and visible capacity does not reserve resources or prove account access.</p>
 {% if not connector_ready %}<p class="notice">Restart your personal connector with the updated broker environment to enable directory browsing and configuration changes.</p>{% endif %}

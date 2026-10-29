@@ -1,5 +1,5 @@
 {% extends "broker/base.html" %}{% block title %}Confirm storage directory on {{ registration.connection }}{% endblock %}{% block content %}
-<p><a href="/projects/{{ project.id }}/storage/">{{ project.name }} storage</a> / {{ registration.name }}</p>
+{% include "broker/project_navigation.html" with current_page="Confirm directory" parent_section="storage" parent_label="Storage" location_url=retry_url advanced=True %}
 <h1>Confirm storage directory on {{ registration.connection }}</h1>
 <p>Location: <strong>{{ registration.name }}</strong>; requested directory: <code>{{ registration.root }}</code>.</p>
 {% if resolved_root %}<p>Confirmed directory on the cluster: <strong><code>{{ resolved_root }}</code></strong>.</p>{% if resolved_root != registration.root %}<p class="notice">The cluster resolved the parent directory to this canonical path. Saving will use the confirmed directory above; the original request remains in its record.</p>{% endif %}{% endif %}
