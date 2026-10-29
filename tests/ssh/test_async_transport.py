@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 import pytest
 
@@ -19,14 +20,19 @@ def transport(timeout=10, **ssh):
     }})
 
 
-def assert_process_stopped(pid):
-    # Linux may reap the process while /proc is being read. A single read
-    # handles both forms of disappearance without hiding other I/O failures.
-    try:
-        status = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-    except (FileNotFoundError, ProcessLookupError):
-        return
-    assert status.split()[2] == "Z"
+def assert_process_stopped(pid, *, timeout=2):
+    # Reaping the direct child does not wait for its descendants to finish dying.
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            status = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        except (FileNotFoundError, ProcessLookupError):
+            return
+        state = status.split()[2]
+        if state == "Z":
+            return
+        assert time.monotonic() < deadline, f"Process {pid} is still alive (state {state})"
+        time.sleep(0.01)
 
 
 @pytest.mark.parametrize("error", [FileNotFoundError(errno.ENOENT, "reaped"), ProcessLookupError(errno.ESRCH, "reaped")])
@@ -47,7 +53,19 @@ def test_process_stop_check_accepts_zombie_but_rejects_running_process(monkeypat
         assert_process_stopped(123)
     else:
         with pytest.raises(AssertionError):
-            assert_process_stopped(123)
+            assert_process_stopped(123, timeout=0)
+
+
+@pytest.mark.parametrize("final_state", ["Z", FileNotFoundError(), ProcessLookupError()])
+def test_process_stop_check_waits_for_pending_kill(monkeypatch, final_state):
+    states = iter(["R", final_state])
+    def read(*_args, **_kwargs):
+        state = next(states)
+        if isinstance(state, OSError):
+            raise state
+        return f"123 (python) {state} 1 2 3"
+    monkeypatch.setattr(Path, "read_text", read)
+    assert_process_stopped(123)
 
 
 @pytest.mark.parametrize("error", [PermissionError(errno.EACCES, "denied"), OSError(errno.EIO, "failed")])
