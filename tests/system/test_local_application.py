@@ -162,6 +162,40 @@ def test_port_conflict_does_not_initialize_or_replace_another_installation(tmp_p
         assert not (state / "control.sqlite3").exists() and not (state / "installation.json").exists()
 
 
+def test_ctrl_c_before_health_monitor_starts_still_stops_web_server(tmp_path):
+    port = free_port()
+    source = '''
+from compute_relay import cli, local_runtime
+children = []
+spawn = local_runtime.subprocess.Popen
+start_thread = local_runtime.threading.Thread.start
+def tracked_spawn(*args, **kwargs):
+    child = spawn(*args, **kwargs)
+    children.append(child)
+    return child
+def interrupted_start(thread):
+    if thread.name == "portal-health":
+        raise KeyboardInterrupt
+    return start_thread(thread)
+local_runtime.subprocess.Popen = tracked_spawn
+local_runtime.threading.Thread.start = interrupted_start
+try:
+    cli.main()
+finally:
+    for child in children:
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=10)
+'''
+    result = subprocess.run([sys.executable, "-I", "-c", source, "--data-directory", str(tmp_path / "state"),
+        "--port", str(port), "--no-password", "--no-browser", "--non-interactive"], cwd=tmp_path,
+        env=environment(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Stopping Compute Relay" in result.stdout
+    with socket.socket() as probe:
+        assert probe.connect_ex(("127.0.0.1", port)) != 0
+
+
 def test_portal_stack_signal_writes_private_all_thread_dump_and_keeps_serving(tmp_path):
     from compute_relay.local_runtime import service_environment
     from compute_relay.local_state import LocalState

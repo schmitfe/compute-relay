@@ -339,6 +339,26 @@ architecture keeps one SSH transport and bounded status grouping. Detailed
 experiment material is retained in Git history rather than maintained as a
 second implementation or benchmark framework.
 
+On 29 October, an isolated, non-editable Python 3.13 uv installation of the
+consolidated worker (merged `c512cf1` plus environment-path protection
+`df2313e`) ran one pilot and a 100-job batch through the actual stdio MCP
+server on the shared site. Requests used one CPU, 1 GiB and a 60-second limit;
+Slurm allocated two CPUs per job across two nodes. All 101 distinct native
+jobs completed, all output checksums matched, 101 preparation replays retained
+their identities, and no manual collection recovery was needed. Slurm and the
+broker agreed on 464 CPU-core-seconds, with zero remaining reservation. The
+batch made 1,136 MCP calls; all 192 concurrent portal/health probes succeeded,
+with maximum latency 86.6 ms. Pilot and batch finished in approximately 71
+seconds including checks between them.
+
+The same installation exercised the owner portal's cleanup forms on the
+disposable pilot after saving its result. Cleanup reclaimed 105 local bytes
+and 1,086 remote bytes across seven entries. A separate native check confirmed
+the attempt directory was absent and its submission journal remained;
+accounting and job identity were unchanged. This run covered ordinary
+completion and explicit cleanup, without injected SSH failures or large-file
+load; those recovery/load cases remain acceptance work.
+
 After consolidation, a disposable local Slurm acceptance submitted two jobs
 under a different reviewed execution-bundle hash, deliberately lost one submit
 reply, and verified reconciliation, cancellation, status reads, collection and
@@ -356,7 +376,7 @@ pending reservations, and unchanged 100 settlements / 200 CPU-core-seconds.
 All 447 health requests succeeded; maximum latency was 86 ms. This measures
 local publication recovery, not SSH, Slurm or large-file throughput.
 
-Four successful jobs required explicit output recovery after automatic retries
+During the older comparison, four successful jobs required explicit output recovery after automatic retries
 were exhausted by publication contention. One portal stall during preparation
 remains unexplained. Object capacity was raised from 1,000 to 10,000 after the
 former limit was reached at only 506 KiB. The test also reached the normal
