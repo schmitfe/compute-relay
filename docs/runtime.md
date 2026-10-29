@@ -3,8 +3,8 @@
 Compute Relay is a single-user Python package. The normal command is
 `compute-relay` (equivalently `compute-relay start`). It runs a Django portal
 through Waitress on loopback, maintains a durable SQLite ledger and local object
-store, and supervises saved SSH connectors in the foreground. It requires
-Python 3.12/3.13 and system OpenSSH for real cluster access.
+store, and supervises saved SSH connectors in the foreground. Use a
+[tested Python version](testing.md#ci) and system OpenSSH for real cluster access.
 
 ## Startup and persistent state
 

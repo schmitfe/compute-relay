@@ -14,7 +14,8 @@ material or acceptance artifacts containing private host details.
 
 ## Development checks
 
-Use Python 3.12 or 3.13 and [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/).
+Use a Python version listed in `[tool.compute-relay.ci].python-versions` in
+`pyproject.toml` and [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/).
 The project requires that uv version. Install and run the locked test environment:
 
 ```sh

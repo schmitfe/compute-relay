@@ -6,7 +6,8 @@ The local installation retains its configuration and job state between runs.
 ## Install
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then use
-an isolated tool environment with Python 3.13 (Python 3.12 is also supported):
+an isolated tool environment with a [tested Python version](testing.md#ci).
+For example:
 
 ```sh
 uv tool install --python 3.13 git+https://github.com/schmitfe/compute-relay.git
