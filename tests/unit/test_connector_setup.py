@@ -81,11 +81,11 @@ def test_stale_owner_request_does_not_queue(personal):
     assert response.status_code == 409 and not ConnectorTask.objects.exists()
 
 
-def test_old_connector_gets_upgrade_guidance(personal):
-    personal.worker.connector_features = [];personal.worker.save()
+def test_setup_requires_a_current_connector_handshake(personal):
+    personal.worker.setup_ready = False;personal.worker.save()
     response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {
         "connection_revision": personal.connection.revision_sha256})
-    assert response.status_code == 409 and b"Restart" in response.content
+    assert response.status_code == 409 and b"Start" in response.content
 
 
 def test_revised_or_expired_task_cannot_change_configuration(personal):
@@ -106,7 +106,7 @@ def test_worker_cannot_report_someone_elses_task(personal):
 
 def test_worker_hello_defers_new_jobs_until_post_login_confirmation(personal):
     response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
-        "hello": True, "needs_discovery": True})
+        "hello": True, "protocol": "personal-connector/v1", "needs_discovery": True})
     assert response.status_code == 200
     personal.connection.refresh_from_db()
     assert not personal.connection.setup_complete and not personal.connection.configuration_confirmed
@@ -181,13 +181,10 @@ def test_personal_confirmation_checkbox_cannot_reconfigure_a_managed_worker_prof
     assert personal.connection.configuration["site_profile"]["automatic_execution_allowed"] is False
 
 
-def test_module_avail_is_opt_in_capability_gated_and_acknowledged(personal):
+def test_module_avail_is_opt_in_and_acknowledged(personal):
     context = personal
     path = f"/clusters/{context.connection.id}/configuration/"
     data = configuration_fields(context, module_availability_enabled="on")
-    assert context.human.post(path, data).status_code == 409
-    assert not ConnectorTask.objects.exists()
-    context.worker.connector_features.append("personal_module_availability_v1");context.worker.save()
     assert context.human.post(path, data).status_code == 302
     task = lease(context)
     assert task["request"]["module_availability_enabled"] is True
@@ -251,7 +248,7 @@ def test_configuration_is_refused_until_accounting_finishes(personal):
 def test_upgrade_with_active_jobs_preserves_current_binding(personal):
     active_attempt(personal)
     response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
-        "hello": True, "needs_discovery": True})
+        "hello": True, "protocol": "personal-connector/v1", "needs_discovery": True})
     assert response.status_code == 200 and response.json()["defaults_deferred"] is True
     personal.connection.refresh_from_db()
     assert personal.connection.setup_complete and personal.connection.configuration_confirmed
@@ -308,12 +305,12 @@ def test_new_folder_names_are_single_safe_components(personal, name):
     assert response.status_code == 400 and not ConnectorTask.objects.exists()
 
 
-def test_new_folder_requires_worker_capability(personal):
-    personal.worker.connector_features = ["personal_setup_v1"];personal.worker.save()
+def test_new_folder_requires_completed_setup_handshake(personal):
+    personal.worker.setup_ready = False;personal.worker.save()
     response = personal.human.post(f"/clusters/{personal.connection.id}/directories/", {
         "action": "mkdir", "path": "/home/researcher", "name": "new-project",
         "connection_revision": personal.connection.revision_sha256})
-    assert response.status_code == 409 and b"Restart" in response.content and not ConnectorTask.objects.exists()
+    assert response.status_code == 409 and b"Start" in response.content and not ConnectorTask.objects.exists()
 
 
 def test_existing_folder_result_is_not_described_as_new(personal):
@@ -329,12 +326,23 @@ def test_existing_folder_result_is_not_described_as_new(personal):
     assert b"already existed" in page.content and b"Folder created." not in page.content
 
 
-def test_hello_advertises_new_folder_support_explicitly(personal):
+def test_hello_confirms_current_personal_connector_contract(personal):
     response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
-        "hello": True, "features": ["personal_setup_v1", "personal_folders_v1"]})
+        "hello": True, "protocol": "personal-connector/v1"})
     assert response.status_code == 200
     personal.worker.refresh_from_db()
-    assert personal.worker.connector_features == ["personal_setup_v1", "personal_folders_v1"]
+    assert personal.worker.setup_ready
+
+
+@pytest.mark.parametrize("protocol", [None, "personal-connector/v999", [], {}])
+def test_unsupported_handshake_never_marks_connector_ready(personal, protocol):
+    personal.worker.setup_ready = False
+    personal.worker.save()
+    response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
+        "hello": True, "protocol": protocol})
+    assert response.status_code == 409
+    personal.worker.refresh_from_db()
+    assert not personal.worker.setup_ready and not ConnectorTask.objects.exists()
 
 
 def test_invalid_configuration_errors_follow_their_field_and_link_from_summary(personal):
@@ -358,8 +366,6 @@ def inspection_result(**changes):
 
 
 def queue_inspection(context, **changes):
-    context.worker.connector_features += ["personal_environments_v1"]
-    context.worker.save()
     response = context.human.post(f"/clusters/{context.connection.id}/environments/new/", {
         "action": "inspect", "kind": "conda", "modules": "python3/miniforge3-24.3-py3.12",
         "connection_revision": context.connection.revision_sha256, **changes})
@@ -394,15 +400,16 @@ def test_inspection_populates_cluster_bound_conda_dropdown_without_creating_envi
         "conda_executable": "/opt/miniforge/bin/conda"}
 
 
-def test_inspection_needs_human_post_csrf_current_revision_and_updated_worker(personal):
+def test_inspection_needs_human_post_csrf_current_revision_and_ready_connector(personal):
     context = personal
     path = f"/clusters/{context.connection.id}/environments/new/"
     data = {"action": "inspect", "kind": "system", "connection_revision": context.connection.revision_sha256}
     assert Client().post(path, data, HTTP_AUTHORIZATION="Bearer cbp_agent").status_code == 403
     browser = Client(enforce_csrf_checks=True); browser.force_login(context.owner)
     assert browser.post(path, data).status_code == 403
+    context.worker.setup_ready = False; context.worker.save()
     assert context.human.post(path, data).status_code == 409
-    context.worker.connector_features += ["personal_environments_v1"]; context.worker.save()
+    context.worker.setup_ready = True; context.worker.save()
     assert context.human.post(path, {**data, "connection_revision": "obsolete"}).status_code == 409
     assert not ConnectorTask.objects.exists()
 

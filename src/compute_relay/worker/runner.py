@@ -7,7 +7,6 @@ network I/O and optional extension helpers use awaitable HTTP/OpenSSH transports
 from __future__ import annotations
 
 import asyncio
-import base64
 from contextlib import AsyncExitStack
 import logging
 import os
@@ -167,14 +166,10 @@ class Worker:
         except Exception:
             result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
         try:
-            if getattr(backend, "supports_file_transfer", False) is True:
-                from .transfers import collect_outputs
-                result.update(await collect_outputs(self.client, backend, lease, native, manifest, self._output_lock))
-            else:
-                collected = await backend.collect(native, outputs=manifest["request"].get("outputs", []), manifest=manifest)
-                result.update(self._serialized_collection(collected, manifest), collection_state="complete")
+            from .transfers import collect_outputs
+            result.update(await collect_outputs(self.client, backend, lease, native, manifest, self._output_lock))
         except Exception:
-            result.update(artifacts={}, error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
+            result.update(error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
 
     async def _execute_attempts(self, leases):
         contexts, errors = [], []
@@ -305,28 +300,6 @@ class Worker:
         record = submission_record(digest, result)
         self.journal.write(attempt_id, record)
         return record["result"]
-
-
-    @staticmethod
-    def _serialized_collection(collected, manifest):
-        permitted = manifest["request"].get("outputs", [])
-        artifacts = {}
-        total = 0
-        for path, data in collected.get("artifacts", {}).items():
-            if path not in permitted or not isinstance(data, bytes):
-                raise ValueError("backend returned unauthorized artifact")
-            total += len(data)
-            if total > 10 * 1024 * 1024:
-                raise ValueError("backend artifact limit exceeded")
-            artifacts[path] = base64.b64encode(data).decode("ascii")
-        def bounded_text(value):
-            if not isinstance(value, str):
-                raise ValueError("backend log is not text")
-            return value.encode("utf-8", "replace")[:65536].decode("utf-8", "ignore")
-
-        return {"stdout": bounded_text(collected.get("stdout", "")),
-                "stderr": bounded_text(collected.get("stderr", "")),
-                "artifacts": artifacts}
 
 
 async def serve_workers(workers, *, once=False):

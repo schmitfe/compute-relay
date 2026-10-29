@@ -8,7 +8,7 @@ import os
 import pwd
 import re
 
-from .collection import collect, output_transfer, read_logs
+from .collection import output_transfer, read_logs
 from .jobs import own_record, reconcile, submission_time_matches, submit, stage_input
 from .protocol import JOB_OPERATIONS, JOB_PROTOCOL
 from .scheduler import scheduler
@@ -48,6 +48,4 @@ def execute_jobs(config, request):
         user = pwd.getpwuid(os.getuid()).pw_name
         result = scheduler(config, "scancel", ["--user=" + user, "--name=" + record["manifest"]["request"]["name"], "--", job_id])
         return {"outcome": "cancel_requested" if result["returncode"] == 0 else "unknown"}
-    if op == "collect":
-        return collect(config, request, identity, record)
     raise ValueError("Unsupported fixed helper operation")

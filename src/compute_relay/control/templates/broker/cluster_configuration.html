@@ -27,8 +27,7 @@
 <a class="button secondary" href="/clusters/{{ cluster.id }}/directories/">Browse directories on this cluster</a></section>
 <section><h2>Resource limits and scheduler access</h2>
 {% for field in form.resource_fields %}
-{% if field.name == "cpu_allocation_quantum" and not cpu_allocation_ready %}<p class="notice" id="cpu-allocation-upgrade">Restart this cluster's personal connector with the updated broker installation, then reload this page to edit CPU allocation units. The current connector cannot confirm this setting.</p><fieldset disabled aria-describedby="cpu-allocation-upgrade">{% include "broker/configuration_field.html" with field=field %}</fieldset>
-{% else %}{% include "broker/configuration_field.html" with field=field %}{% endif %}
+{% include "broker/configuration_field.html" with field=field %}
 {% if field.name == "cpu_allocation_quantum" %}
 {% if form.cpu_allocation_candidate_known %}<p class="helptext">Saved discovery suggests a CPU allocation unit of <strong>{{ form.cpu_allocation_candidate.value }} logical CPUs</strong>. This is provisional scheduler metadata, not verification by a compute job.{% if form.cpu_allocation_unit_saved %} Your saved explicit unit is retained until you change it.{% endif %} A chosen unit takes effect only after you save and the connector confirms this configuration.</p>
 {% else %}<p class="notice">Saved discovery could not establish a CPU allocation unit. Leave it blank for no explicit unit, or enter a value based on the cluster's allocation policy. Resource visibility alone does not verify allocation rounding.</p>{% endif %}

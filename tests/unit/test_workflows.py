@@ -1,6 +1,5 @@
 """Optional DAG orchestration must preserve core admission and artifact authority."""
 
-import base64
 from copy import deepcopy
 from datetime import timedelta
 import json
@@ -16,7 +15,7 @@ from compute_relay.control.models import Attempt, ExecutionRequest, Job, Project
 from compute_relay.extensions.workflows import services
 from compute_relay.extensions.workflows.models import WorkflowRevision, WorkflowRun
 from compute_relay.extensions.workflows.validation import validate_workflow
-from test_support.unit_test_control import broker, budgeted, decide, prepared_job, submit_receipt
+from test_support.unit_test_control import publish_output, broker, budgeted, decide, prepared_job, submit_receipt
 
 
 @pytest.fixture
@@ -54,9 +53,10 @@ def finish(context, node, *, output=True, final=True, state="completed"):
         "manifest_sha256": node.job.manifest_sha256,
         "connection_revision_sha256": context.connection.revision_sha256})
     native, lease = submit_receipt(context, attempt, lease)
+    if output:
+        publish_output(lease, "summary.json", b'{"mean": 0.25}\n')
     core.report(context.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
         "outcome": "observed", "native_identity": native,
-        "artifacts": {"summary.json": base64.b64encode(b'{"mean": 0.25}\n').decode()} if output else {},
         "observation": {"state": state, "terminal": True,
             "accounting": {"cpu_core_seconds": 1, "gpu_device_seconds": 0, "final": final}}})
     attempt.refresh_from_db()
@@ -153,10 +153,11 @@ def test_recovered_outputs_reopen_failed_workflow(workflow_broker, django_captur
     assert services.advance(run)["state"] == "failed"
     Attempt.objects.filter(id=attempt.id).update(collection_pending=True, next_poll_at=timezone.now())
     lease = core.lease_work(context.worker)["lease"]
+    publish_output(lease, "summary.json", b"{}")
     with django_capture_on_commit_callbacks(execute=True):
         core.report(context.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
             "outcome": "observed", "native_identity": attempt.native_identity, "observation": attempt.observation,
-            "collection_state": "complete", "artifacts": {"summary.json": base64.b64encode(b"{}").decode()}})
+            "collection_state": "complete"})
     run.refresh_from_db()
     assert run.state == "running"
     services.before_lease(context.worker)

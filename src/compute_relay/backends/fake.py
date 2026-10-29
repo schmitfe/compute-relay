@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Mapping, Sequence
+from typing import Mapping
 from uuid import UUID
 from compute_relay.remote.protocol import STATUS_BATCH_SIZE
+from compute_relay.transfer import CHUNK_BYTES
 
 from .preparation import (BackendError, canonical_json_bytes, connection_revision_sha256,
                           management_protocol_supported, sha256, verify_package)
 
 
 class FakeBackend:
+    supports_live_logs = True
+
     def __init__(self, connection: dict):
         self.connection = connection
         self.directory = Path(connection.get("state_directory", "/tmp/compute-relay-fake"))
@@ -116,13 +120,36 @@ class FakeBackend:
         self._save(native_identity["attempt_id"], record)
         return {"outcome": "cancel_requested", "simulation": True}
 
-    async def collect(self, native_identity: dict, outputs: Sequence[str] = (), *, manifest: dict) -> dict:
-        record = self._owned(native_identity, manifest)
-        if set(outputs) - set(record["manifest"]["request"]["outputs"]):
-            raise BackendError("Undeclared simulated output")
-        metrics = canonical_json_bytes({"simulation": True, "attempt_id": native_identity["attempt_id"], "executed_uploaded_code": False})
-        return {"stdout": "Simulated Slurm job; uploaded code was not executed.\n", "stderr": "",
-                "artifacts": {path: metrics for path in outputs}, "simulation": True}
+    def _output(self, native, manifest):
+        self._owned(native, manifest)
+        return canonical_json_bytes({"simulation": True, "attempt_id": native["attempt_id"], "executed_uploaded_code": False})
+
+    async def output_manifest(self, native, *, manifest):
+        data = self._output(native, manifest)
+        digest = sha256(data)
+        return {"files": [{"path": path, "size_bytes": len(data), "sha256": digest, "version": digest}
+            for path in manifest["request"]["outputs"]], "missing": []}
+
+    async def output_chunk(self, native, *, manifest, path, offset, version):
+        data = self._output(native, manifest)
+        if (path not in manifest["request"]["outputs"] or type(offset) is not int
+                or not 0 <= offset <= len(data) or version != sha256(data)):
+            raise BackendError("Invalid simulated output range")
+        return {"offset": offset, "content_base64": base64.b64encode(data[offset:offset + CHUNK_BYTES]).decode("ascii")}
+
+    async def read_logs(self, native, *, manifest, cursors):
+        self._owned(native, manifest)
+        data = b"Simulated Slurm job; uploaded code was not executed.\n"
+        file_id = native["attempt_id"] + ":stdout"
+        state = cursors.get("stdout", {})
+        cursor = state.get("cursor", 0)
+        if type(cursor) is not int or not 0 <= cursor <= 2**53 - 1:
+            raise BackendError("Invalid simulated log cursor")
+        reset = state.get("file_id") != file_id or cursor > len(data)
+        start = 0 if reset else cursor
+        return {"stdout": {"cursor": start, "next_cursor": len(data), "size_bytes": len(data),
+            "file_id": file_id, "reset": reset, "truncated": False,
+            "content_base64": base64.b64encode(data[start:]).decode("ascii")}}
 
     async def discover(self) -> dict:
         return {"simulation": True, "partitions": ["debug"], "authorization": "simulated only",

@@ -52,7 +52,7 @@ def test_terminal_output_failure_keeps_final_accounting(configured):
         c.backend.output_failure = True
         await c.worker.execute(c.lease)
         report = c.control.calls[-1][2]
-        assert report["observation"]["accounting"]["final"] and report["artifacts"] == {}
+        assert report["observation"]["accounting"]["final"] and "artifacts" not in report
         assert report["error_code"] == "OUTPUT_COLLECTION_FAILED" and "private" not in str(report)
     asyncio.run(scenario())
 
@@ -209,7 +209,7 @@ def test_async_environment_terminal_hook_finalizes_bound_metadata_and_collects_o
     report = c.control.calls[-1][2]
     assert report["extension_data"]["environments"] == {"environment_finalization": {
         "verified": True, "spec_sha256": context["spec_sha256"]}, "generation": 4}
-    assert report["observation"]["accounting"]["final"] is True and report["stdout"] == "synthetic result"
+    assert report["observation"]["accounting"]["final"] is True and base64.b64decode(report["log_chunks"]["stdout"]["content_base64"]) == b"synthetic result"
     assert calls == [(REMOTE_SOURCE, {"operation": "finalize_environment", "config": {"remote_root": "/trusted/project/jobs"},
         "native_identity": c.lease["native_identity"], "build_id": context["build_id"], "spec_sha256": "a" * 64})]
 
@@ -232,7 +232,7 @@ def test_async_environment_finalization_failure_preserves_core_accounting_and_ou
         monkeypatch.setattr(extensions, "worker_after_observation", failed_hook)
     asyncio.run(c.worker.execute(c.lease))
     report = c.control.calls[-1][2]
-    assert report["observation"]["accounting"]["final"] is True and report["stdout"] == "synthetic result"
+    assert report["observation"]["accounting"]["final"] is True and base64.b64decode(report["log_chunks"]["stdout"]["content_base64"]) == b"synthetic result"
     if failure == "hook-failure":
         assert report["extension_data"] == {"environments": {"error": "FINALIZATION_UNAVAILABLE"}}
     else:
@@ -268,7 +268,7 @@ def test_disabled_async_terminal_hook_never_imports_extension_and_still_collects
     monkeypatch.setattr(extensions, "import_module", lambda *a: pytest.fail("Disabled extension was imported"))
     asyncio.run(c.worker.execute(c.lease))
     report = c.control.calls[-1][2]
-    assert "extension_data" not in report and report["stdout"] == "synthetic result"
+    assert "extension_data" not in report and base64.b64decode(report["log_chunks"]["stdout"]["content_base64"]) == b"synthetic result"
     assert report["observation"]["accounting"]["final"] is True
 
 
@@ -504,10 +504,10 @@ def test_completed_batch_item_stops_renewing_while_other_items_collect(configure
                     reported.add(attempt)
                 return await super().request(method, path, body)
         class SlowCollection(Backend):
-            async def collect(self, native, outputs, *, manifest):
+            async def output_manifest(self, native, *, manifest):
                 if native["job_id"] == "2":
                     await asyncio.sleep(.06)
-                return await super().collect(native, outputs, manifest=manifest)
+                return await super().output_manifest(native, manifest=manifest)
         c.worker.client = RenewalControl()
         c.worker.backend_factory = lambda _: SlowCollection()
         monkeypatch.setattr(lease_module, "RENEWAL_INTERVAL_SECONDS", .01)
@@ -549,9 +549,9 @@ def test_new_cancellation_lease_survives_older_batch_cleanup(configured):
             async def observe(self, items):
                 return {first["attempt_id"]: {"state": "running", "terminal": False},
                     second["attempt_id"]: (await super().observe(items))[second["attempt_id"]]}
-            async def collect(self, native, outputs, *, manifest):
+            async def output_manifest(self, native, *, manifest):
                 await release_second.wait()
-                return await super().collect(native, outputs, manifest=manifest)
+                return await super().output_manifest(native, manifest=manifest)
             async def cancel(self, native, *, manifest):
                 cancel_started.set()
                 await release_cancel.wait()

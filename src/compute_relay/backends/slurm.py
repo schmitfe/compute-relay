@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import re
-from typing import Mapping, Sequence
+from typing import Mapping
 from uuid import UUID
 from compute_relay.transfer import FileReference
 
@@ -15,7 +15,7 @@ from compute_relay.remote.protocol import STATUS_BATCH_SIZE
 from .discovery import parse_discovery
 from .preparation import (
     BackendError, canonical_json_bytes, connection_revision_sha256, helper_source,
-    relative_path, sha256, verify_package, management_protocol_supported, JOB_PROTOCOL,
+    sha256, verify_package, management_protocol_supported, JOB_PROTOCOL,
 )
 
 
@@ -127,7 +127,6 @@ def parse_observation(native_identity: dict, queue: dict, accounting: dict, expe
 
 
 class SlurmBackend:
-    supports_file_transfer = True
     supports_live_logs = True
 
     def __init__(self, connection: dict, transport=None):
@@ -214,13 +213,6 @@ class SlurmBackend:
             return {"outcome": outcome if outcome in {"cancel_requested", "already_terminal", "identity_mismatch", "unknown"} else "unknown"}
         except TransportError:
             return {"outcome": "unknown"}
-
-    async def collect(self, native_identity: dict, outputs: Sequence[str] = (), *, manifest: dict) -> dict:
-        for path in outputs:
-            relative_path(path)
-        response = await self._call("collect", native_identity=native_identity, outputs=list(outputs), **self._management(manifest))
-        artifacts = {path: base64.b64decode(data, validate=True) for path, data in response.pop("artifacts_base64", {}).items()}
-        return {**response, "artifacts": artifacts}
 
     async def stage_input(self, attempt_id, manifest, path, **chunk):
         self._verify_binding(manifest)

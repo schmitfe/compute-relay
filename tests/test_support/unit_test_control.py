@@ -95,3 +95,26 @@ def submit_receipt(broker, attempt, lease):
     next_lease = services.lease_work(broker.worker)["lease"]
     assert next_lease["operation"] == "observe"
     return native, next_lease
+
+
+def publish_output(lease, path, content):
+    """Publish synthetic bytes through the ordinary fenced worker transfer API."""
+    import base64
+    import hashlib
+    import json
+    from django.test import Client
+    from compute_relay.transfer import CHUNK_BYTES
+    client = Client(HTTP_AUTHORIZATION="Bearer synthetic-worker-token")
+    endpoint = f"/internal/v1/attempts/{lease['attempt_id']}/output-chunk"
+    common = {"lease_id": lease["id"], "generation": lease["generation"], "path": path}
+    def send(body):
+        response = client.post(endpoint, data=json.dumps({**common, **body}), content_type="application/json")
+        assert response.status_code == 200, response.content
+        return response.json()
+    reply = send({"sha256": hashlib.sha256(content).hexdigest(), "size_bytes": len(content)})
+    while not reply["complete"]:
+        offset = reply["offset"]
+        chunk = content[offset:offset + CHUNK_BYTES]
+        reply = send({"transfer_id": reply["transfer_id"], "offset": offset,
+            "content_base64": base64.b64encode(chunk).decode("ascii"), "finish": offset + len(chunk) == len(content)})
+    return reply

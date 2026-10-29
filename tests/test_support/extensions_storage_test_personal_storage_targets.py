@@ -12,8 +12,8 @@ from compute_relay.extensions.storage.models import StorageTargetRegistration
 def personal(resources):
     resources.profile["storage_roots"] = []
     resources.worker.profiles = [resources.profile]
-    resources.worker.connector_features = ["personal_setup_v1", "personal_folders_v1"]
-    resources.worker.save(update_fields=["profiles", "connector_features"])
+    resources.worker.setup_ready = True
+    resources.worker.save(update_fields=["profiles", "setup_ready"])
     registration = ClusterRegistration.objects.create(owner=resources.owner, name="Personal storage cluster",
         host="storage.invalid", remote_user="researcher", connection=resources.connection)
     ConnectorEnrollment.objects.create(registration=registration, worker=resources.worker, setup_revision=1,

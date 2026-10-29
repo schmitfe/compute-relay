@@ -150,9 +150,7 @@ separate optional extension work.
 
 The skill now defines a deliverable, core experiments, required validation,
 resource/execution limits, diagnostic allowance and stopping rule before
-substantive compute. All delegates share the same plan and counters. Read the
-[planning comparison](references/investigation-planning.md) for the research and
-skill patterns behind these rules. Scope completion and budget exhaustion are
+substantive compute. All delegates share the same plan and counters. See [investigation guidance](investigations.md) for the rationale and limits. Scope completion and budget exhaustion are
 separate decisions; reporting inconclusive is an explicit valid outcome.
 
 Shared guidance is discoverable through MCP resources and get_compute_guide.

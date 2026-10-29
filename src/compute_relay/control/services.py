@@ -17,8 +17,8 @@ from compute_relay.domain.lifecycle import terminal_observation, validate_report
 from .auth import human_permission, require_connection, connection_allowed, require_credential_actor
 from .errors import BrokerError
 from .gpu_permissions import gpu_request_allowed
-from .models import (ApprovalDecision, Artifact, Attempt, AuditEvent, Blob, Connection,
-                     Environment, ExecutionRequest, Grant, IdempotencyRecord, Job,
+from .models import (ApprovalDecision, Attempt, Connection,
+                     ExecutionRequest, Grant, IdempotencyRecord, Job,
                      JobFile, LedgerEntry, Project, ProjectCredential, WorkerReport, User,
                      WorkerIdentity)
 from .storage import read_blob, store_blob
@@ -711,7 +711,7 @@ def _settle(attempt, cpu, gpu, evidence, *, release=False):
 
 def _validate_report_fields(data):
     if (not isinstance(data, dict) or not isinstance(data.get("error_code", ""), str)
-            or not isinstance(data.get("artifacts", {}), dict)
+            or "artifacts" in data
             or not isinstance(data.get("native_identity", {}), (dict, type(None)))):
         raise BrokerError("INVALID_REPORT", "Invalid worker report fields.")
     observation = data.get("observation", {})
@@ -742,33 +742,6 @@ def report(worker, attempt_id, data):
     if not isinstance(extension_data, dict) or len(rfc8785.dumps(extension_data)) > 65536:
         raise BrokerError("EXTENSION_CONTEXT_LIMIT", "Extension report metadata exceeds its limit.")
     payload_hash = digest(data)
-    # Check scope before storing any result bytes. Artifact writes have separate quota transactions.
-    with transaction.atomic():
-        replay = _report_replay(worker, attempt_id, data, payload_hash)
-        if replay is not None:
-            return replay
-        attempt = checked_lease(worker, attempt_id, data)
-        permitted = set(attempt.job.request["outputs"])
-        project = attempt.job.project
-    artifacts = {}
-    total = 0
-    storage_failed = False
-    for path, encoded in data.get("artifacts", {}).items():
-        relative_path(path)
-        if path not in permitted:
-            raise BrokerError("ARTIFACT_DENIED", "Output was not declared in the approved request.", 403)
-        content = base64.b64decode(encoded, validate=True)
-        total += len(content)
-        if total > 10 * 1024 * 1024:
-            raise BrokerError("ARTIFACT_LIMIT", "Collected outputs exceed the report limit.", 413)
-        try:
-            artifacts[path] = store_blob(project, content, maximum=10 * 1024 * 1024)
-        except BrokerError as exc:
-            if exc.code not in {"STORAGE_QUOTA", "STORAGE_UNAVAILABLE", "OBJECT_INTEGRITY", "UPLOAD_LIMIT", "UPLOAD_BUSY"}:
-                raise
-            storage_failed = True
-        except OSError:
-            storage_failed = True
     with transaction.atomic():
         replay = _report_replay(worker, attempt_id, data, payload_hash)
         if replay is not None:
@@ -838,28 +811,16 @@ def report(worker, attempt_id, data):
             attempt.collection_state = data["collection_state"]
             attempt.collection_pending = False
             if attempt.collection_state == "complete":
-                if not storage_failed:
-                    attempt.collection_failures = 0
+                attempt.collection_failures = 0
             else:
                 attempt.collection_failures += 1
                 attempt.collection_pending = attempt.collection_failures < 3
                 if attempt.collection_pending:
                     attempt.collection_state = "retry_pending"
-            if attempt.collection_state == "complete" and attempt.error_code in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_STORAGE_UNAVAILABLE", "OUTPUT_MISSING"}:
+            if attempt.collection_state == "complete" and attempt.error_code in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_MISSING"}:
                 attempt.error_code = ""
-        for path, blob in artifacts.items():
-            existing, created = Artifact.objects.get_or_create(attempt=attempt, path=path, defaults={"blob": blob})
-            if not created and existing.blob_id != blob.id:
-                raise BrokerError("ARTIFACT_CHANGED", "Final artifact bytes changed.", 409)
         if attempt.error_code != "OBSERVED_OVERAGE" and outcome not in {"cancel_unknown", "cancel_identity_mismatch"}:
             attempt.error_code = data.get("error_code", attempt.error_code)[:80]
-        if storage_failed:
-            if attempt.error_code != "OBSERVED_OVERAGE":
-                attempt.error_code = "OUTPUT_STORAGE_UNAVAILABLE"
-            if data.get("collection_state") != "failed":
-                attempt.collection_failures += 1
-            attempt.collection_pending = attempt.collection_failures < 3
-            attempt.collection_state = "retry_pending" if attempt.collection_pending else "failed"
         attempt.lease_expires_at = None
         delay = 10 if attempt.state == "submission_uncertain" or attempt.accounting_state == "settlement_pending" else 2
         if outcome == "observed" and attempt.state in {"queued", "running"}:

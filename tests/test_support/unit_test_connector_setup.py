@@ -21,7 +21,7 @@ def personal():
         "profile_revision": 1, "ssh": {"mode": "mfa", "control_path": "/private/s", "known_hosts": "/private/known_hosts"}}
     metadata = profile_metadata("personal-test", protected)
     worker = WorkerIdentity.objects.create(owner=owner, name="Personal", token_hash=token_hash(token),
-        profiles=[metadata], connector_features=["personal_setup_v1", "personal_folders_v1"])
+        profiles=[metadata], setup_ready=True)
     public = resolve_connection({"backend": "slurm", "credential_profile": "personal-test",
         "ssh": {"host": "cluster.example", "user": "researcher", "port": 22}, "remote_root": "/home/researcher/jobs"},
         {"personal-test": protected})[1]

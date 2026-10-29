@@ -1,13 +1,9 @@
 """Project/key simplification keeps explicit grants and secrets at their boundaries."""
 
 from html.parser import HTMLParser
-from importlib import import_module
-from types import SimpleNamespace
 
 import pytest
 
-from django.apps import apps
-from django.db import connection
 
 from test_support.unit_test_management import form_post, human, issued, key_data, management
 from test_support.unit_test_management import SCOPES
@@ -246,16 +242,3 @@ def test_key_creation_handoff_keeps_secret_out_of_command_and_persistence(manage
     assert "Paste the key into the hidden terminal prompt" in response.content.decode()
     assert "Keep it out of chat, command arguments and source files" in response.content.decode()
     assert secret.encode() not in human(context.owner).get(f"/projects/{context.project.id}/").content
-
-
-def test_migration_normalizes_only_the_removed_equivalent_key_choice(management):
-    context = management
-    _, review = issued(form_post(human(context.owner), f"/projects/{context.project.id}/keys/new/",
-                                key_data(context, execution_mode="approval_required")))
-    ProjectCredential.objects.filter(id=context.credential.id).update(execution_mode="automatic")
-    migration = import_module("compute_relay.control.migrations.0005_simplify_key_execution_mode")
-    migration.follow_project_policy(apps, SimpleNamespace(connection=connection))
-    context.credential.refresh_from_db()
-    review.refresh_from_db()
-    assert context.credential.execution_mode == "inherit"
-    assert review.execution_mode == "approval_required"

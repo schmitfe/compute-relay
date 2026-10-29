@@ -20,11 +20,11 @@ from jsonschema.exceptions import ValidationError as SchemaValidationError
 
 from compute_relay.domain.validation import strict_json, relative_path
 from . import services
-from .auth import human_permission, project_credential, worker_identity, require_connection, connection_allowed
+from .auth import human_permission, project_credential, worker_identity, require_connection
 from compute_relay.remote.protocol import STATUS_BATCH_SIZE
 from .errors import BrokerError
 from .models import Artifact, Attempt, IdempotencyRecord, Job, Project
-from .storage import read_blob, store_blob
+from .storage import read_blob
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +398,7 @@ def renew_lease(request, attempt_id):
 
 @boundary("POST")
 def report(request, attempt_id):
-    return services.report(worker_identity(request), attempt_id, body(request, maximum=16 * 1024 * 1024))
+    return services.report(worker_identity(request), attempt_id, body(request))
 
 
 @csrf_protect

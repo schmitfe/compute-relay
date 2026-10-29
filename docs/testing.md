@@ -43,12 +43,12 @@ settlement correctness must not depend solely on a process-local mutex.
 ## CI
 
 CI runs Python 3.12/3.13 on Linux with uv 0.13.6, a pinned setup action and a
-dependency cache keyed by the lock. Both Python workflows install the test extra
+dependency cache keyed by the lock. The runtime workflow installs the test extra
 with `uv sync --locked --extra test` and the committed `uv.lock`; a stale lock
 fails the build. The runtime workflow checks SQLite and contracts, verifies
-bundled migrations, exercises synthetic
-workflows, and performs clean-wheel acceptance. Planning contracts also run
-independently with the same lock. The disposable application images install
+bundled migrations, exercises synthetic workflows, and performs clean-wheel
+acceptance. Planning contracts are collected by the same pytest run. The
+disposable application images install
 locked runtime dependencies without test extras or an editable source install.
 
 The manual `Optional disposable Slurm acceptance` workflow builds a synthetic
@@ -70,4 +70,6 @@ The separate [investigation acceptance](investigations.md#verification) runs one
 reviewed job on the disposable Slurm fixture, closes unused packages/reviews,
 and exercises the installed export CLI, resume, hashes and shared accounting.
 
-Schema migrations preserving job and budget history are covered by the suite.
+Fresh database creation is checked with core only and with the bundled modules.
+Historical alpha schema migrations are unsupported; same-version restart and
+crash recovery still preserve job and budget history.

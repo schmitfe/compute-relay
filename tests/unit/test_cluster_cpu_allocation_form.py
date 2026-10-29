@@ -1,7 +1,6 @@
 """Human CPU allocation settings keep saved discovery separate from authority."""
 
 from copy import deepcopy
-from html.parser import HTMLParser
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -101,11 +100,10 @@ def test_retained_minimum_floor_is_rounded_up_before_checking_the_cpu_ceiling(sn
     assert fits.site_profile()["allocated_cpus"] == 3 and fits.site_profile()["cpu_allocation_quantum"] == 2
 
 
-def rendered(form, *, cpu_allocation_ready=True):
+def rendered(form):
     return render_to_string("broker/cluster_configuration.html", {
         "form": form, "cluster": SimpleNamespace(id=uuid4(), name="Synthetic cluster", configuration_confirmed=True,
             revision_sha256="a" * 64), "connector_ready": True, "remote_root": "/synthetic/jobs",
-        "cpu_allocation_ready": cpu_allocation_ready,
     })
 
 
@@ -125,34 +123,3 @@ def test_configuration_template_shows_unknown_candidate_without_claiming_verific
     text = rendered(configuration.ClusterConfigurationForm(snapshot=snapshot))
     assert "Saved discovery could not establish a CPU allocation unit" in text
     assert "Resource visibility alone does not verify allocation rounding" in text
-
-
-@pytest.mark.parametrize("ready", [False, True])
-def test_cpu_unit_editing_requires_updated_connector_without_disabling_other_settings(snapshot, allocation_candidate, ready):
-    allocation_candidate()
-    text = rendered(configuration.ClusterConfigurationForm(snapshot=snapshot), cpu_allocation_ready=ready)
-
-    class Inputs(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.fieldsets = []
-            self.disabled = {}
-
-        def handle_starttag(self, tag, attributes):
-            attrs = dict(attributes)
-            if tag == "fieldset":
-                self.fieldsets.append("disabled" in attrs)
-            if tag == "input" and attrs.get("name"):
-                self.disabled[attrs["name"]] = "disabled" in attrs or any(self.fieldsets)
-
-        def handle_endtag(self, tag):
-            if tag == "fieldset":
-                self.fieldsets.pop()
-
-    inputs = Inputs()
-    inputs.feed(text)
-    assert inputs.disabled["cpu_allocation_quantum"] is (not ready)
-    assert inputs.disabled["maximum_cpus"] is False
-    assert inputs.disabled["allow_automatic_execution"] is False
-    assert "Saved discovery suggests a CPU allocation unit" in text
-    assert ("Restart this cluster's personal connector" in text) is (not ready)

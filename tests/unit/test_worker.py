@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
 
+from test_support.unit_test_async_worker import synthetic_logs
+
 from compute_relay.worker.client import ControlError, JsonClient, strict_json
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.runner import Worker
@@ -32,6 +34,7 @@ class FakeControl:
 
 
 class BackendSpy:
+    supports_live_logs = True
     def __init__(self):
         self.submitted = 0
         self.reconciled = 0
@@ -51,8 +54,11 @@ class BackendSpy:
         return {item["native_identity"]["attempt_id"]: {"state": "completed", "terminal": True,
                 "accounting": {"cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": True}} for item in items}
 
-    async def collect(self, native, outputs, *, manifest):
-        return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}
+    async def output_manifest(self, native, *, manifest):
+        return {"files": [], "missing": []}
+
+    async def read_logs(self, native, *, manifest, cursors):
+        return synthetic_logs()
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -134,16 +140,16 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "observed")
         self.assertTrue(report["observation"]["accounting"]["final"])
-        self.assertEqual(report["stdout"], "synthetic result")
+        self.assertEqual(base64.b64decode(report["log_chunks"]["stdout"]["content_base64"]), b"synthetic result")
 
     async def test_unauthorized_artifact_is_not_reported(self):
         self.lease["operation"] = "observe"
         self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
-        self.backend.collect = AsyncMock(return_value={"artifacts": {"secrets": b"no"}})
+        self.backend.output_manifest = AsyncMock(return_value={"files": [{"path": "secrets", "size_bytes": 2}]})
         await self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
         self.assertTrue(report["observation"]["accounting"]["final"])
-        self.assertEqual(report["artifacts"], {})
+        self.assertNotIn("artifacts", report)
         self.assertEqual(report["error_code"], "OUTPUT_COLLECTION_FAILED")
         self.assertNotIn("secrets", str(report))
 
@@ -154,13 +160,13 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         async def failed_collection(*args, **kwargs):
             raise OSError("sensitive path or remote diagnostic")
 
-        self.backend.collect = failed_collection
+        self.backend.output_manifest = failed_collection
         await self.worker.execute(self.lease)
         report = self.control.calls[-1][2]
         self.assertEqual(report["outcome"], "observed")
         self.assertEqual(report["observation"]["accounting"]["cpu_core_seconds"], 2)
         self.assertEqual(report["error_code"], "OUTPUT_COLLECTION_FAILED")
-        self.assertEqual(report["artifacts"], {})
+        self.assertNotIn("artifacts", report)
         self.assertNotIn("sensitive", str(report))
 
 

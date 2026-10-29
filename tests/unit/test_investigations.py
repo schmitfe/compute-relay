@@ -1,6 +1,5 @@
 """Investigation scope, accounting, recovery and verified local closeout."""
 
-import base64
 import asyncio
 from copy import deepcopy
 import json
@@ -19,7 +18,7 @@ from compute_relay.mcp.facade import ProjectFacade, create_server
 from compute_relay.worker.client import ControlError
 from compute_relay.workspace import WorkspaceClient
 from compute_relay.workspace_completion import finish
-from test_support.unit_test_control import broker, budgeted, dispatched, execution, prepared_job, submit_receipt
+from test_support.unit_test_control import publish_output, broker, budgeted, dispatched, execution, prepared_job, submit_receipt
 from test_support.unit_test_workspace import workspace
 
 
@@ -66,9 +65,9 @@ def completed(context, group):
     attach(context, group, job)
     attempt, lease = dispatched(context, job)
     native, lease = submit_receipt(context, attempt, lease)
+    publish_output(lease, "answer.json", b'{"answer":42}\n')
     core.report(context.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
         "outcome": "observed", "native_identity": native, "collection_state": "complete",
-        "artifacts": {"answer.json": base64.b64encode(b'{"answer":42}\n').decode()},
         "observation": {"state": "completed", "terminal": True,
             "accounting": {"final": True, "cpu_core_seconds": 3, "gpu_device_seconds": 0}}})
     return job, attempt

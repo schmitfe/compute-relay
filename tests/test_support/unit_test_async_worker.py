@@ -26,6 +26,7 @@ class Control:
         return {}
 
 class Backend:
+    supports_live_logs = True
     def __init__(self):
         self.submitted, self.reconciled, self.cancelled = 0, 0, 0
         self.entered, self.release = asyncio.Event(), asyncio.Event()
@@ -49,10 +50,13 @@ class Backend:
         self.cancelled += 1
         return {"outcome": "cancel_requested"}
 
-    async def collect(self, native, outputs, *, manifest):
+    async def output_manifest(self, native, *, manifest):
         if self.output_failure:
             raise OSError("private remote diagnostic")
-        return {"stdout": "synthetic result", "stderr": "", "artifacts": {}}
+        return {"files": [], "missing": []}
+
+    async def read_logs(self, native, *, manifest, cursors):
+        return synthetic_logs()
 
 @pytest.fixture
 def configured(tmp_path):
@@ -75,3 +79,10 @@ def configured(tmp_path):
         "connection_id": connection_id, "native_identity": None, "prepared": {"manifest": package["manifest"],
         "manifest_sha256": package["manifest_sha256"], "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}}
     return SimpleNamespace(worker=worker, lease=lease, control=control, backend=backend, journal=journal)
+
+
+def synthetic_logs():
+    data = b"synthetic result"
+    return {"stdout": {"cursor": 0, "next_cursor": len(data), "size_bytes": len(data),
+        "file_id": "synthetic", "reset": True, "truncated": False,
+        "content_base64": base64.b64encode(data).decode("ascii")}}

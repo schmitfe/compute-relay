@@ -11,7 +11,7 @@ from compute_relay.domain.lifecycle import replay_result, report_record, validat
 from compute_relay.worker.runner import Worker
 from compute_relay.worker.client import ControlError
 from compute_relay.worker.journal import Journal
-from test_support.unit_test_async_worker import configured
+from test_support.unit_test_async_worker import configured, synthetic_logs
 
 
 class InterruptedCollection(BaseException):
@@ -45,11 +45,11 @@ class BackendState:
         self.calls.append("observe")
         return {item["native_identity"]["attempt_id"]: deepcopy(self.observation) for item in items}
 
-    def collect(self, native, outputs, *, manifest):
-        self.calls.append("collect")
+    def output_manifest(self, native, *, manifest):
+        self.calls.append("output_manifest")
         if self.interrupt_collection:
             raise InterruptedCollection()
-        return {"stdout": "result", "stderr": "", "artifacts": {}}
+        return {"files": [], "missing": []}
 
 
 class ControlState:
@@ -77,12 +77,16 @@ class ControlState:
 
 
 class AsyncBackend:
+    supports_live_logs = True
+
+    async def read_logs(self, native, *, manifest, cursors):
+        return synthetic_logs()
     def __init__(self, state):
         self.state = state
 
     def __getattr__(self, name):
         async def call(*args, **kwargs):
-            if name == "collect":
+            if name == "output_manifest":
                 await asyncio.sleep(self.state.delay)
             return getattr(self.state, name)(*args, **kwargs)
         return call
@@ -176,7 +180,7 @@ def test_lost_final_response_replays_original_receipt_before_acquiring_work(life
     invoke(c.restart(), "poll_once")
     assert c.control.calls[0][1].endswith("/report")
     assert c.control.calls[0][2] == original
-    assert c.backend.calls == ["observe", "collect"]
+    assert c.backend.calls == ["observe", "output_manifest"]
     assert c.journal.read_report(c.lease["attempt_id"]) is None
 
 
@@ -192,7 +196,7 @@ def test_superseded_lease_rebinds_saved_terminal_result_without_scheduler_requer
     invoke(c.restart(), "execute", c.lease)
     assert reports(c)[-1]["generation"] == 2
     assert reports(c)[-1]["observation"]["accounting"]["final"] is True
-    assert c.backend.calls == ["observe", "collect"]
+    assert c.backend.calls == ["observe", "output_manifest"]
 
 
 def test_saved_accounting_survives_interrupted_collection_and_new_generation(lifecycle):
@@ -209,7 +213,7 @@ def test_saved_accounting_survives_interrupted_collection_and_new_generation(lif
     c.lease.update(id=str(uuid4()), generation=2)
     invoke(c.restart(), "execute", c.lease)
     assert reports(c)[-1]["observation"]["accounting"]["final"] is True
-    assert c.backend.calls == ["observe", "collect", "collect"]
+    assert c.backend.calls == ["observe", "output_manifest", "output_manifest"]
 
 
 def test_durable_final_report_cannot_rebind_to_different_native_identity(lifecycle):
@@ -222,7 +226,7 @@ def test_durable_final_report_cannot_rebind_to_different_native_identity(lifecyc
     c.lease.update(id=str(uuid4()), generation=2, native_identity={"job_id": "99", "attempt_id": c.lease["attempt_id"]})
     with pytest.raises(ValueError, match="Native identity changed"):
         invoke(c.restart(), "execute", c.lease)
-    assert c.backend.calls == ["observe", "collect"]
+    assert c.backend.calls == ["observe", "output_manifest"]
     assert c.journal.read_report(c.lease["attempt_id"]) is not None
 
 
@@ -286,16 +290,13 @@ def test_shared_result_validator_rejects_invalid_operation_outcome_pairs(operati
         validate_report_outcome(operation, outcome)
 
 
-def test_maximum_collected_outputs_and_escaped_logs_fit_durable_report(configured):
+def test_log_windows_and_extension_metadata_fit_durable_report(configured):
     c = configured
     management(c, "observe")
-    manifest = deepcopy(c.lease["prepared"]["manifest"])
-    manifest["request"]["outputs"] = ["result.bin"]
-    collected = Worker._serialized_collection({"stdout": "\0" * 65536, "stderr": "\0" * 65536,
-        "artifacts": {"result.bin": b"x" * (10 * 1024 * 1024)}}, manifest)
     result = {"outcome": "observed", "native_identity": c.lease["native_identity"],
         "observation": {"state": "completed", "terminal": True},
-        "extension_data": {"environments": {"diagnostic": "x" * 65000}}, **collected}
+        "extension_data": {"environments": {"diagnostic": "x" * 65000}},
+        "log_chunks": synthetic_logs(), "collection_state": "complete"}
     record = report_record(c.lease, c.lease["prepared"]["manifest_sha256"], result)
     c.journal.write_report(c.lease["attempt_id"], record)
     assert c.journal.read_report(c.lease["attempt_id"]) == record

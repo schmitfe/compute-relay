@@ -142,7 +142,7 @@ def test_worker_queues_concurrent_publications_without_serializing_remote_reads(
             await all_reading.wait()
             return {"offset": 0, "content_base64": "eA=="}
 
-        backend = SimpleNamespace(supports_file_transfer=True, output_chunk=output_chunk,
+        backend = SimpleNamespace(output_chunk=output_chunk,
             output_manifest=AsyncMock(return_value={"files": [
                 {"path": "result", "size_bytes": 1, "sha256": "a" * 64, "version": "same"}]}))
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:

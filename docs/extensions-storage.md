@@ -85,18 +85,11 @@ the filesystem's available space; it does not attribute retained files to any
 project. Separately configured project budgets remain advisory estimates and
 do not divide or reserve that physical free space.
 
-The project-ownership migration assigns an existing location only when its
-saved role bindings and historical estimate records identify exactly one
-project. Unreferenced locations and locations referenced by multiple projects
-remain unassigned and unavailable to new plans. Unassigned pending personal
-registrations also cannot be finalized. A location's owner can explicitly assign
-preserved metadata from the intended project's settings when there are no
-references to a different project. Ambiguous historical references block that
-assignment; enroll a separate location for the intended project instead. An
-assignment still requires a current worker binding before the location becomes
-usable. Migration preserves configuration, historical records and remote files;
-it does not delete, move or scan data, or
-silently choose one project for an ambiguous location.
+An unassigned location is unavailable to project plans. Its owner can assign it
+from the intended project's settings only when no bindings reference another
+project. Ambiguous references require a separate location for that project.
+Assignment still requires a current worker binding and does not delete, move
+or scan remote files.
 
 Capacity checks are **off by default**. A preserved probe setting does not make
 unassigned or stale locations usable for capacity checks. For supported protected
@@ -235,10 +228,6 @@ other projects' pending growth and external writes remain outside these
 estimates. Any future reservation integration must bind the actual write path
 to its selected target; environment builds must not charge an unrelated
 location. See the [roadmap](roadmap.md) for storage integration work.
-
-The storage upgrade removes the unused advisory reservation table. It preserves
-targets, bindings, capacity observations, manual usage estimates, compute
-accounting and the broker's artifact/upload quotas.
 
 ## Current limits
 

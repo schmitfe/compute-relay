@@ -16,7 +16,7 @@ compute-relay
 If `compute-relay` is not found, run `uv tool update-shell` and reopen the
 terminal. See [uv tool management](https://docs.astral.sh/uv/guides/tools/) for
 its installation and upgrade commands. Stop the launcher before replacing its
-installed environment, and follow the checked upgrade process below.
+installed environment, and follow the alpha fresh-setup policy below.
 
 The distribution has not been published yet. Ordinary `python -m pip install .`
 from the checkout, a repository URL, or a built wheel remains supported inside a
@@ -113,56 +113,22 @@ need separate backup. Restore into a stopped installation and reconnect before
 admitting new jobs. A stale backup can omit jobs submitted after it was taken;
 reconcile those jobs rather than starting two competing copies of the ledger.
 
-## Check an upgrade before starting it
+## Alpha updates and fresh setup
 
-Install the candidate package into a separate virtual environment, keep the
-previous package/wheel available, and stop the launcher and any separately
-started connectors. Back up the stopped state before the updated launcher can
-apply migrations. Record which package version or commit belongs to that backup.
+This development alpha supports fresh setup rather than migration from earlier
+alpha database or configuration formats. Finish or cancel outstanding jobs and
+reconcile their accounting and outputs with the existing installation first.
+Then stop the launcher and connectors, retain any results and backup you need,
+and initialize the updated package in a new private data directory. Reconnect
+clusters and create new projects and keys. Existing client workspaces must be
+initialized with those new keys. Do not mix an earlier database or connector
+state with the new installation, or erase state while submissions are uncertain.
 
-Run the candidate's offline check against the existing state directory:
-
-```sh
-compute-relay check-upgrade --data-directory /path/to/private/broker-data
-```
-
-This command takes the installation lock and opens SQLite read-only. It does
-not migrate the database, authenticate SSH, submit jobs or execute stored helper
-source. Its JSON summary counts outstanding attempts, unsupported management
-protocols, prepared jobs requiring a new revision, inputs without verified
-provenance, and old upload reservations needing inspection. Unsupported
-outstanding protocols cause a nonzero exit; diagnostic samples are bounded.
-The check examines stored protocol declarations, not current cluster health or
-the integrity of remote files.
-
-The current management bundle supports `slurm-jobs/v1` and the original
-unversioned `slurm-ssh/v1` manifest format. It verifies the original manifest
-digest and journal/native identity while using current reviewed management code.
-It never executes an archived helper supplied by a manifest or journal.
-Discovery has a separate bundle, so catalog-only changes do not change the
-execution-helper hash. A changed execution bundle still blocks a new submission
-of an old prepared package: create and review a new job revision. Existing
-submission intent must reconcile its original attempt instead of submitting a
-replacement.
-
-If the check finds an unsupported outstanding protocol, use the previous
-compatible version to drain or explicitly cancel and settle that work, then
-stop, back up and check again. Keep admission paused while doing this; pausing
-new work leaves dispatched job management eligible. A passing protocol check
-does not remove ordinary authority, budget or input-provenance checks.
-
-Earlier stored files may have no evidence of an independent upload. Such inputs
-remain unverified for new use: explicitly upload the bytes and create a new
-revision, or select an artifact the current key may read. Do not manufacture
-upload grants from hashes. Old reserved uploads without a digest/expiry require
-inspection; the automatic recovery path deliberately leaves them unchanged.
-
-For rollback, stop the candidate and restore a matching code **and** complete
-database/object-store backup together. Do not run an older binary against a
-migrated database or restore only the database while keeping a different object
-store. A backup predating cluster submissions cannot establish that those jobs
-never ran; reconcile them before reopening admission. See the
-the [test guide](testing.md) for compatibility and recovery coverage.
+A restart of the same version still preserves jobs, reservations and journals.
+The current `slurm-jobs/v1` management path verifies the original manifest,
+journal and native identity. Changes to installed helper code cannot turn a
+submission intent into a second submission; new submissions require the current
+prepared package. Stored helper source is never executed during recovery.
 
 ## Inspect and compact local metadata
 
@@ -176,7 +142,8 @@ compute-relay maintain-state --data-directory /path/to/private/broker-data \
 Add `--apply` to apply those selections. The default is inspection only; `--limit`
 accepts 1 through 1000 records per category, and the default cutoff is 30 days.
 The command uses the installation lock and does not migrate a pending schema.
-Complete the checked upgrade first if it reports that migrations are needed.
+Use the matching installation version; initialize fresh state after an
+incompatible alpha update.
 
 Draft archival selects only old core draft/prepared jobs that never had an
 execution request, are not owned by an extension, and are not live revision

@@ -140,8 +140,7 @@ It uses a disposable database, real local files, HTTP handlers and the fixed
 cluster helper with a scheduler fixture that never executes uploaded code.
 It does not establish real-network throughput or real Slurm behavior.
 
-The [recorded local acceptance](benchmarks/2026-10-27-resumable-transfers.json)
-transferred 2,147,483,665 bytes through each of the four legs, verified the final
+A local acceptance run on 2026-10-27 transferred 2,147,483,665 bytes through each of the four legs, verified the final
 checksums, and measured 122,474,955 bytes (about 117 MiB) of peak traced Python
 allocations. The elapsed time includes allocation tracing and fixture overhead
 and is not a network throughput measurement. The worker uses the one-shot SSH
