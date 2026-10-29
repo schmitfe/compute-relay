@@ -46,4 +46,4 @@ addopts = "-m 'not real_cluster and not container'"
 required-version = "==0.13.6"
 
 [tool.compute-relay.ci]
-python-versions = ["3.12", "3.13"]
+python-versions = ["3.12", "3.13", "3.14"]
