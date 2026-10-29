@@ -72,12 +72,19 @@ def target_new(request, project_id):
     if request.method == "POST" and form.is_valid():
         data = form.cleaned_data
         if form.personal:
-            registration = services.queue_personal_target(request.user, data["connection"], data["root_path"],
-                data["name"], data["roles"], data["connection_revision"], data["submission_id"], project=project)
-            return redirect(_storage_path(project, f"targets/registrations/{registration.id}/"))
-        services.register_target(request.user, data["connection"], data["root_alias"], data["name"],
+            try:
+                registration = services.queue_personal_target(request.user, data["connection"], data["root_path"],
+                    data["name"], data["roles"], data["connection_revision"], data["submission_id"], project=project)
+            except BrokerError as error:
+                if error.code not in {"CONNECTOR_NOT_READY", "REVISION_CHANGED", "CONFIGURATION_PENDING"}:
+                    raise
+                form.add_error(None, error.message)
+            else:
+                return redirect(_storage_path(project, f"targets/registrations/{registration.id}/"))
+        else:
+            services.register_target(request.user, data["connection"], data["root_alias"], data["name"],
                                  project=project, pool=data.get("pool"), enable_probes=data["enable_probes"])
-        return redirect(_storage_path(project))
+            return redirect(_storage_path(project))
     return render(request, "broker_storage/target_form.html", {"project": project, "form": form, "cluster": form.selected_connection,
         "clusters": _setup_connections(request.user, project)})
 
@@ -153,7 +160,14 @@ def target_registration(request, registration_id, project_id):
         return redirect(_storage_path(project))
     task = registration.task
     expired = task.expires_at <= timezone.now() and not registration.target_id
+    directory_error = {
+        "ROOT_NOT_WRITABLE": "Your cluster account cannot write to this directory. Choose a writable location or ask your cluster administrator for access.",
+        "DIRECTORY_CONFLICT": "A file or symbolic link already uses this folder name. Choose a different directory; existing contents have been preserved.",
+        "NOT_A_DIRECTORY": "Part of this path is a file. Choose a directory path instead.",
+        "DIRECTORY_CHANGED": "The directory changed during the check. Review the path and try again.",
+    }.get(task.error_code, "The directory could not be checked. Confirm that the connector is running and your cluster account has access, then try again.")
     return render(request, "broker_storage/target_registration.html", {"project": project, "registration": registration,
+        "directory_error": directory_error,
         "task": task, "expired": expired, "waiting": not expired and task.state in {"queued", "running"},
         "resolved_root": services.confirmed_directory_root(registration) if task.state == "succeeded" else None,
         "retry_url": _storage_path(project, "targets/new/?") + urlencode({"connection": str(registration.connection_id),

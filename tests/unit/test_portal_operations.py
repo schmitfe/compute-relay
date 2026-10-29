@@ -86,6 +86,37 @@ def test_review_filter_and_invalid_navigation_are_safe(management):
     assert invalid.context['job_page'].number == 1
 
 
+def test_job_overview_shows_cluster_native_number_and_live_counts(management):
+    job, attempt = admitted(management)
+    attempt.connection.backend = 'slurm'
+    attempt.connection.name = 'Research cluster'
+    attempt.connection.save(update_fields=['backend', 'name'])
+    Attempt.objects.filter(id=attempt.id).update(state='running', native_identity={'job_id': '321'})
+    Job.objects.bulk_create([Job(project=management.project, request={'name': 'draft ' + str(i)}) for i in range(55)])
+    browser = human(management.owner)
+    for url in ('/', f'/projects/{management.project.id}/'):
+        response = browser.get(url, {'job_state': 'unresolved'})
+        assert b'Research cluster' in response.content and b'Slurm #321' in response.content
+        assert f'href="/clusters/{attempt.connection_id}/"'.encode() in response.content
+        assert f'<small>{job.id}</small>'.encode() not in response.content
+        assert response.context['job_counts'] == [{'label': 'Draft', 'count': 55}, {'label': 'Running', 'count': 1}]
+        assert b'onchange="this.form.requestSubmit()"' in response.content
+        assert b'<noscript><button>Show jobs</button></noscript>' in response.content
+    Attempt.objects.filter(id=attempt.id).update(state='queued', native_identity={'job_id': '321'})
+    fragment = browser.get('/ui/live/dashboard/', {'job_state': 'unresolved'}).json()['fragments']['live-job-list']
+    assert 'Queued: <strong>1</strong>' in fragment and 'Draft: <strong>55</strong>' in fragment
+    assert 'Slurm #321' in fragment
+
+
+def test_new_execution_does_not_show_a_previous_slurm_number(management):
+    job, attempt = admitted(management)
+    Attempt.objects.filter(id=attempt.id).update(state='succeeded', native_identity={'job_id': 'old-321'})
+    services.request_execution(job, management.credential)
+    response = human(management.owner).get('/')
+    assert b'old-321' not in response.content
+    assert b'Awaiting approval' in response.content
+
+
 def test_stale_review_preserves_escaped_comment_only_for_matching_request(management):
     job = prepared(management)
     execution, _ = services.request_execution(job, management.credential)

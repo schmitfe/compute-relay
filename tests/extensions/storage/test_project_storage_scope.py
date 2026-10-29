@@ -178,7 +178,7 @@ def test_personal_registration_and_exact_receipt_belong_to_one_project(resources
     make_personal(resources)
     registration = queue(resources)
     assert registration.project_id == resources.project.id
-    assert registration.task.request == {"path": "/scratch/researcher", "name": "project"}
+    assert registration.task.request == {"path": "/scratch/researcher", "name": "project", "parents": True}
     assert queue(resources, submission_id=registration.id).id == registration.id
     with pytest.raises(BrokerError) as denied:
         queue(resources, project=other_project(resources), submission_id=registration.id)

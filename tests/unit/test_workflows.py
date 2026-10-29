@@ -71,6 +71,33 @@ def test_dag_is_prepared_without_creating_attempts(workflow_broker):
     assert all(node.job_id is None for node in run.nodes.all())
 
 
+def test_diamond_graph_joins_only_after_both_branches_and_binds_both_outputs(workflow_broker):
+    context = workflow_broker
+    budgeted(context)
+    request = graph(context)['nodes'][0]['request']
+    run = start(context, {'name': 'split-merge', 'nodes': [
+        {'key': 'start', 'request': deepcopy(request)},
+        {'key': 'left', 'request': deepcopy(request), 'depends_on': ['start']},
+        {'key': 'right', 'request': deepcopy(request), 'depends_on': ['start']},
+        {'key': 'join', 'request': deepcopy(request), 'depends_on': ['left', 'right'], 'inputs': [
+            {'node': 'left', 'output': 'summary.json', 'path': 'inputs/left.json'},
+            {'node': 'right', 'output': 'summary.json', 'path': 'inputs/right.json'}]},
+    ]})
+    services.advance(run)
+    finish(context, run.nodes.get(key='start'))
+    services.advance(run)
+    finish(context, run.nodes.get(key='left'))
+    services.advance(run)
+    assert run.nodes.get(key='join').job_id is None
+    finish(context, run.nodes.get(key='right'))
+    services.advance(run)
+    join = run.nodes.get(key='join')
+    assert {edge['path'] for edge in join.resolved_inputs} == {'inputs/left.json', 'inputs/right.json'}
+    assert len({edge['producer_attempt_id'] for edge in join.resolved_inputs}) == 2
+    finish(context, join)
+    assert services.advance(run)['state'] == 'succeeded'
+
+
 @pytest.mark.parametrize("change", ["cycle", "unknown", "code_collision", "undeclared_output", "duplicate", "cross_cluster"])
 def test_invalid_graph_never_creates_a_revision(workflow_broker, change):
     document = graph(workflow_broker)

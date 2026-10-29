@@ -18,9 +18,9 @@ class StorageTargetForm(forms.Form):
     connection = forms.ModelChoiceField(queryset=Connection.objects.none(), label="Cluster")
     root_alias = forms.ChoiceField(choices=[], required=False, label="Operator-approved directory")
     root_path = forms.CharField(max_length=240, required=False, label="Directory on this cluster",
-        help_text="Choose a writable dedicated directory. The next step checks it and creates only its final component if missing; its parent must already exist. No existing contents or permissions are changed.")
+        help_text="Choose a dedicated directory. Missing folders in this path will be created using your cluster account. Existing contents and permissions are preserved.")
     roles = forms.MultipleChoiceField(choices=[(role, role.title()) for role in ROLES], initial=list(ROLES),
-        required=False, widget=forms.CheckboxSelectMultiple, label="Planning uses")
+        required=False, widget=forms.CheckboxSelectMultiple, label="Use this location for")
     connection_revision = forms.CharField(required=False, widget=forms.HiddenInput)
     submission_id = forms.UUIDField(initial=uuid4, required=False, widget=forms.HiddenInput)
     pool = forms.ModelChoiceField(queryset=StorageCapacityPool.objects.none(), required=False, label="Shared capacity pool",
@@ -33,6 +33,11 @@ class StorageTargetForm(forms.Form):
         self.project = project
         self.fields["connection"].queryset = project.connections.filter(owner=user, enabled=True, archived=False)
         value = self.data.get("connection") if self.is_bound else self.initial.get("connection")
+        if not self.is_bound and not value:
+            choices = list(self.fields["connection"].queryset[:2])
+            if len(choices) == 1:
+                value = choices[0].id
+                self.initial["connection"] = value
         self.selected_connection = None
         self.personal = False
         try:
@@ -40,6 +45,7 @@ class StorageTargetForm(forms.Form):
         except (ValueError, TypeError, AttributeError):
             pass
         if self.selected_connection:
+            self.fields["connection"].widget = forms.HiddenInput()
             from compute_relay.control.connector_setup import personal
             self.personal = personal(self.selected_connection)
             roots = protected_roots(self.selected_connection)
@@ -51,6 +57,8 @@ class StorageTargetForm(forms.Form):
             self.fields["root_alias"].widget = forms.HiddenInput()
             self.fields["pool"].widget = forms.HiddenInput()
             self.fields["enable_probes"].disabled = True
+            self.fields["enable_probes"].widget = forms.HiddenInput()
+            self.initial["enable_probes"] = False
             self.fields["enable_probes"].help_text = "Unavailable for a personal directory selection. Advisory project estimates work without probes; filesystem identity, free capacity and native quota remain unknown."
         else:
             for field in ("root_path", "roles", "connection_revision", "submission_id"):
