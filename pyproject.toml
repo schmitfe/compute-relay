@@ -41,3 +41,6 @@ markers = [
   "container: requires an isolated Docker test stack",
 ]
 addopts = "-m 'not real_cluster and not container'"
+
+[tool.uv]
+required-version = "==0.13.6"

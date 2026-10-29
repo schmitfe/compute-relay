@@ -2,16 +2,16 @@
 
 Default checks use temporary directories and synthetic identities. They do
 not connect to an institutional cluster. Run from a source checkout with Python
-3.12 or 3.13:
+3.12 or 3.13 and [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```sh
-python -m pip install -c requirements.lock '.[test]'
-python -m pytest -q
-python tools/check_contracts.py
-python -m unittest discover -s tests/contracts -v
-python tools/local_smoke.py
-python tools/local_smoke.py --mode budgeted
-python tools/package_smoke.py
+uv sync --locked --extra test --python 3.13
+uv run --locked --extra test python -m pytest -q
+uv run --locked --extra test python tools/check_contracts.py
+uv run --locked --extra test python -m unittest discover -s tests/contracts -v
+uv run --locked --extra test python tools/local_smoke.py
+uv run --locked --extra test python tools/local_smoke.py --mode budgeted
+uv run --locked --extra test python tools/package_smoke.py
 ```
 
 ## Layers and evidence
@@ -42,10 +42,14 @@ settlement correctness must not depend solely on a process-local mutex.
 
 ## CI
 
-CI runs Python 3.12/3.13 on Linux. The runtime workflow installs the test extra,
-checks SQLite and contracts, verifies bundled migrations, exercises synthetic
+CI runs Python 3.12/3.13 on Linux with uv 0.13.6, a pinned setup action and a
+dependency cache keyed by the lock. Both Python workflows install the test extra
+with `uv sync --locked --extra test` and the committed `uv.lock`; a stale lock
+fails the build. The runtime workflow checks SQLite and contracts, verifies
+bundled migrations, exercises synthetic
 workflows, and performs clean-wheel acceptance. Planning contracts also run
-independently.
+independently with the same lock. The disposable application images install
+locked runtime dependencies without test extras or an editable source install.
 
 The manual `Optional disposable Slurm acceptance` workflow builds a synthetic
 SSH/Slurm/accounting cluster and runs the personal-connector smoke test. See

@@ -5,19 +5,27 @@ The local installation retains its configuration and job state between runs.
 
 ## Install
 
-Use Python 3.12 or 3.13:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then use
+an isolated tool environment with Python 3.13 (Python 3.12 is also supported):
 
 ```sh
-python -m venv ~/.venvs/compute-relay
-. ~/.venvs/compute-relay/bin/activate
-python -m pip install git+https://github.com/schmitfe/compute-relay.git
+uv tool install --python 3.13 git+https://github.com/schmitfe/compute-relay.git
 compute-relay
 ```
 
-The distribution has not been published yet. Until publication, use
-`python -m pip install .` from the checkout or install a built wheel instead.
-All ordinary runtime dependencies are included. Docker is only needed for
-optional Slurm acceptance fixtures.
+If `compute-relay` is not found, run `uv tool update-shell` and reopen the
+terminal. See [uv tool management](https://docs.astral.sh/uv/guides/tools/) for
+its installation and upgrade commands. Stop the launcher before replacing its
+installed environment, and follow the checked upgrade process below.
+
+The distribution has not been published yet. Ordinary `python -m pip install .`
+from the checkout, a repository URL, or a built wheel remains supported inside a
+virtual environment. All ordinary runtime dependencies are included; uv is a
+packaging tool, not a runtime requirement. The checkout's `uv.lock` controls
+development, CI and disposable fixture installs; installing a wheel or repository
+URL as a tool resolves its declared package dependencies. For a checkout run,
+use `uv sync --locked` and `uv run --locked compute-relay`. Docker is only needed
+for optional Slurm acceptance fixtures.
 
 ## First launch
 

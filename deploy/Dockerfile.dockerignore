@@ -1,7 +1,8 @@
 **
 !pyproject.toml
 !README.md
-!requirements.lock
+!LICENSE
+!uv.lock
 !src/
 !src/**
 !contracts/
