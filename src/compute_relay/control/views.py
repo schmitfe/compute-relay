@@ -166,15 +166,24 @@ def jobs(request):
 @boundary("GET")
 def job_detail(request, job_id):
     from .completion import job_snapshot, wait_for_snapshot
-    from .input_sources import authorize_job_inputs
-    @transaction.atomic
+    from .database import read_snapshot
+    @read_snapshot()
     def read():
         credential, job = scope(request, "jobs:read", job_id=job_id)
-        authorize_job_inputs(job, credential)
-        detail = services.serialize_job(job)
-        completion = job_snapshot(credential, job)
+        limit = int(request.GET.get("limit", 20))
+        attempt_cursor = int(request.GET["cursor"]) if "cursor" in request.GET else max(0, job.attempts.count() - limit)
+        execution_cursor = int(request.GET["execution_cursor"]) if "execution_cursor" in request.GET else max(0, job.execution_requests.count() - limit)
+        completion = job_snapshot(credential, job, attempt_cursor=attempt_cursor, execution_cursor=execution_cursor, limit=limit)
+        detail = services.serialize_job(job, attempt_cursor=attempt_cursor, execution_cursor=execution_cursor,
+            limit=limit, attempt_records=completion["attempts"])
+        detail["next_attempt_cursor"] = completion["next_cursor"]
+        detail["attempt_cursor"] = attempt_cursor
+        detail["execution_cursor"] = execution_cursor
+        detail["previous_attempt_cursor"] = max(0, attempt_cursor - limit) if attempt_cursor else None
+        detail["previous_execution_cursor"] = max(0, execution_cursor - limit) if execution_cursor else None
+        detail["snapshot_revision"] = completion["snapshot_revision"]
         detail["completion"] = completion["summary"]
-        detail["execution_progress"] = {"execution_request_exists": bool(completion["execution_requests"]),
+        detail["execution_progress"] = {"execution_request_exists": bool(completion["summary"]["execution_requests"]),
             "compute_submitted": True if completion["summary"]["confirmed_submissions"] else None if completion["summary"]["uncertain_submissions"] else False,
             "submission_uncertain": completion["summary"]["uncertain_submissions"] > 0,
             "dispatch_started": completion["summary"]["dispatch_started"] > 0,
@@ -493,7 +502,7 @@ def review(request, job_id):
             except BrokerError as exc:
                 error = exc.message
         import uuid
-        detail = services.serialize_job(job, package=True)
+        detail = services.serialize_job(job, package=True, limit=None)
         if error:
             for execution in detail["execution_requests"]:
                 if execution["id"] == request.POST.get("execution_request_id"):

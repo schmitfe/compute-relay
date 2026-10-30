@@ -142,10 +142,11 @@ class ProjectFacade:
             raise ValueError("Use a snapshot revision and a wait of 0 through 20 seconds")
         return "?" + urlencode({"after_revision": after_revision, "wait_seconds": wait_seconds}) if after_revision is not None else ""
 
-    def get_job_completion(self, job_id, cursor=0, limit=20):
-        if type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 20:
+    def get_job_completion(self, job_id, cursor=0, limit=20, execution_cursor=0):
+        if (any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in (cursor, execution_cursor))
+                or type(limit) is not int or not 1 <= limit <= 20):
             raise ValueError("Invalid completion pagination")
-        return self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}/completion?" + urlencode({"cursor": cursor, "limit": limit}))
+        return self.client.request("GET", f"/api/v1/jobs/{_uuid(job_id)}/completion?" + urlencode({"cursor": cursor, "limit": limit, "execution_cursor": execution_cursor}))
 
     def list_investigations(self, state="open", cursor=0, limit=20):
         if state not in {"open", "closed", "all"} or type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 100:
@@ -255,9 +256,9 @@ def create_server(facade: ProjectFacade):
         return guide(topic)
 
     @server.tool(annotations=readonly)
-    def get_job_completion(job_id: str, cursor: int = 0, limit: int = 20) -> dict:
+    def get_job_completion(job_id: str, cursor: int = 0, limit: int = 20, execution_cursor: int = 0) -> dict:
         """Read a paginated run manifest: provenance, submission, outputs, accounting and delivery evidence. Reading changes no execution state."""
-        return facade.get_job_completion(job_id, cursor, limit)
+        return facade.get_job_completion(job_id, cursor, limit, execution_cursor)
 
     @server.tool(annotations=readonly)
     def get_project_context() -> dict:

@@ -1,9 +1,11 @@
 """SQLite configuration for one local broker process."""
 
+from contextlib import contextmanager
 import os
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 
 
 def database_config(data_dir, environ=None):
@@ -15,3 +17,18 @@ def database_config(data_dir, environ=None):
         raise ImproperlyConfigured("BROKER_DB_PATH must name a local SQLite file")
     return {"ENGINE": "django.db.backends.sqlite3", "NAME": name,
         "OPTIONS": {"timeout": 15, "transaction_mode": "IMMEDIATE"}}
+
+
+@contextmanager
+def read_snapshot():
+    """Keep multi-query GETs consistent without reserving SQLite's writer slot."""
+    connection = transaction.get_connection()
+    mode = connection.transaction_mode
+    try:
+        # This is the current thread's connection, never the shared DB settings.
+        connection.transaction_mode = "DEFERRED"
+        with transaction.atomic():
+            connection.transaction_mode = mode
+            yield
+    finally:
+        connection.transaction_mode = mode
