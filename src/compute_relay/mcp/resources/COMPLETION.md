@@ -27,8 +27,12 @@ wait_seconds from 1 through 20 to wait for a material change; a timeout returns
 changed=false. Waits do not submit, collect or acknowledge work, and recheck current
 authority. WAIT_BUSY means to back off rather than create more concurrent waits.
 get_job_completion supplies paginated provenance, artifact descriptors, accounting
-and per-key access state. Follow next_cursor and compare snapshot_revision across
-pages when exporting an actively changing job.
+and per-key access state. Follow next_cursor for attempts and next_execution_cursor
+for requests, passing their independent cursor and execution_cursor values. Compare
+snapshot_revision across pages when exporting an actively changing job. Summary
+counts cover the whole job; blockers contains at most 20 details, with blocker_count
+and blockers_truncated describing the full set. Ordinary get_job shows the latest
+bounded history, while files finish exports all completion pages.
 
 With investigations enabled, create_investigation records the question,
 deliverable, core experiments, required validation, finite compute allowance and

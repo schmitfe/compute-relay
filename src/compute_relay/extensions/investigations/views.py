@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404, render
-from django.db import transaction
+from compute_relay.control.database import read_snapshot
 
 from compute_relay.control.auth import human_permission
 from compute_relay.control.completion import wait_for_snapshot
@@ -35,8 +35,8 @@ def investigations(request, project_id):
 @boundary("GET")
 def detail(request, investigation_id):
     def read():
-        credential, _ = scope(request, "jobs:read")
-        with transaction.atomic():
+        with read_snapshot():
+            credential, _ = scope(request, "jobs:read")
             return services.snapshot(credential, services.checked(credential, investigation_id))
     return wait_for_snapshot(read, request.GET.get("after_revision"), int(request.GET.get("wait_seconds", 0)))
 

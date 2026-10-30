@@ -78,6 +78,23 @@ Core `get_job_completion` works without the module. It returns package hashes,
 input descriptors, environment/resource identity, execution requests, paginated
 attempts, retained artifact descriptors, collection state, ledger charges,
 reservations and per-key acknowledgement. It sends no artifact contents.
+
+The HTTP completion endpoint pages attempts with `cursor` and execution requests
+with `execution_cursor`, each with `limit` from 1 to 20. Follow `next_cursor` and
+`next_execution_cursor` independently. The summary counts, accounting and revision
+cover the whole job, including entries outside either page. Blocker details are
+limited to 20; `blocker_count` and `blockers_truncated` describe the complete set.
+Ordinary job status defaults to the latest 20 attempts and requests so its latest
+execution remains current. HTTP callers can select older pages with the same
+cursors; `previous_attempt_cursor`, `previous_execution_cursor`,
+`next_attempt_cursor` and `next_execution_cursor` describe navigation.
+
+These reads hold a consistent SQLite read snapshot, without reserving the writer
+slot used by admission and reports. Revision checks still scan compact metadata
+rows and existing report hashes across the job; they do not load or re-hash
+historical logs or serialize off-page diagnostics/artifact inventories. The explicit
+human review page retains its full approval and diagnostic history.
+
 `get_job` includes a compact completion summary and `execution_progress`:
 
 | Observation | Meaning |

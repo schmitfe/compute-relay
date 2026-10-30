@@ -89,7 +89,8 @@ def compact_job(payload, *, broker_url=None):
     if isinstance(payload.get("completion"), dict):
         completion = payload["completion"]
         result["completion"] = {**_fields(completion, ("operationally_reconciled", "accounting_final", "unacknowledged_attempts",
-            "local_hash_verification", "scientific_validation")), "blocker_count": len(completion.get("blockers", [])),
+            "local_hash_verification", "scientific_validation", "blockers_truncated")),
+            "blocker_count": completion.get("blocker_count", len(completion.get("blockers", []))),
             "blockers": [_fields(item, ("code", "attempt_id", "job_id", "execution_request_id")) for item in completion.get("blockers", [])[:20]],
             "spent": _fields(completion.get("spent"), _USAGE), "reserved": _fields(completion.get("reserved"), _USAGE)}
     manifest = _object(payload.get("manifest"))

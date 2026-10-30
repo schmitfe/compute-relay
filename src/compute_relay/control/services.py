@@ -452,7 +452,7 @@ def serialize_attempt(attempt):
                                        "gpu_device_seconds": gpu - attempt.reservation_gpu if gpu is not None else None}}}
 
 
-def serialize_job(job, *, package=False):
+def serialize_job(job, *, package=False, attempt_cursor=None, execution_cursor=None, limit=20, attempt_records=None):
     from .resource_api import resource_validation
     if job.state == "archived":
         # A retained identity has no executable request. Do not reconstruct
@@ -468,18 +468,30 @@ def serialize_job(job, *, package=False):
                 "project_envelope_human_override_allowed": False}}
     executions = []
     approval = execution_approval(job, job.credential)
-    for execution in job.execution_requests.select_related("credential").order_by("created_at"):
-        decision = ApprovalDecision.objects.filter(execution_request=execution).first()
+    if execution_cursor is None:
+        execution_cursor = max(0, job.execution_requests.count() - limit) if limit is not None else 0
+    execution_query = job.execution_requests.select_related("credential", "approvaldecision").order_by("created_at", "id")
+    execution_page = list(execution_query[execution_cursor:execution_cursor + limit + 1] if limit is not None else execution_query)
+    policy = Grant.objects.filter(project_id=job.project_id).first()
+    connection = Connection.objects.filter(id=job.request.get("connection_id")).first()
+    for execution in execution_page[:limit]:
+        decision = getattr(execution, "approvaldecision", None)
         executions.append({"id": str(execution.id), "state": execution.state, "comment": decision.comment if decision else None,
             "approval": execution.approval_requirements,
-            "approval_current": execution_approval(job, execution.credential),
+            "approval_current": execution_approval(job, execution.credential, policy=policy.policy if policy else None, connection=connection),
             "budget_reservation": execution_reservation(execution)})
+    if attempt_cursor is None:
+        attempt_cursor = max(0, job.attempts.count() - limit) if limit is not None else 0
+    attempt_query = job.attempts.select_related("connection").order_by("created_at", "id")
+    attempt_page = [] if attempt_records is not None else list(attempt_query[attempt_cursor:attempt_cursor + limit + 1] if limit is not None else attempt_query)
     result = {"id": str(job.id), "name": job.name, "project_id": str(job.project_id),
               "project_name": job.project.name, "owner": {"id": str(job.project.owner_id), "username": job.project.owner.username},
               "submitted_using": {"id": str(job.credential_id), "name": job.credential.name} if job.credential_id else None,
               "state": job.display_state, "package_state": job.state, "request": job.request,
               "manifest_sha256": job.manifest_sha256, "execution_requests": executions,
-              "attempts": [serialize_attempt(a) for a in job.attempts.select_related("connection").order_by("created_at")]}
+              "attempts": attempt_records if attempt_records is not None else [serialize_attempt(a) for a in attempt_page[:limit]],
+              "next_attempt_cursor": attempt_cursor + limit if limit is not None and len(attempt_page) > limit else None,
+              "next_execution_cursor": execution_cursor + limit if limit is not None and len(execution_page) > limit else None}
     result["approval"] = approval
     result["resource_validation"] = resource_validation(job)
     if package or job.manifest:

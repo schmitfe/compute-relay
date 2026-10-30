@@ -199,6 +199,21 @@ def test_export_downloads_verifies_and_acknowledges_without_starting_compute(pla
     assert resumed["summary"]["local_delivery_complete"]
 
 
+def test_completion_export_collects_execution_pages_without_attempts(planned):
+    from compute_relay.control.models import ExecutionRequest
+    from compute_relay.workspace_completion import _job_manifest
+    context, _, _ = planned
+    job = prepared_job(context)
+    rows = [ExecutionRequest(job=job, credential=context.credential) for _ in range(45)]
+    ExecutionRequest.objects.bulk_create(rows)
+    facade = ProjectFacade(HTTP(context), str(context.project.id))
+    result = _job_manifest(facade, str(job.id))
+    assert result["attempts"] == [] and len(result["execution_requests"]) == 45
+    assert {row["id"] for row in result["execution_requests"]} == {str(row.id) for row in rows}
+    assert result["summary"]["pending_approvals"] == 45
+    assert result["next_cursor"] is None and result["next_execution_cursor"] is None
+
+
 def test_metadata_only_export_does_not_claim_verification_or_ack(planned, tmp_path):
     context, group, _ = planned
     context.token = "cbp_synthetic_metadata_workspace_123456789"
@@ -287,18 +302,18 @@ def test_paginated_export_retries_changed_snapshot_then_refuses_unstable_read():
     identifier = str(uuid4())
     class Changing:
         calls = 0
-        def get_job_completion(self, job_id, cursor, limit):
+        def get_job_completion(self, job_id, cursor, limit, execution_cursor=0):
             self.calls += 1
             return {"job": {"id": identifier}, "snapshot_revision": ("a" if self.calls == 1 else "b") * 64,
-                "attempts": [{"id": str(cursor)}], "next_cursor": 20 if cursor == 0 and limit == 20 else None}
+                "attempts": [{"id": str(cursor)}], "execution_requests": [], "next_cursor": 20 if cursor == 0 and limit == 20 else None}
     facade = Changing()
     result = _job_manifest(facade, identifier)
     assert result["snapshot_revision"] == "b" * 64 and len(result["attempts"]) == 2 and facade.calls == 5
     class Unstable:
         calls = 0
-        def get_job_completion(self, *args):
+        def get_job_completion(self, *args, **kwargs):
             self.calls += 1
-            return {"job": {"id": identifier}, "snapshot_revision": f"{self.calls:064x}", "attempts": [], "next_cursor": None}
+            return {"job": {"id": identifier}, "snapshot_revision": f"{self.calls:064x}", "attempts": [], "execution_requests": [], "next_cursor": None}
     with pytest.raises(ValueError, match="changed during export"):
         _job_manifest(Unstable(), identifier)
 

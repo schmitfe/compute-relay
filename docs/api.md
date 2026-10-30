@@ -20,7 +20,7 @@ Unknown fields fail validation rather than being silently ignored. Content types
 | `GET /api/v1/connections` | Project read | Assigned connections, safe capabilities, authentication state and current effective project/cluster resource limits |
 | `POST /api/v1/connections/{id}/refresh` | Human connection owner/admin | Queue bounded discovery; agents read cached snapshots rather than flood schedulers |
 | `POST /api/v1/projects/{id}/objects` | Upload scope | Stream one regular file; return immutable digest/size descriptor after verification |
-| `POST /api/v1/projects/{id}/objects/lookup` | `objects:write` | Implemented bounded content lookup; at most 100 SHA-256/size pairs, only this project's verified stored objects, no source bytes or foreign existence disclosure |
+| `POST /api/v1/projects/{id}/objects/lookup` | `objects:write` | Implemented bounded content lookup; at most 100 SHA-256/size pairs, only this project's authorized published objects, metadata-only existence hint; no source bytes or foreign existence disclosure |
 | `POST /api/v1/projects/{id}/transfers` | `objects:write` | Reserve or resume a hash/size-bound upload; return transfer ID and received offset, or an already authorized complete receipt |
 | `POST /api/v1/projects/{id}/transfers/{transfer}` | `objects:write` | Receive one offset/base64 chunk; `finish=true` verifies full size/SHA-256 before publishing and granting independent input authority |
 | `POST /api/v1/jobs` | `jobs:submit` | Create immutable revision from the job-request schema; does not execute |
@@ -241,3 +241,9 @@ Human login/MFA uses a different narrow channel that can interact only with a co
 See [GPU request](../contracts/examples/gpu-job.json), [CPU request](../contracts/examples/cpu-job.json), [prepared GPU package](../contracts/examples/prepared-gpu-job.json), and [project policy](../contracts/examples/project-policy.json). The GPU example requests 8 cores and 1 A100 for 3,600 seconds, reserving 28,800 core-seconds and 3,600 GPU-seconds. Settlement uses actual observed allocated runtime, including any elapsed time beyond the reservation.
 
 The example manifest uses synthetic file digests. Runtime tests must build real file bundles, compute canonical manifests, verify actual hashes and compare the final scheduler script against what the reviewer saw.
+
+Content lookup checks the retained file's type, link count and declared size, without
+reading its contents. It is an upload-deduplication hint, not fresh hash verification.
+Publication and actual source/result consumption retain their content checks;
+same-size corruption can therefore be reported by preparation or download after
+a positive lookup. Missing or malformed retained files fail with a storage error.

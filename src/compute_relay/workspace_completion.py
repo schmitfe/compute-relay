@@ -14,9 +14,10 @@ MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 
 def _job_manifest(facade, identifier):
     for retry in range(2):
-        cursor, records, token, result = 0, [], None, None
+        cursor, execution_cursor, records, executions, token, result = 0, 0, [], [], None, None
+        attempts_done = executions_done = False
         while True:
-            page = facade.get_job_completion(identifier, cursor, 20)
+            page = facade.get_job_completion(identifier, cursor, 20, execution_cursor=execution_cursor)
             if not isinstance(page, dict) or page.get("job", {}).get("id") != identifier:
                 raise ValueError("Invalid job manifest identity")
             current = page.get("snapshot_revision")
@@ -27,18 +28,31 @@ def _job_manifest(facade, identifier):
             token, result = current, page
             if not isinstance(page.get("attempts"), list):
                 raise ValueError("Invalid manifest attempts")
-            records.extend(page["attempts"])
-            if len(records) > 10000 or len(_encoded(records)) > MAX_MANIFEST_BYTES:
+            if not attempts_done:
+                records.extend(page["attempts"])
+            if not executions_done:
+                if not isinstance(page.get("execution_requests"), list):
+                    raise ValueError("Invalid manifest execution requests")
+                executions.extend(page["execution_requests"])
+            if (max(len(records), len(executions)) > 10000
+                    or len(_encoded([records, executions])) > MAX_MANIFEST_BYTES):
                 raise ValueError("Job manifest exceeds export bounds")
-            following = page.get("next_cursor")
-            if following is None:
+            following = page.get("next_cursor") if not attempts_done else None
+            next_execution = page.get("next_execution_cursor") if not executions_done else None
+            attempts_done, executions_done = following is None, next_execution is None
+            if attempts_done and executions_done:
                 check = facade.get_job_completion(identifier, 0, 1)
                 if check.get("snapshot_revision") == token:
-                    return {**result, "attempts": records, "next_cursor": None}
+                    return {**result, "attempts": records, "execution_requests": executions,
+                        "next_cursor": None, "next_execution_cursor": None}
                 break
-            if type(following) is not int or following <= cursor:
+            if (following is not None and (type(following) is not int or following <= cursor)
+                    or next_execution is not None and (type(next_execution) is not int or next_execution <= execution_cursor)):
                 raise ValueError("Invalid manifest cursor")
-            cursor = following
+            if following is not None:
+                cursor = following
+            if next_execution is not None:
+                execution_cursor = next_execution
     raise ValueError("Job changed during export; retry after a bounded status wait")
 
 
