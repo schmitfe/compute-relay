@@ -658,12 +658,13 @@ def renew_lease(worker, attempt_id, data):
 
 def dispatch(worker, attempt_id, data):
     with transaction.atomic():
-        actor_id = Attempt.objects.filter(id=attempt_id, connection__worker=worker).values_list(
-            "execution_request__credential__issued_by_id", flat=True).first()
-        if actor_id:
-            # NO KEY UPDATE still fences account suspension, while allowing key
-            # issuance's FK checks under a project lock without a reverse wait.
-            User.objects.select_for_update(no_key=True).get(id=actor_id)
+        authority = Attempt.objects.filter(id=attempt_id, connection__worker=worker).values(
+            "execution_request__credential__issued_by_id", "job__project__owner_id").first()
+        if authority:
+            # Owner locking also fences new environment/storage registrations
+            # against final cleanup dispatch across equivalent connections.
+            for owner_id in sorted({value for value in authority.values() if value}):
+                User.objects.select_for_update(no_key=True).get(id=owner_id)
         attempt = checked_lease(worker, attempt_id, data)
         if attempt.operation == "cleanup":
             from .remote_cleanup import blocked

@@ -227,3 +227,29 @@ def test_local_owner_must_remain_active_before_saving(personal):
 def test_invalid_personal_roots_never_queue_work(personal, root):
     response = personal.human.post(target_path(personal, "new/"), document(personal, root_path=root))
     assert response.status_code == 200 and not ConnectorTask.objects.exists()
+
+
+def cleanup_attempt(context, directory):
+    from compute_relay.control.models import Attempt, ExecutionRequest, Grant, Job
+    job = Job.objects.create(project=context.project, request={})
+    execution = ExecutionRequest.objects.create(job=job)
+    grant = Grant.objects.create(project=context.project, policy={})
+    return Attempt.objects.create(job=job, execution_request=execution, grant=grant, connection=context.connection,
+        reservation_cpu=0, reservation_gpu=0, state="succeeded", accounting_state="settled",
+        native_identity={"work_dir": directory}, collection_state="complete", remote_cleanup={"state": "running"})
+
+
+def test_personal_storage_queue_cannot_enter_a_deleting_attempt(personal):
+    cleanup_attempt(personal, "/scratch/researcher")
+    response = personal.human.post(target_path(personal, "new/"), document(personal))
+    assert response.status_code == 409 and b"CLEANUP_IN_PROGRESS" in response.content
+    assert not ConnectorTask.objects.exists() and not StorageTargetRegistration.objects.exists()
+
+
+def test_personal_storage_confirmation_rechecks_cleanup_after_directory_receipt(personal):
+    registration = queue(personal)
+    assert complete(personal, registration).status_code == 200
+    cleanup_attempt(personal, "/scratch/researcher")
+    response = save(personal, registration)
+    assert response.status_code == 409 and b"CLEANUP_IN_PROGRESS" in response.content
+    assert not StorageTarget.objects.exists()

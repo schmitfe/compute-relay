@@ -272,3 +272,19 @@ def test_shared_pool_plans_use_observed_free_space_without_double_counting_retai
     result = services.plan_for_credential(resources.credential, plan(resources, target))
     assert result["status"] == "ready"
     assert result["pools"][0]["headroom_bytes_estimate"] == 8000 - 100 - 500
+
+
+@pytest.mark.parametrize("directory,protected", [("/approved", True), ("/approved/project-space/attempt", False)])
+def test_storage_enrollment_during_cleanup_protects_only_the_registered_root(resources, directory, protected):
+    from compute_relay.control.models import Attempt, ExecutionRequest, Grant
+    job = Job.objects.create(project=resources.project, request={})
+    execution = ExecutionRequest.objects.create(job=job)
+    grant = Grant.objects.create(project=resources.project, policy={})
+    Attempt.objects.create(job=job, execution_request=execution, grant=grant, connection=resources.connection,
+        reservation_cpu=0, reservation_gpu=0, native_identity={"work_dir": directory}, remote_cleanup={"state": "running"})
+    if protected:
+        with pytest.raises(BrokerError) as denied:
+            enroll(resources)
+        assert denied.value.code == "CLEANUP_IN_PROGRESS" and not StorageTarget.objects.exists()
+    else:
+        assert enroll(resources).root == "/approved/project-space"
