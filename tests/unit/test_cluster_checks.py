@@ -387,3 +387,21 @@ def test_account_expiry_recheck_and_forged_resource_fields_cannot_bypass_review(
     assert job.execution_requests.get().state == "awaiting_approval" and not job.attempts.exists()
     monkeypatch.setattr(cluster_checks, "current_user_active", lambda user: False)
     assert human(diagnostic.owner).get(diagnostic.path).status_code == 403
+
+
+def test_default_discovered_interpreter_cannot_be_registered_inside_a_deleting_attempt(diagnostic):
+    from compute_relay.control.models import Environment
+    context = diagnostic
+    directory = "/private/deleting-attempt"
+    context.connection.discovery_snapshot = {"software": {"python": [
+        {"kind": "system", "interpreter": directory + "/bin/python3"}]}}
+    context.connection.save(update_fields=["discovery_snapshot"])
+    job = Job.objects.create(project=context.project, request={})
+    execution = ExecutionRequest.objects.create(job=job)
+    Attempt.objects.create(job=job, execution_request=execution, grant=context.grant, connection=context.connection,
+        reservation_cpu=0, reservation_gpu=0, state="succeeded", accounting_state="settled", collection_state="complete",
+        native_identity={"work_dir": directory}, remote_cleanup={"state": "running"})
+    response = form_post(human(context.owner), context.path, data(context))
+    assert response.status_code == 409 and b"CLEANUP_IN_PROGRESS" in response.content
+    assert not ClusterCheckConfiguration.objects.exists()
+    assert not Environment.objects.filter(name="Cluster test system Python").exists()

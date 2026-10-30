@@ -142,7 +142,8 @@ def queue_personal_target(user, connection, root, name, roles, revision, submiss
                 raise BrokerError("STORAGE_REGISTRATION_CONFLICT", "This form already identifies a different directory request. Reload it.", 409)
             return existing
         from compute_relay.control.remote_cleanup import protect_registration
-        protect_registration(current, [root])
+        # A parent may be a remote symlink; only the worker receipt resolves it.
+        protect_registration(current, [root], unresolved=True)
         task = enqueue(user, current.id, "mkdir", payload, revision)
         return StorageTargetRegistration.objects.create(id=identifier, owner=user, project=project, connection=current,
             task=task, name=name.strip(), root=root, roles=roles,

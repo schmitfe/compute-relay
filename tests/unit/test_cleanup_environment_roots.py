@@ -151,3 +151,38 @@ def test_pending_storage_confirmation_protects_the_worker_resolved_root_at_dispa
         services.dispatch(broker.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
             "manifest_sha256": job.manifest_sha256, "connection_revision_sha256": broker.connection.revision_sha256})
     assert denied.value.code == "CLEANUP_PROTECTED"
+
+
+@pytest.mark.parametrize("state", ["queued", "running"])
+def test_unresolved_storage_parent_alias_defers_cleanup_until_receipt_is_known(broker, state):
+    from datetime import timedelta
+    from django.utils import timezone
+    from compute_relay.control.models import ConnectorTask
+    from compute_relay.extensions.storage.models import StorageTargetRegistration
+    job, attempt = completed(broker)
+    attempt.native_identity = {**attempt.native_identity, "work_dir": "/owned/attempt"}
+    attempt.save(update_fields=["native_identity"])
+    alias = alias_connection(broker)
+    task = ConnectorTask.objects.create(owner=broker.owner, connection=alias, kind="mkdir", state=state,
+        connection_revision=alias.revision_sha256, expires_at=timezone.now() + timedelta(minutes=1),
+        request={"path": "/parent-alias", "name": "data", "parents": True})
+    StorageTargetRegistration.objects.create(owner=broker.owner, project=broker.project, connection=alias,
+        task=task, name="Unresolved data", root="/parent-alias/data", roles=["data"],
+        profile_revision_sha256="d" * 64, connection_revision_sha256=alias.revision_sha256)
+    preview = remote_cleanup.preview(broker.project, job)
+    assert preview["eligible_count"] == 0 and "pending storage registration" in preview["rows"][0]["reason"]
+    expires = task.expires_at
+    task.expires_at = timezone.now() - timedelta(seconds=1)
+    task.save()
+    assert remote_cleanup.preview(broker.project, job)["eligible_count"] == 1
+    task.expires_at = expires
+    task.state = "succeeded"
+    task.result = {"path": "/retained/data", "parent": "/retained", "ok": True, "writable": True, "created": False}
+    task.save()
+    assert remote_cleanup.preview(broker.project, job)["eligible_count"] == 1
+    task.result = {**task.result, "path": "/owned/attempt/data", "parent": "/owned/attempt"}
+    task.save()
+    assert remote_cleanup.preview(broker.project, job)["eligible_count"] == 0
+    task.expires_at = timezone.now() - timedelta(seconds=1)
+    task.save()
+    assert remote_cleanup.preview(broker.project, job)["eligible_count"] == 1

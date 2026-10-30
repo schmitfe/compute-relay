@@ -48,14 +48,15 @@ def inside(directory, path):
         == posixpath.normpath(directory))
 
 
-def protect_registration(connection, paths, *, environment=False):
+def protect_registration(connection, paths, *, environment=False, unresolved=False, completed=False):
     """Caller holds the owner's lock, also used by final cleanup dispatch."""
+    states = ["queued", "running", "complete"] if completed else ["queued", "running"]
     for identity in Attempt.objects.filter(connection_id__in=equivalent_connections(connection),
-            remote_cleanup__state__in=["queued", "running"]).values_list("native_identity", flat=True):
+            remote_cleanup__state__in=states).values_list("native_identity", flat=True):
         directory = (identity or {}).get("work_dir")
-        if any(inside(directory, path) or environment and inside(path, directory) for path in paths):
+        if unresolved or any(inside(directory, path) or environment and inside(path, directory) for path in paths):
             raise BrokerError("CLEANUP_IN_PROGRESS",
-                "Remote cleanup is queued or running for this directory. Wait for it to finish and choose a retained location.", 409)
+                "Remote cleanup affects this directory or its unresolved parent. Wait for active cleanup to finish and choose a retained location.", 409)
 
 
 def blocked(attempt, *, leased=False):
@@ -95,7 +96,10 @@ def blocked(attempt, *, leased=False):
         from compute_relay.extensions.storage.services import confirmed_directory_root
         for registration in StorageTargetRegistration.objects.filter(connection_id__in=connections,
                 task__state__in=["queued", "running", "succeeded"], task__expires_at__gt=timezone.now()).select_related("task"):
-            roots.extend([registration.root, confirmed_directory_root(registration)])
+            resolved = confirmed_directory_root(registration)
+            if registration.task.state in {"queued", "running"} and resolved is None:
+                return "Wait for pending storage registration to resolve its directory on this cluster."
+            roots.extend([registration.root, resolved])
         if any(inside(directory, root) for root in roots):
             return "A registered storage location protects this directory."
     for relation in Job._meta.related_objects:
