@@ -672,12 +672,13 @@ def renew_lease(worker, attempt_id, data):
 
 def dispatch(worker, attempt_id, data):
     with transaction.atomic():
-        actor_id = Attempt.objects.filter(id=attempt_id, connection__worker=worker).values_list(
-            "execution_request__credential__issued_by_id", flat=True).first()
-        if actor_id:
-            # NO KEY UPDATE still fences account suspension, while allowing key
-            # issuance's FK checks under a project lock without a reverse wait.
-            User.objects.select_for_update(no_key=True).get(id=actor_id)
+        authority = Attempt.objects.filter(id=attempt_id, connection__worker=worker).values(
+            "execution_request__credential__issued_by_id", "job__project__owner_id").first()
+        if authority:
+            # Owner locking also fences new environment/storage registrations
+            # against final cleanup dispatch across equivalent connections.
+            for owner_id in sorted({value for value in authority.values() if value}):
+                User.objects.select_for_update(no_key=True).get(id=owner_id)
         attempt = checked_lease(worker, attempt_id, data)
         if attempt.operation == "cleanup":
             from .remote_cleanup import blocked
@@ -943,7 +944,11 @@ def retry_collection(attempt):
     """Revisit the same finished native allocation without admitting compute."""
     with transaction.atomic():
         Project.objects.select_for_update().get(id=attempt.job.project_id)
+        connection = Connection.objects.select_for_update().get(id=attempt.connection_id)
         attempt = Attempt.objects.select_for_update().get(id=attempt.id)
+        if (connection.archived or not connection.setup_complete or not connection.configuration_confirmed
+                or attempt.job.manifest.get("connection_revision_sha256") != connection.revision_sha256):
+            raise BrokerError("REVISION_CHANGED", "Restore this attempt's confirmed cluster configuration before retrying output collection.", 409)
         if attempt.remote_cleanup.get("state") in {"queued", "running", "complete"}:
             raise BrokerError("OUTPUT_CLEANUP_REQUESTED", "Remote output cleanup was requested. Collection cannot reopen these files.", 409)
         if not attempt.native_identity or not terminal_observation(attempt.observation):

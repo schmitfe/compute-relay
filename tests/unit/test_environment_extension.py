@@ -530,3 +530,30 @@ def test_agent_policy_discovery_includes_approved_module_bootstrap_reference(con
     context.key.allowed_connection_ids = []; context.key.save()
     assert Client().get(f"/api/v1/projects/{context.project.id}/environment-build-policy",
         HTTP_AUTHORIZATION="Bearer environment-agent").json()["bootstrap_environments"] == []
+
+
+@pytest.mark.parametrize("cleanup_state", ["queued", "running", "complete"])
+def test_automatic_environment_publication_cannot_retain_a_cleaned_parent_attempt(context, cleanup_state):
+    from compute_relay.control.models import ExecutionRequest
+    outer_job = Job.objects.create(project=context.project, request={})
+    execution = ExecutionRequest.objects.create(job=outer_job)
+    outer = Attempt.objects.create(job=outer_job, execution_request=execution, grant=context.grant,
+        connection=context.connection, reservation_cpu=0, reservation_gpu=0, state="succeeded",
+        accounting_state="settled", collection_state="complete", remote_cleanup={"state": cleanup_state})
+    directory = f"/managed/{context.project.id}/{outer_job.id}/{outer.id}"
+    outer.native_identity = {"attempt_id": str(outer.id), "job_id": "16", "cluster": "synthetic", "work_dir": directory}
+    outer.save(update_fields=["native_identity"])
+    context.connection.configuration = {**context.connection.configuration, "remote_root": directory + "/nested-jobs"}
+    context.connection.save(update_fields=["configuration"])
+    build, attempt = executed(context)
+    metadata = finalization(build, attempt)
+    workdir = f"{directory}/nested-jobs/{context.project.id}/{build.job_id}/{attempt.id}"
+    attempt.native_identity = {**attempt.native_identity, "work_dir": workdir}
+    metadata["prefix"] = workdir + "/environment"
+    attempt.state, attempt.accounting_state = "succeeded", "settled"
+    attempt.save()
+    with pytest.raises(BrokerError) as denied:
+        context.services.sync_attempt(attempt, metadata)
+    assert denied.value.code == "CLEANUP_IN_PROGRESS"
+    build.refresh_from_db()
+    assert build.environment_id is None

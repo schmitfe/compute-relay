@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import time
 
 from .client import ControlError
+from compute_relay.diagnostics import failure
 
 RENEWAL_INTERVAL_SECONDS = 20
 RENEWAL_RETRY_SECONDS = 2
@@ -70,7 +71,9 @@ async def renewing(client, lease):
         nonlocal failed
         while True:
             await asyncio.sleep(window.wait())
+            started = time.monotonic()
             if window.expired():
+                failure(lease, "renew", ControlError("LEASE_RENEWAL_FAILED"), started)
                 failed = True
                 owner.cancel()
                 return
@@ -80,6 +83,7 @@ async def renewing(client, lease):
                 window.renewed(response)
             except Exception as exc:
                 if not window.retry(exc):
+                    failure(lease, "renew", exc, started)
                     failed = True
                     owner.cancel()
                     return

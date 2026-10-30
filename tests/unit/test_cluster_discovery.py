@@ -192,3 +192,32 @@ def test_confirmed_personal_discovery_cannot_change_owner_site_policy(broker):
     assert error.value.code == "REVISION_CHANGED"
     connection.refresh_from_db()
     assert connection.configuration == config and connection.configuration_confirmed
+
+
+@pytest.mark.parametrize("collection_state,pending", [("pending", True), ("retry_pending", True), ("failed", False)])
+def test_rediscovery_preserves_binding_until_settled_outputs_are_recovered(management, collection_state, pending):
+    from compute_relay.control.cluster_services import lease_discovery, report_discovery
+    context = management
+    connection = queued_discovery(context)
+    first = lease_discovery(context.worker)["lease"]
+    report_discovery(context.worker, connection.id, discovery_report(connection, context.worker, first))
+    connection.refresh_from_db()
+    original_revision = connection.revision_sha256
+    attempt = outstanding_discovery_attempt(context, connection)
+    attempt.accounting_state, attempt.state = "settled", "succeeded"
+    attempt.native_identity = {"job_id": "123"}
+    attempt.collection_state, attempt.collection_pending = collection_state, pending
+    attempt.save()
+    form_post(human(context.owner), f"/clusters/{connection.id}/discover/")
+    lease = lease_discovery(context.worker)["lease"]
+    context.worker.profiles[0]["revision_sha256"] = "b" * 64
+    context.worker.save(update_fields=["profiles"])
+    report = discovery_report(connection, context.worker, lease, discovery_snapshot={"updated": True})
+    with pytest.raises(BrokerError) as denied:
+        report_discovery(context.worker, connection.id, report)
+    assert denied.value.code == "CONNECTION_BUSY"
+    connection.refresh_from_db()
+    assert connection.revision_sha256 == original_revision
+    attempt.collection_pending, attempt.collection_state = False, "complete"
+    attempt.save()
+    assert report_discovery(context.worker, connection.id, report)["accepted"]

@@ -4,6 +4,7 @@ import hashlib
 import json
 import posixpath
 
+from django.apps import apps
 from django.core import signing
 from django.db import transaction
 from django.db.models import Q
@@ -11,9 +12,51 @@ from django.utils import timezone
 
 from .errors import BrokerError
 from .metadata import append_audit
-from .models import Attempt, Environment, InputSource, Job, JobFile, Project, UploadReservation
+from .models import Attempt, Connection, Environment, InputSource, Job, JobFile, Project, UploadReservation
 
 SALT = "compute-relay.remote-attempt-cleanup"
+
+
+def equivalent_connections(connection):
+    """Same owned SSH destination, even when another connector/profile names it."""
+    from .connection_identity import public_ssh_identity
+    identity = public_ssh_identity(connection.configuration)
+    if identity is None:
+        return [connection.id]
+    identity["host"] = identity["host"].lower().rstrip(".")
+    identifiers = []
+    for identifier, configuration in Connection.objects.filter(owner_id=connection.owner_id,
+            backend=connection.backend).values_list("id", "configuration"):
+        other = public_ssh_identity(configuration)
+        if other:
+            other["host"] = other["host"].lower().rstrip(".")
+            if other == identity:
+                identifiers.append(identifier)
+    # Host aliases and different mount paths require operator knowledge; no DNS
+    # lookup can establish that two remote filesystems are the same.
+    return identifiers
+
+
+def environment_paths(configuration):
+    return [configuration.get(key) for key in ("prefix", "interpreter", "conda_executable", "module_init")] + list(
+        configuration.get("module_paths", []))
+
+
+def inside(directory, path):
+    return (isinstance(directory, str) and directory.startswith("/") and isinstance(path, str)
+        and path.startswith("/") and posixpath.commonpath([posixpath.normpath(directory), posixpath.normpath(path)])
+        == posixpath.normpath(directory))
+
+
+def protect_registration(connection, paths, *, environment=False, unresolved=False, completed=False):
+    """Caller holds the owner's lock, also used by final cleanup dispatch."""
+    states = ["queued", "running", "complete"] if completed else ["queued", "running"]
+    for identity in Attempt.objects.filter(connection_id__in=equivalent_connections(connection),
+            remote_cleanup__state__in=states).values_list("native_identity", flat=True):
+        directory = (identity or {}).get("work_dir")
+        if unresolved or any(inside(directory, path) or environment and inside(path, directory) for path in paths):
+            raise BrokerError("CLEANUP_IN_PROGRESS",
+                "Remote cleanup affects this directory or its unresolved parent. Wait for active cleanup to finish and choose a retained location.", 409)
 
 
 def blocked(attempt, *, leased=False):
@@ -26,8 +69,9 @@ def blocked(attempt, *, leased=False):
         return "Execution, accounting and output collection must be resolved."
     if not leased and attempt.lease_expires_at and attempt.lease_expires_at > timezone.now():
         return "This attempt still has an active connector operation."
-    if attempt.connection.archived or attempt.connection.worker.revoked:
-        return "A current owned connector is required."
+    if (attempt.connection.archived or attempt.connection.worker.revoked
+            or not attempt.connection.setup_complete or not attempt.connection.configuration_confirmed):
+        return "A current confirmed owned connector is required."
     if (attempt.connection.owner_id != attempt.job.project.owner_id
             or attempt.connection.worker.owner_id != attempt.job.project.owner_id
             or not attempt.job.project.owner.is_active):
@@ -38,17 +82,26 @@ def blocked(attempt, *, leased=False):
     if (JobFile.objects.filter(blob__artifact__attempt=attempt).exists()
             or InputSource.objects.filter(blob__artifact__attempt=attempt).exists()):
         return "A result is referenced by another job or module definition."
+    if attempt.job.manifest.get("connection_revision_sha256") != attempt.connection.revision_sha256:
+        return "The cluster configuration changed; this old attempt requires manual remote cleanup."
     directory = attempt.native_identity.get("work_dir")
-    if isinstance(directory, str) and directory.startswith("/"):
-        directory = posixpath.normpath(directory)
-        for config in Environment.objects.filter(connection=attempt.connection).values_list("configuration", flat=True):
-            paths = [config.get(key) for key in ("prefix", "interpreter", "conda_executable", "module_init")]
-            paths.extend(config.get("module_paths", []))
-            for path in paths:
-                if isinstance(path, str) and path.startswith("/"):
-                    path = posixpath.normpath(path)
-                    if posixpath.commonpath([directory, path]) in {directory, path}:
-                        return "A registered environment protects this directory."
+    connections = equivalent_connections(attempt.connection)
+    for config in Environment.objects.filter(connection_id__in=connections).values_list("configuration", flat=True):
+        if any(inside(directory, path) or inside(path, directory) for path in environment_paths(config)):
+            return "A registered environment protects this directory."
+    if apps.is_installed("compute_relay.extensions.storage"):
+        from compute_relay.extensions.storage.models import StorageCapacityPool, StorageTarget, StorageTargetRegistration
+        roots = list(StorageTarget.objects.filter(connection_id__in=connections).values_list("root", flat=True))
+        roots.extend(StorageCapacityPool.objects.filter(connection_id__in=connections).values_list("probe_root", flat=True))
+        from compute_relay.extensions.storage.services import confirmed_directory_root
+        for registration in StorageTargetRegistration.objects.filter(connection_id__in=connections,
+                task__state__in=["queued", "running", "succeeded"], task__expires_at__gt=timezone.now()).select_related("task"):
+            resolved = confirmed_directory_root(registration)
+            if registration.task.state in {"queued", "running"} and resolved is None:
+                return "Wait for pending storage registration to resolve its directory on this cluster."
+            roots.extend([registration.root, resolved])
+        if any(inside(directory, root) for root in roots):
+            return "A registered storage location protects this directory."
     for relation in Job._meta.related_objects:
         if (relation.related_model._meta.app_label != "broker"
                 and relation.related_model.objects.filter(**{relation.field.name: attempt.job}).exists()):

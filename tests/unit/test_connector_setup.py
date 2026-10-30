@@ -460,3 +460,40 @@ def test_default_recipe_can_inspect_anaconda_then_save_detected_conda_environmen
     assert recipe.configuration["kind"] == "conda"
     assert recipe.configuration["modules"] == [module]
     assert recipe.configuration["interpreter"] == "/scratch/researcher/analysis/bin/python"
+
+
+@pytest.mark.parametrize("fields", [
+    {"collection_pending": True, "collection_state": "pending"},
+    {"collection_pending": False, "collection_state": "failed", "collection_failures": 3},
+    {"collection_state": "complete", "remote_cleanup": {"state": "queued"}},
+    {"collection_state": "complete", "remote_cleanup": {"state": "running"}},
+    {"collection_state": "complete", "lease_expires_at": timedelta(minutes=1)},
+])
+def test_settled_attempt_recovery_blocks_configuration_reset_and_repair(personal, fields):
+    from compute_relay.control.models import Attempt
+    from compute_relay.control.personal_connectors import check_idle
+    from compute_relay.control.errors import BrokerError
+    attempt = active_attempt(personal)
+    if "lease_expires_at" in fields:
+        fields = {**fields, "lease_expires_at": timezone.now() + fields["lease_expires_at"]}
+    Attempt.objects.filter(id=attempt.id).update(accounting_state="settled", state="succeeded",
+        native_identity={"job_id": "123"}, **fields)
+    response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal))
+    assert response.status_code == 409 and not ConnectorTask.objects.exists()
+    response = api(personal, "/internal/v1/connectors/tasks", {"connection_id": str(personal.connection.id),
+        "hello": True, "protocol": "personal-connector/v1", "needs_discovery": True})
+    assert response.status_code == 200 and response.json()["defaults_deferred"] is True
+    with pytest.raises(BrokerError) as denied:
+        check_idle(personal.registration)
+    assert denied.value.code == "CONNECTION_BUSY"
+    personal.connection.refresh_from_db()
+    assert personal.connection.setup_complete and personal.connection.configuration_confirmed
+
+
+def test_completed_collection_releases_configuration_guard(personal):
+    from compute_relay.control.models import Attempt
+    attempt = active_attempt(personal)
+    Attempt.objects.filter(id=attempt.id).update(accounting_state="settled", state="succeeded",
+        native_identity={"job_id": "123"}, collection_state="complete")
+    response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal))
+    assert response.status_code == 302

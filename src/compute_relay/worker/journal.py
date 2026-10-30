@@ -5,15 +5,16 @@ from __future__ import annotations
 import fcntl
 import asyncio
 import json
-import logging
 import os
 import stat
 import tempfile
+import time
 from contextlib import contextmanager, asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
 from .client import strict_json
+from compute_relay.diagnostics import failure
 
 
 class Journal:
@@ -129,10 +130,11 @@ class Journal:
         ordered = [name for name in names if name > self._report_cursor] + [name for name in names if name <= self._report_cursor]
         for name in ordered[:limit]:
             self._report_cursor = name
+            started, attempt_id = time.monotonic(), None
             try:
                 attempt_id = str(UUID(Path(name).stem))
                 record = self.read_report(attempt_id)
                 if record is not None and record.get("phase") == "ready":
                     yield attempt_id, record
-            except (OSError, ValueError, AttributeError):
-                logging.getLogger(__name__).error("A durable worker report is invalid; retain it for local recovery")
+            except (OSError, ValueError, AttributeError) as error:
+                failure({"attempt_id": attempt_id}, "report", error, started)

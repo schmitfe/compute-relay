@@ -12,12 +12,12 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
 from .auth import worker_identity
-from .cluster_services import PUBLIC_CONFIG_FIELDS
+from .cluster_services import PUBLIC_CONFIG_FIELDS, configuration_busy, require_idle_configuration
 from .cluster_setup import canonical_root
 from .errors import BrokerError
 from .local_auth import current_user_active
 from .management import human_view
-from .models import Attempt, ClusterRegistration, Connection, ConnectorEnrollment, ConnectorTask, Project, User, WorkerIdentity
+from .models import ClusterRegistration, Connection, ConnectorEnrollment, ConnectorTask, Project, User, WorkerIdentity
 from .services import audit, digest
 from .views import body, boundary
 
@@ -37,8 +37,7 @@ def own_connection(user, connection_id):
 
 
 def idle(connection):
-    if Attempt.objects.filter(connection=connection).exclude(accounting_state__in=["settled", "released"]).exists():
-        raise BrokerError("CONNECTION_BUSY", "Finish or reconcile existing executions before changing cluster configuration.", 409)
+    require_idle_configuration(connection)
 
 
 def locked_connection(reference, worker=None):
@@ -182,7 +181,7 @@ def tasks(request):
             worker.setup_ready = True
             worker.save(update_fields=["setup_ready"])
             if document.get("needs_discovery") is True:
-                if Attempt.objects.filter(connection=connection).exclude(accounting_state__in=["settled", "released"]).exists():
+                if configuration_busy(connection):
                     defaults_deferred = True
                 else:
                     connection.setup_complete = False

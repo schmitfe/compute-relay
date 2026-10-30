@@ -39,4 +39,21 @@ class Migration(migrations.Migration):
                 ('job', models.OneToOneField(on_delete=django.db.models.deletion.PROTECT, related_name='investigation_membership', to='broker.job')),
             ],
         ),
+        migrations.CreateModel(
+            name='InvestigationConnection',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('connection', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='broker.connection')),
+                ('investigation', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='connection_scope', to='broker_investigations.investigation')),
+            ],
+        ),
+        migrations.AddField(
+            model_name='investigation',
+            name='connections',
+            field=models.ManyToManyField(through='broker_investigations.InvestigationConnection', to='broker.connection'),
+        ),
+        migrations.AddConstraint(
+            model_name='investigationconnection',
+            constraint=models.UniqueConstraint(fields=('investigation', 'connection'), name='investigation_connection_scope'),
+        ),
     ]

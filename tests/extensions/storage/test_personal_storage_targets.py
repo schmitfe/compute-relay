@@ -227,3 +227,60 @@ def test_local_owner_must_remain_active_before_saving(personal):
 def test_invalid_personal_roots_never_queue_work(personal, root):
     response = personal.human.post(target_path(personal, "new/"), document(personal, root_path=root))
     assert response.status_code == 200 and not ConnectorTask.objects.exists()
+
+
+def cleanup_attempt(context, directory):
+    from compute_relay.control.models import Attempt, ExecutionRequest, Grant, Job
+    job = Job.objects.create(project=context.project, request={})
+    execution = ExecutionRequest.objects.create(job=job)
+    grant = Grant.objects.create(project=context.project, policy={})
+    return Attempt.objects.create(job=job, execution_request=execution, grant=grant, connection=context.connection,
+        reservation_cpu=0, reservation_gpu=0, state="succeeded", accounting_state="settled",
+        native_identity={"work_dir": directory}, collection_state="complete", remote_cleanup={"state": "running"})
+
+
+@pytest.mark.parametrize("root", ["/scratch/researcher/results", "/unresolved-parent-alias/results"])
+def test_personal_storage_queue_cannot_enter_a_deleting_attempt(personal, root):
+    cleanup_attempt(personal, "/scratch/researcher")
+    response = personal.human.post(target_path(personal, "new/"), document(personal, root_path=root))
+    assert response.status_code == 409 and b"CLEANUP_IN_PROGRESS" in response.content
+    assert not ConnectorTask.objects.exists() and not StorageTargetRegistration.objects.exists()
+
+
+def test_personal_storage_confirmation_rechecks_cleanup_after_directory_receipt(personal):
+    registration = queue(personal)
+    assert complete(personal, registration).status_code == 200
+    cleanup_attempt(personal, "/scratch/researcher")
+    response = save(personal, registration)
+    assert response.status_code == 409 and b"CLEANUP_IN_PROGRESS" in response.content
+    assert not StorageTarget.objects.exists()
+
+
+def test_expired_successful_receipt_cannot_register_a_now_unprotected_deleted_root(personal):
+    registration = queue(personal)
+    assert complete(personal, registration).status_code == 200
+    registration.task.expires_at = timezone.now() - timedelta(seconds=1)
+    registration.task.save(update_fields=["expires_at"])
+    attempt = cleanup_attempt(personal, "/scratch/researcher")
+    attempt.remote_cleanup = {"state": "complete"}
+    attempt.save(update_fields=["remote_cleanup"])
+    response = save(personal, registration)
+    assert response.status_code == 409 and b"STORAGE_DIRECTORY_UNCONFIRMED" in response.content
+    assert not StorageTarget.objects.exists()
+
+
+def test_expired_pending_registration_cannot_report_or_confirm_a_late_canonical_root(personal):
+    registration = queue(personal)
+    lease = worker_post(personal, "/internal/v1/connectors/tasks", {
+        "connection_id": str(personal.connection.id)}).json()["task"]
+    registration.task.expires_at = timezone.now() - timedelta(seconds=1)
+    registration.task.save(update_fields=["expires_at"])
+    result = {"path": "/deleted-attempt/results", "parent": "/deleted-attempt",
+        "ok": True, "writable": True, "created": False, "entries": []}
+    response = worker_post(personal, f"/internal/v1/connectors/tasks/{lease['id']}/report", {
+        "connection_id": str(personal.connection.id), "lease_id": lease["lease_id"], "generation": lease["generation"],
+        "outcome": "succeeded", "result": result})
+    assert response.status_code == 409
+    assert save(personal, registration, confirmed_root=result["path"]).status_code == 409
+    registration.task.refresh_from_db()
+    assert registration.task.state != "succeeded" and not StorageTarget.objects.exists()

@@ -7,7 +7,7 @@
 {% if busy %}
 <section class="notice" aria-labelledby="unfinished-work-title">
   <h2 id="unfinished-work-title">Unfinished work</h2>
-  <p>This cluster has {{ unfinished.attempts }} execution record{{ unfinished.attempts|pluralize }} with unfinished accounting or output collection.</p>
+  <p>This cluster has {{ unfinished.attempts }} execution record{{ unfinished.attempts|pluralize }} with unfinished accounting, output recovery or connector operations.</p>
   <ul>
     <li>{{ unfinished.accounting }} awaiting final accounting.</li>
     <li>{{ unfinished.outputs }} awaiting output collection.</li>
@@ -23,7 +23,7 @@
   {% if setup_revision %}<input type="hidden" name="setup_revision" value="{{ setup_revision }}">{% endif %}
   {% if connection_revision_sha256 %}<input type="hidden" name="connection_revision_sha256" value="{{ connection_revision_sha256 }}">{% endif %}
   {% if busy %}
-  <p><label><input type="checkbox" name="acknowledge_unfinished" value="yes" required> I understand that remote jobs may continue and unresolved accounting and budget holds will be retained.</label></p>
+  <p><label><input type="checkbox" name="acknowledge_unfinished" value="yes" required> I understand that remote jobs may continue, output recovery and remote cleanup may stop, and unresolved accounting and budget holds will be retained.</label></p>
   <button type="submit" name="action" value="remove_anyway" class="reject">Remove anyway</button>
   {% else %}
   <button type="submit" name="action" value="remove">Remove cluster configuration</button>

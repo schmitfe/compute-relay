@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
-import logging
 import os
 from pathlib import Path
 import time
@@ -19,6 +18,7 @@ from .client import ControlError, environment_token, strict_json
 from .concurrency import PrincipalScheduler, poll_parallel, remote_parallelism
 from .enrollment import EnrollmentError, profile_metadata, resolve_connection
 from .journal import Journal
+from compute_relay.diagnostics import operation as diagnostic_operation
 from .lease import renewing
 from compute_relay.domain.lifecycle import (CancellationStatus, PreparedWork, cancellation_result, cancellation_status,
     native_for, replay_result, report_record, submission_plan, submission_record, terminal_observation)
@@ -70,7 +70,7 @@ class Worker:
             if lease is None:
                 return False
             if lease.get("operation") == "availability":
-                await self.availability(lease)
+                await self._execute(lease)
                 return True
             if lease.get("operation") in {"discover", "extension"}:
                 if self._in_progress:
@@ -109,9 +109,10 @@ class Worker:
         profiles = []
         for alias, profile in sorted(self.credential_profiles.items()):
             try:
-                profiles.append(profile_metadata(alias, profile))
+                with diagnostic_operation(None, "profiles"):
+                    profiles.append(profile_metadata(alias, profile))
             except EnrollmentError:
-                logging.getLogger(__name__).warning("A credential profile is invalid and was not advertised")
+                pass
         await self.client.request("POST", "/internal/v1/worker/profiles", {"profiles": profiles, "extensions": list(self.extensions),
             "execution_features": ["availability_v1"]})
         self._profiles_published_at = time.monotonic()
@@ -123,8 +124,9 @@ class Worker:
         connection_id = str(UUID(lease["connection_id"]))
         report = {"lease_id": lease["id"], "generation": lease["generation"]}
         try:
-            connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
-            snapshot = await self.backend_factory(connection).discover()
+            with diagnostic_operation(lease, "discover"):
+                connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
+                snapshot = await self.backend_factory(connection).discover()
             report.update(outcome="discovered", configuration=public, connection_revision_sha256=revision, discovery_snapshot=snapshot)
         except EnrollmentError as error:
             report.update(outcome="discovery_failed", error_code=error.code)
@@ -137,21 +139,25 @@ class Worker:
     async def _execute(self, lease, *, observations=()):
         operation = lease.get("operation")
         if operation == "availability":
-            await self.availability(lease)
+            with diagnostic_operation(lease, "availability"):
+                await self.availability(lease)
             return
         if operation == "discover":
-            await self.discover(lease)
+            with diagnostic_operation(lease, "discover"):
+                await self.discover(lease)
             return
         if operation == "extension":
             from compute_relay.extensions import execute_extension_work
-            await execute_extension_work(self, lease)
+            with diagnostic_operation(lease, "extension"):
+                await execute_extension_work(self, lease)
             return
         await self._execute_attempts([lease, *observations])
 
     async def _finish_observation(self, lease, work, native, backend, result):
         if native and result.get("outcome") in {"observed", "cancel_requested", "cancel_unknown"} and getattr(backend, "supports_live_logs", False) is True:
             try:
-                result["log_chunks"] = await backend.read_logs(native, manifest=work.manifest, cursors=lease.get("log_cursors", {}))
+                with diagnostic_operation(lease, "logs"):
+                    result["log_chunks"] = await backend.read_logs(native, manifest=work.manifest, cursors=lease.get("log_cursors", {}))
             except Exception:
                 pass
         if result.get("outcome") != "observed" or not terminal_observation(result.get("observation")):
@@ -160,14 +166,16 @@ class Worker:
         self.journal.write_report(work.attempt_id, report_record(lease, work.manifest_sha256, result, phase="observed"))
         try:
             from compute_relay.extensions import worker_after_observation
-            extension_data = await worker_after_observation(self.extensions, backend, native, manifest, lease.get("extension_context", {}))
+            with diagnostic_operation(lease, "finalize"):
+                extension_data = await worker_after_observation(self.extensions, backend, native, manifest, lease.get("extension_context", {}))
             if extension_data:
                 result["extension_data"] = extension_data
         except Exception:
             result["extension_data"] = {manifest.get("extension_name", ""): {"error": "FINALIZATION_UNAVAILABLE"}}
         try:
             from .transfers import collect_outputs
-            result.update(await collect_outputs(self.client, backend, lease, native, manifest, self._output_lock))
+            with diagnostic_operation(lease, "collect"):
+                result.update(await collect_outputs(self.client, backend, lease, native, manifest, self._output_lock))
         except Exception:
             result.update(error_code="OUTPUT_COLLECTION_FAILED", collection_state="failed")
 
@@ -178,77 +186,85 @@ class Worker:
                 item_lock = AsyncExitStack()
                 scope.push_async_callback(item_lock.aclose)
                 try:
-                    work = PreparedWork.decode(lease)
-                    public = lease.get("configuration", {})
-                    connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[work.connection_id]
-                    await item_lock.enter_async_context(self.journal.async_locked(work.attempt_id))
-                    previous = self.journal.read(work.attempt_id)
-                    work.verify(connection, previous, self.extensions)
-                    native = native_for(lease, previous)
-                    if work.operation in {"observe", "cancel", "cleanup"} and not native:
-                        raise ValueError("Management operation has no native identity")
-                    saved = self.journal.read_report(work.attempt_id)
-                    result = replay_result(saved, lease, work.manifest_sha256, native)
-                    if result is not None and saved["phase"] == "ready":
-                        await self.deliver_report(work.attempt_id, report_record(lease, work.manifest_sha256, result))
-                        await item_lock.aclose()
-                        self._release_in_progress(lease)
-                        continue
-                    renewal = AsyncExitStack()
-                    scope.push_async_callback(renewal.aclose)
-                    await renewal.enter_async_context(renewing(self.client, lease))
-                    contexts.append((lease, work, native, connection, result, renewal, item_lock, previous))
+                    with diagnostic_operation(lease, "validate"):
+                        work = PreparedWork.decode(lease)
+                        public = lease.get("configuration", {})
+                        connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[work.connection_id]
+                        await item_lock.enter_async_context(self.journal.async_locked(work.attempt_id))
+                        previous = self.journal.read(work.attempt_id)
+                        work.verify(connection, previous, self.extensions)
+                        native = native_for(lease, previous)
+                        if work.operation in {"observe", "cancel", "cleanup"} and not native:
+                            raise ValueError("Management operation has no native identity")
+                        saved = self.journal.read_report(work.attempt_id)
+                        result = replay_result(saved, lease, work.manifest_sha256, native)
+                        if result is not None and saved["phase"] == "ready":
+                            with diagnostic_operation(lease, "report"):
+                                await self.deliver_report(work.attempt_id, report_record(lease, work.manifest_sha256, result))
+                            await item_lock.aclose()
+                            self._release_in_progress(lease)
+                            continue
+                        renewal = AsyncExitStack()
+                        scope.push_async_callback(renewal.aclose)
+                        await renewal.enter_async_context(renewing(self.client, lease))
+                        contexts.append((lease, work, native, connection, result, renewal, item_lock, previous))
                 except (ValueError, KeyError, EnrollmentError) as error:
                     errors.append(error)
                     await item_lock.aclose()
                     self._release_in_progress(lease)
-                    logging.getLogger(__name__).error("Invalid batch item deferred; other observations remain available")
             if not contexts:
                 if errors:
                     raise errors[0]
                 return
-            backend = self.backend_factory(contexts[0][3])
+            with diagnostic_operation(contexts[0][0], "backend"):
+                backend = self.backend_factory(contexts[0][3])
             pending = [{"native_identity": native, "manifest": work.manifest}
                 for lease, work, native, _, result, _, _, _ in contexts
                 if work.operation == "observe" and result is None and not lease.get("collection_only")]
-            observed = await backend.observe(pending) if pending else {}
+            with diagnostic_operation(contexts[0][0], "observe"):
+                observed = await backend.observe(pending) if pending else {}
             for lease, work, native, _, result, renewal, item_lock, previous in contexts:
-                if work.operation in {"submit", "reconcile"}:
-                    result = await self._submission(lease, backend, work.manifest, work.files, previous)
-                elif result is None and work.operation == "cleanup":
-                    try:
-                        confirmed = await self.client.request("POST", f"/internal/v1/attempts/{work.attempt_id}/dispatch", {
-                            "lease_id": lease["id"], "generation": lease["generation"], "manifest_sha256": work.manifest_sha256,
-                            "connection_revision_sha256": work.manifest["connection_revision_sha256"]})
-                        if not confirmed.get("authorized"):
-                            raise ControlError("CLEANUP_DENIED")
-                        cleaned = await backend.cleanup(native, manifest=work.manifest)
-                        result = {"outcome": "cleaned", "native_identity": native, "cleanup": cleaned}
-                    except Exception:
-                        result = {"outcome": "cleanup_failed", "native_identity": native}
-                elif result is None and work.operation == "cancel":
-                    try:
-                        cancelled = await backend.cancel(native, manifest=work.manifest)
-                    except Exception:
-                        cancelled = {"outcome": "unknown"}
-                    observation = None
-                    if cancellation_status(cancelled) in {CancellationStatus.UNKNOWN, CancellationStatus.ALREADY_TERMINAL}:
+                with diagnostic_operation(lease, "execute"):
+                    if work.operation in {"submit", "reconcile"}:
+                        result = await self._submission(lease, backend, work.manifest, work.files, previous)
+                    elif result is None and work.operation == "cleanup":
                         try:
-                            observation = (await backend.observe([{"native_identity": native,
-                                "manifest": work.manifest}]))[work.attempt_id]
+                            with diagnostic_operation(lease, "cleanup"):
+                                confirmed = await self.client.request("POST", f"/internal/v1/attempts/{work.attempt_id}/dispatch", {
+                                    "lease_id": lease["id"], "generation": lease["generation"], "manifest_sha256": work.manifest_sha256,
+                                    "connection_revision_sha256": work.manifest["connection_revision_sha256"]})
+                                if not confirmed.get("authorized"):
+                                    raise ControlError("CLEANUP_DENIED")
+                                cleaned = await backend.cleanup(native, manifest=work.manifest)
+                            result = {"outcome": "cleaned", "native_identity": native, "cleanup": cleaned}
                         except Exception:
-                            pass
-                    result = cancellation_result(cancelled, native, observation)
-                elif result is None:
-                    result = {"outcome": "observed", "native_identity": native,
-                        "observation": lease["observation"] if lease.get("collection_only") else observed[work.attempt_id]}
-                await self._finish_observation(lease, work, native, backend, result)
-                record = report_record(lease, work.manifest_sha256, result)
-                self.journal.write_report(work.attempt_id, record)
-                await renewal.aclose()
-                await self.deliver_report(work.attempt_id, record)
-                await item_lock.aclose()
-                self._release_in_progress(lease)
+                            result = {"outcome": "cleanup_failed", "native_identity": native}
+                    elif result is None and work.operation == "cancel":
+                        try:
+                            with diagnostic_operation(lease, "cancel"):
+                                cancelled = await backend.cancel(native, manifest=work.manifest)
+                        except Exception:
+                            cancelled = {"outcome": "unknown"}
+                        observation = None
+                        if cancellation_status(cancelled) in {CancellationStatus.UNKNOWN, CancellationStatus.ALREADY_TERMINAL}:
+                            try:
+                                with diagnostic_operation(lease, "observe"):
+                                    observation = (await backend.observe([{"native_identity": native,
+                                        "manifest": work.manifest}]))[work.attempt_id]
+                            except Exception:
+                                pass
+                        result = cancellation_result(cancelled, native, observation)
+                    elif result is None:
+                        result = {"outcome": "observed", "native_identity": native,
+                            "observation": lease["observation"] if lease.get("collection_only") else observed[work.attempt_id]}
+                    await self._finish_observation(lease, work, native, backend, result)
+                    record = report_record(lease, work.manifest_sha256, result)
+                    self.journal.write_report(work.attempt_id, record)
+                    await renewal.aclose()
+                    with diagnostic_operation(lease, "report"):
+                        await self.deliver_report(work.attempt_id, record)
+                    await item_lock.aclose()
+                    self._release_in_progress(lease)
 
     async def deliver_report(self, attempt_id, record):
         self.journal.write_report(attempt_id, record)
@@ -266,7 +282,8 @@ class Worker:
         public = lease.get("configuration", {})
         connection = resolve_connection(public, self.credential_profiles)[0] if public.get("credential_profile") else self.connections[lease["connection_id"]]
         try:
-            snapshot = await self.backend_factory(connection).availability()
+            with diagnostic_operation(lease, "availability"):
+                snapshot = await self.backend_factory(connection).availability()
         except Exception:
             snapshot = {"partitions": [], "nodes_status": "unknown", "queue_status": "unknown"}
         await self.client.request("POST", f"/internal/v1/connections/{lease['connection_id']}/availability-report", {
@@ -282,7 +299,8 @@ class Worker:
                 if not record or record.get("phase") != "ready":
                     continue
                 try:
-                    await self.deliver_report(attempt_id, record)
+                    with diagnostic_operation({**record, "generation": record["report"]["generation"]}, "report"):
+                        await self.deliver_report(attempt_id, record)
                 except ControlError as error:
                     if error.status != 409:
                         raise
@@ -305,7 +323,8 @@ class Worker:
                 raise ControlError("DISPATCH_DENIED")
             self.journal.write(attempt_id, {"manifest_sha256": digest, "outcome": "intent"})
             try:
-                result = await backend.submit(attempt_id, manifest, files)
+                with diagnostic_operation(lease, "submit"):
+                    result = await backend.submit(attempt_id, manifest, files)
             except Exception:
                 result = {"outcome": "submission_uncertain"}
         record = submission_record(digest, result)
@@ -321,9 +340,9 @@ async def serve_workers(workers, *, once=False):
     async def serve(worker):
         async def poll():
             try:
-                return await worker.poll_once()
+                with diagnostic_operation(None, "poll"):
+                    return await worker.poll_once()
             except Exception:
-                logging.getLogger(__name__).error("Async worker operation failed; preserving uncertain state")
                 return False
         await poll_parallel(poll, concurrency=worker.parallelism, once=once)
 

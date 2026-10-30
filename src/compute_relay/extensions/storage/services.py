@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from compute_relay.control.auth import connection_allowed, human_permission
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Connection, Project, WorkerIdentity
+from compute_relay.control.models import Connection, Project, User, WorkerIdentity
 from compute_relay.control.services import audit, digest
 from .models import (ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool,
                      StorageObservationLease, StorageTarget, StorageTargetRegistration)
@@ -141,6 +141,9 @@ def queue_personal_target(user, connection, root, name, roles, revision, submiss
             if (existing.root, existing.name, existing.roles, existing.connection_revision_sha256) != (root, name.strip(), roles, revision):
                 raise BrokerError("STORAGE_REGISTRATION_CONFLICT", "This form already identifies a different directory request. Reload it.", 409)
             return existing
+        from compute_relay.control.remote_cleanup import protect_registration
+        # A parent may be a remote symlink; only the worker receipt resolves it.
+        protect_registration(current, [root], unresolved=True)
         task = enqueue(user, current.id, "mkdir", payload, revision)
         return StorageTargetRegistration.objects.create(id=identifier, owner=user, project=project, connection=current,
             task=task, name=name.strip(), root=root, roles=roles,
@@ -182,6 +185,8 @@ def finish_personal_target(user, registration, *, confirmed_root=None):
             and item.get("alias") == connection.configuration.get("credential_profile")), {})
         if profile.get("revision_sha256") != registration.profile_revision_sha256:
             raise BrokerError("STORAGE_DIRECTORY_UNCONFIRMED", "The connector profile changed. Start a new directory registration.", 409)
+        from compute_relay.control.remote_cleanup import protect_registration
+        protect_registration(connection, [resolved_root])
         pool = StorageCapacityPool.objects.create(owner=user, connection=connection, name=registration.name,
             probe_root=resolved_root, expected_filesystem_id=None, probe_enabled=False)
         target = StorageTarget.objects.create(owner=connection.owner, project=project, connection=connection, pool=pool, name=registration.name,
@@ -209,6 +214,7 @@ def register_target(user, connection, root_alias, name, *, project, pool=None, e
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
         raise BrokerError("INVALID_STORAGE", "Choose a storage target name.")
     with transaction.atomic():
+        User.objects.select_for_update(no_key=True).get(id=user.id)
         project = Project.objects.select_for_update().get(id=project.id)
         connection = Connection.objects.select_for_update(of=("self",)).select_related("worker").get(id=connection.id)
         _project_connection(user, project, connection)
@@ -229,6 +235,8 @@ def register_target(user, connection, root_alias, name, *, project, pool=None, e
             if enable_probes and not existing.pool.probe_enabled:
                 set_probe_enabled(user, existing.pool, True)
             return existing
+        from compute_relay.control.remote_cleanup import protect_registration
+        protect_registration(connection, [root["path"]])
         if pool is None:
             pool = StorageCapacityPool.objects.create(owner=connection.owner, connection=connection,
                 name=name.strip(), probe_root=root["path"], expected_filesystem_id=root["filesystem_id"])

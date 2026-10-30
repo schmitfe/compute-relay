@@ -178,6 +178,8 @@ def _ensure_configuration(user, connection_id, revision, environment):
             environment = get_object_or_404(Environment, id=environment.id, owner=current, connection=connection)
         else:
             config = _default_environment(connection)
+            from .remote_cleanup import environment_paths, protect_registration
+            protect_registration(connection, environment_paths(config), environment=True)
             environment = Environment.objects.create(owner=current, connection=connection, name="Cluster test system Python",
                 configuration=config, revision_sha256=services.digest(config))
         project = Project.objects.create(owner=current, name=("Cluster tests: " + connection.name)[:100])

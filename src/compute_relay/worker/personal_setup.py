@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from compute_relay.transports.openssh import OpenSSHTransport
 from .runner import Worker
+from compute_relay.diagnostics import operation as diagnostic_operation
 from .client import ControlError
 from .connector_status import ConnectorStatus
 from .enrollment import resolve_connection
@@ -165,17 +166,18 @@ class PersonalWorker(Worker):
         report = {"lease_id": lease["id"], "generation": lease["generation"]}
         self.status.progress("Identifying Slurm partitions, resources and available software environments.")
         try:
-            connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
-            snapshot = await self.backend_factory(connection).discover()
-            if not self.state.get("defaults_initialized") and not self._defer_defaults:
-                updated = deepcopy(self.state)
-                updated["site_profile"] = derive_cluster_configuration(snapshot, self.state.get("site_profile"))["site_profile"]
-                updated["defaults_initialized"] = True
-                updated["profile_generation"] = self.state.get("profile_generation", 1) + 1
-                self.persist(updated)
-                await self.publish_state()
+            with diagnostic_operation(lease, "discover"):
                 connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
-            report.update(outcome="discovered", configuration=public, connection_revision_sha256=revision, discovery_snapshot=snapshot)
+                snapshot = await self.backend_factory(connection).discover()
+                if not self.state.get("defaults_initialized") and not self._defer_defaults:
+                    updated = deepcopy(self.state)
+                    updated["site_profile"] = derive_cluster_configuration(snapshot, self.state.get("site_profile"))["site_profile"]
+                    updated["defaults_initialized"] = True
+                    updated["profile_generation"] = self.state.get("profile_generation", 1) + 1
+                    self.persist(updated)
+                    await self.publish_state()
+                    connection, public, revision = resolve_connection(lease["configuration"], self.credential_profiles, refresh=True)
+                report.update(outcome="discovered", configuration=public, connection_revision_sha256=revision, discovery_snapshot=snapshot)
         except EnrollmentError as error:
             report.update(outcome="discovery_failed", error_code=error.code)
         except ControlError:
@@ -212,54 +214,55 @@ class PersonalWorker(Worker):
         self.status.progress(descriptions.get(task["kind"], "Handling a cluster setup request."))
         report = {"connection_id": self.state["connection_id"], "lease_id": task["lease_id"], "generation": task["generation"]}
         try:
-            if task["kind"] == "environment_probe":
-                result = await remote_environment(self.session, task["request"]["environment"])
-            elif task["kind"] == "browse":
-                result = await remote_setup(self.session, "browse", path=task["request"]["path"])
-            elif task["kind"] == "mkdir":
-                if self.state.get("last_folder_task") == task["id"] and self.state.get("last_folder_receipt"):
-                    receipt = self.state["last_folder_receipt"]
-                    result = await remote_setup(self.session, "browse", path=receipt["path"])
-                    result["created"] = receipt["created"]
-                else:
-                    result = await remote_setup(self.session, "mkdir", **task["request"])
+            with diagnostic_operation({**report, "operation": "setup"}, "setup"):
+                if task["kind"] == "environment_probe":
+                    result = await remote_environment(self.session, task["request"]["environment"])
+                elif task["kind"] == "browse":
+                    result = await remote_setup(self.session, "browse", path=task["request"]["path"])
+                elif task["kind"] == "mkdir":
+                    if self.state.get("last_folder_task") == task["id"] and self.state.get("last_folder_receipt"):
+                        receipt = self.state["last_folder_receipt"]
+                        result = await remote_setup(self.session, "browse", path=receipt["path"])
+                        result["created"] = receipt["created"]
+                    else:
+                        result = await remote_setup(self.session, "mkdir", **task["request"])
+                        if result.get("ok") is True:
+                            updated = deepcopy(self.state)
+                            updated["last_folder_task"] = task["id"]
+                            updated["last_folder_receipt"] = {"path": result["path"], "created": result["created"]}
+                            self.persist(updated)
+                elif task["kind"] == "configure":
+                    from compute_relay.domain.cluster_configuration import validate_cluster_configuration
+                    requested_profile = validate_cluster_configuration(task["request"]["site_profile"], require_limits=True)
+                    if type(task["request"].get("module_availability_enabled", False)) is not bool:
+                        raise ValueError("Invalid module listing setting")
+                    result = deepcopy(self.state["last_configuration_result"]) if (
+                        self.state.get("last_configuration_task") == task["id"] and self.state.get("last_configuration_result")) else (
+                            await remote_setup(self.session, "validate_root", path=task["request"]["remote_root"]))
                     if result.get("ok") is True:
-                        updated = deepcopy(self.state)
-                        updated["last_folder_task"] = task["id"]
-                        updated["last_folder_receipt"] = {"path": result["path"], "created": result["created"]}
-                        self.persist(updated)
-            elif task["kind"] == "configure":
-                from compute_relay.domain.cluster_configuration import validate_cluster_configuration
-                requested_profile = validate_cluster_configuration(task["request"]["site_profile"], require_limits=True)
-                if type(task["request"].get("module_availability_enabled", False)) is not bool:
-                    raise ValueError("Invalid module listing setting")
-                result = deepcopy(self.state["last_configuration_result"]) if (
-                    self.state.get("last_configuration_task") == task["id"] and self.state.get("last_configuration_result")) else (
-                        await remote_setup(self.session, "validate_root", path=task["request"]["remote_root"]))
+                        if self.state.get("last_configuration_task") != task["id"]:
+                            updated = deepcopy(self.state)
+                            updated["connection"]["remote_root"] = result["path"]
+                            updated["site_profile"] = requested_profile
+                            updated["module_availability_enabled"] = task["request"].get("module_availability_enabled", False)
+                            result["module_availability_enabled"] = updated["module_availability_enabled"]
+                            updated["profile_generation"] = self.state.get("profile_generation", 1) + 1
+                            updated["last_configuration_task"] = task["id"]
+                            updated["last_configuration_result"] = result
+                            updated["pending_configuration_task"] = task["id"]
+                            self.persist(updated)
+                        await self.publish_state()
+                        alias = next(iter(self.credential_profiles))
+                        selected = {"backend": "slurm", "credential_profile": alias,
+                            "ssh": {key: self.state["connection"]["ssh"][key] for key in ("host", "user", "port")},
+                            "remote_root": self.state["connection"]["remote_root"]}
+                        report["configuration"] = resolve_connection(selected, self.credential_profiles, refresh=True)[1]
+                else:
+                    raise ValueError("Unsupported personal setup operation")
                 if result.get("ok") is True:
-                    if self.state.get("last_configuration_task") != task["id"]:
-                        updated = deepcopy(self.state)
-                        updated["connection"]["remote_root"] = result["path"]
-                        updated["site_profile"] = requested_profile
-                        updated["module_availability_enabled"] = task["request"].get("module_availability_enabled", False)
-                        result["module_availability_enabled"] = updated["module_availability_enabled"]
-                        updated["profile_generation"] = self.state.get("profile_generation", 1) + 1
-                        updated["last_configuration_task"] = task["id"]
-                        updated["last_configuration_result"] = result
-                        updated["pending_configuration_task"] = task["id"]
-                        self.persist(updated)
-                    await self.publish_state()
-                    alias = next(iter(self.credential_profiles))
-                    selected = {"backend": "slurm", "credential_profile": alias,
-                        "ssh": {key: self.state["connection"]["ssh"][key] for key in ("host", "user", "port")},
-                        "remote_root": self.state["connection"]["remote_root"]}
-                    report["configuration"] = resolve_connection(selected, self.credential_profiles, refresh=True)[1]
-            else:
-                raise ValueError("Unsupported personal setup operation")
-            if result.get("ok") is True:
-                report.update(outcome="succeeded", result=result)
-            else:
-                report.update(outcome="failed", error_code=result.get("error_code", "REMOTE_SETUP_UNAVAILABLE"))
+                    report.update(outcome="succeeded", result=result)
+                else:
+                    report.update(outcome="failed", error_code=result.get("error_code", "REMOTE_SETUP_UNAVAILABLE"))
         except ControlError:
             # A persisted profile or accepted acknowledgement must be replayed,
             # not reverted or replaced with a new scheduler operation.

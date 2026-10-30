@@ -13,7 +13,7 @@ from .auth import bearer, new_token, token_hash
 from .errors import BrokerError
 from .local_auth import current_user_active
 from .management import human_view
-from .models import Attempt, ClusterRegistration, Connection, ConnectorEnrollment, Project, User, WorkerIdentity
+from .models import ClusterRegistration, Connection, ConnectorEnrollment, Project, User, WorkerIdentity
 from .services import audit, digest
 from .views import body, boundary
 
@@ -35,9 +35,9 @@ def target(registration):
 
 
 def check_idle(registration):
-    if registration.connection_id and Attempt.objects.filter(connection_id=registration.connection_id).exclude(
-            accounting_state__in=["settled", "released"]).exists():
-        raise BrokerError("CONNECTION_BUSY", "Finish or reconcile existing executions before pairing another connector.", 409)
+    from .cluster_services import require_idle_configuration
+    if registration.connection_id:
+        require_idle_configuration(registration.connection)
 
 
 def site_profile(registration):

@@ -21,7 +21,7 @@ from .local_auth import current_user_active
 from .forms import (EnvironmentForm, KeyForm, ProjectForm,
                     owned_connections, owned_environments)
 from .models import (Attempt, ConnectorTask, Environment, Grant, IdempotencyRecord, Project,
-                     ProjectCredential)
+                     ProjectCredential, User)
 
 
 def human_view(function):
@@ -434,8 +434,13 @@ def environment_new(request, connection_id):
         except ValueError:
             form.add_error(None, "This environment profile is not supported. Check its interpreter, prefix and module settings.")
         else:
-            environment = Environment.objects.create(owner=request.user, connection=connection, name=data["name"], configuration=config, revision_sha256=services.digest(config))
-            services.audit(None, request.user.id, "environment.created", environment.id)
+            from .remote_cleanup import environment_paths, protect_registration
+            with transaction.atomic():
+                User.objects.select_for_update(no_key=True).get(id=request.user.id)
+                connection = get_object_or_404(owned_connections(request.user).select_for_update(), id=connection_id)
+                protect_registration(connection, environment_paths(config), environment=True)
+                environment = Environment.objects.create(owner=request.user, connection=connection, name=data["name"], configuration=config, revision_sha256=services.digest(config))
+                services.audit(None, request.user.id, "environment.created", environment.id)
             return redirect(f"/clusters/{connection.id}/environments/")
     return render(request, "broker/environment_form.html", {"form": form, "cluster": connection, "selected_cluster": connection,
         "personal_configuration": connection.owner_id == request.user.id and personal(connection),

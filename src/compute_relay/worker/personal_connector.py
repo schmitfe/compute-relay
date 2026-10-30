@@ -11,6 +11,7 @@ import sys
 import time
 from uuid import UUID
 
+from compute_relay.diagnostics import operation as diagnostic_operation
 from .client import ControlError, JsonClient, strict_json
 from .connector_status import ConnectorStatus, display_label
 from .enrollment import profile_metadata
@@ -208,7 +209,8 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
                         ready = True
                 try:
                     epoch = await broker_gate.enter()
-                    worked = await worker.poll_once()
+                    with diagnostic_operation(None, "poll"):
+                        worked = await worker.poll_once()
                 except ControlError as error:
                     if error.status in {401, 403}:
                         if not stopped:

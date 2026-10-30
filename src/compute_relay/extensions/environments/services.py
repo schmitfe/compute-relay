@@ -11,7 +11,7 @@ from compute_relay.backends.environments import render_environment
 from compute_relay.control import services as core
 from compute_relay.control.auth import human_permission, require_connection
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Attempt, Blob, Environment, Grant, Job, Project, ProjectCredential
+from compute_relay.control.models import Attempt, Blob, Environment, Grant, Job, Project, ProjectCredential, User
 from compute_relay.control.storage import store_blob
 from compute_relay.domain.validation import validate
 
@@ -301,6 +301,8 @@ def _verify_finalization(build, attempt, finalization):
 def sync_attempt(attempt, finalization=None):
     """No remote I/O. Safe after core settlement; failure never rolls accounting back."""
     with transaction.atomic():
+        User.objects.select_for_update(no_key=True).get(id=attempt.job.project.owner_id)
+        Project.objects.select_for_update().get(id=attempt.job.project_id)
         build = EnvironmentBuild.objects.select_for_update(of=("self",)).select_related("spec__project", "spec__connection", "policy").filter(job=attempt.job).first()
         if build is None:
             return
@@ -338,6 +340,10 @@ def sync_attempt(attempt, finalization=None):
                         render_environment(configuration, "python3")
                         revision = core.digest({"configuration": configuration, "spec_sha256": build.spec.sha256,
                                                 "build_id": str(build.id), "receipt": receipt})
+                        from compute_relay.control.remote_cleanup import environment_paths, protect_registration
+                        # A delayed receipt must not publish an environment beneath
+                        # another connection's already-cleaned attempt directory.
+                        protect_registration(build.spec.connection, environment_paths(configuration), environment=True, completed=True)
                         build.environment = Environment.objects.create(owner=build.spec.project.owner, connection=build.spec.connection,
                             name=build.spec.document["name"], configuration=configuration, revision_sha256=revision)
                         build.spec.project.environments.add(build.environment)
