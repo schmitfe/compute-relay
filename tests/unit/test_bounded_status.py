@@ -1,4 +1,5 @@
 """Status pages stay small and release the writer while retaining global truth."""
+from concurrent.futures import ThreadPoolExecutor
 import sqlite3
 
 from django.db import connection, transaction
@@ -130,3 +131,34 @@ def test_status_rejects_out_of_bounds_database_pagination(broker, query):
     client = Client(HTTP_AUTHORIZATION="Bearer " + broker.token)
     for suffix in ("", "/completion"):
         assert client.get(f"/api/v1/jobs/{job.id}{suffix}", query).status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_read_snapshot_initializes_a_fresh_thread_connection():
+    def fresh_request():
+        database = transaction.get_connection()
+        assert database.connection is None
+        assert not hasattr(database, "transaction_mode")
+        statements = []
+        def record(execute, sql, params, many, context):
+            statements.append(sql)
+            return execute(sql, params, many, context)
+        try:
+            # CaptureQueriesContext would open the connection before our helper,
+            # hiding the lazy initialization exercised by a new HTTP thread.
+            with database.execute_wrapper(record):
+                with read_snapshot():
+                    with database.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                        assert cursor.fetchone() == (1,)
+                with transaction.atomic():
+                    with database.cursor() as cursor:
+                        cursor.execute("CREATE TEMP TABLE snapshot_write(value INTEGER)")
+                        cursor.execute("INSERT INTO snapshot_write VALUES (1)")
+            assert database.transaction_mode == "IMMEDIATE"
+            assert not database.in_atomic_block
+            return [sql for sql in statements if sql.startswith("BEGIN")]
+        finally:
+            database.close()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(fresh_request).result(timeout=10) == ["BEGIN DEFERRED", "BEGIN IMMEDIATE"]

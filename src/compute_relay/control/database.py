@@ -23,6 +23,7 @@ def database_config(data_dir, environ=None):
 def read_snapshot():
     """Keep multi-query GETs consistent without reserving SQLite's writer slot."""
     connection = transaction.get_connection()
+    connection.ensure_connection()
     mode = connection.transaction_mode
     try:
         # This is the current thread's connection, never the shared DB settings.
