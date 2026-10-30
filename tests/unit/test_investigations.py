@@ -12,7 +12,8 @@ from django.test import Client
 from compute_relay.control import services as core
 from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Artifact, Attempt, Connection, Environment, Job, MetadataUsage, Project, ProjectCredential, ResultAccess
+from compute_relay.control.storage import store_blob, store_uploaded_blob
+from compute_relay.control.models import Artifact, Attempt, Connection, Environment, Job, JobFile, MetadataUsage, Project, ProjectCredential, ResultAccess
 from compute_relay.extensions.investigations import services
 from compute_relay.extensions.investigations.models import Investigation, InvestigationJob
 from compute_relay.mcp.facade import ProjectFacade, create_server
@@ -486,3 +487,62 @@ def test_narrowed_key_cannot_execute_member_of_broader_investigation(two_cluster
     with pytest.raises(ControlError) as error:
         narrow.client.request("POST", f"/api/v1/jobs/{job.id}/execution-requests", {})
     assert error.value.status == 403 and not job.execution_requests.exists()
+
+
+def test_fixed_scope_covers_artifact_producers_for_all_attachment_paths(two_clusters):
+    context, group, _, other = two_clusters
+    original = prepared_job(context)
+    attach(context, group, original)
+    candidate = prepared_job(context)
+    budgeted(other)
+    other.grant.policy["allowed_connection_ids"].append(str(other.connection.id))
+    other.grant.policy["allowed_environment_revision_sha256"].append(other.environment.revision_sha256)
+    other.grant.save()
+    producer = prepared_job(other)
+    producer_attempt = execution(other, producer).attempt
+    content = b"private result from the second cluster\n"
+    artifact = Artifact.objects.create(attempt=producer_attempt, path="result.txt", blob=store_blob(context.project, content))
+    request = deepcopy(original.request)
+    request["files"] = [{"path": "main.py", "sha256": artifact.blob.sha256,
+        "size_bytes": artifact.blob.size_bytes, "executable": False}]
+    created, _ = core.create_job(other.credential, request)
+    consumer = Job.objects.get(id=created["id"])
+    source = consumer.files.get()
+    assert source.source_kind == "artifact" and source.source_artifact_id == artifact.id
+    broad = ProjectFacade(HTTP(other), str(context.project.id))
+    for operation in (
+        lambda: broad.add_investigation_jobs(str(group.id), [str(candidate.id), str(consumer.id)]),
+        lambda: broad.prepare_job(request, investigation_id=str(group.id)),
+        lambda: broad.revise_job(str(original.id), request),
+    ):
+        before = Job.objects.count(), JobFile.objects.count(), MetadataUsage.objects.count()
+        with pytest.raises(ControlError) as error:
+            operation()
+        assert error.value.code == "CONNECTION_DENIED" and error.value.status == 403
+        assert (Job.objects.count(), JobFile.objects.count(), MetadataUsage.objects.count()) == before
+    assert list(group.members.values_list("job_id", flat=True)) == [original.id]
+    narrow = ProjectFacade(HTTP(context), str(context.project.id))
+    assert narrow.get_investigation(str(group.id))["id"] == str(group.id)
+    # An explicit upload makes an independent copy; it no longer depends on B.
+    store_uploaded_blob(context.project, content)
+    with pytest.raises(ControlError) as error:
+        broad.add_investigation_jobs(str(group.id), [str(consumer.id)])
+    assert error.value.code == "CONNECTION_DENIED"
+    copied = broad.prepare_job(request, investigation_id=str(group.id))
+    assert Job.objects.get(id=copied["id"]).files.get(path="main.py").source_kind == "upload"
+    assert len(narrow.get_investigation(str(group.id))["jobs"]) == 2
+
+
+def test_artifact_producer_inside_fixed_scope_remains_usable(planned):
+    context, group, _ = planned
+    budgeted(context)
+    producer = prepared_job(context)
+    attempt = execution(context, producer).attempt
+    artifact = Artifact.objects.create(attempt=attempt, path="result.txt", blob=store_blob(context.project, b"local result\n"))
+    request = deepcopy(producer.request)
+    request["files"] = [{"path": "main.py", "sha256": artifact.blob.sha256,
+        "size_bytes": artifact.blob.size_bytes, "executable": False}]
+    api = ProjectFacade(HTTP(context), str(context.project.id))
+    created = api.prepare_job(request, investigation_id=str(group.id))
+    assert Job.objects.get(id=created["id"]).files.get(path="main.py").source_kind == "artifact"
+    assert api.get_investigation(str(group.id))["jobs"][0]["id"] == created["id"]

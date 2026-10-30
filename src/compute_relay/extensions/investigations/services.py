@@ -104,6 +104,9 @@ def bind_job(job, credential, context):
     require_connection(credential, job.request["connection_id"])
     if not group.connections.filter(id=job.request["connection_id"]).exists():
         raise BrokerError("CONNECTION_DENIED", "The job's cluster is outside this investigation's fixed scope.", 403)
+    if job.files.filter(source_kind="artifact").exclude(
+            source_artifact__attempt__connection__in=group.connections.all()).exists():
+        raise BrokerError("CONNECTION_DENIED", "An input artifact's cluster is outside this investigation's fixed scope.", 403)
     prior = InvestigationJob.objects.filter(job=job).first()
     if prior:
         if prior.investigation_id != group.id or prior.role != context.get("role", "core"):
