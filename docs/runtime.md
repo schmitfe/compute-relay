@@ -132,6 +132,13 @@ storage settings remain advisory planning estimates. See the
 The alpha supports fresh setup after incompatible stored-state changes, rather
 than historical schema upgrades. See [alpha updates](deployment.md#alpha-updates-and-fresh-setup).
 
+Source review flags invalid UTF-8 bytes with `\xNN` escapes and renders invisible,
+directional and non-printable characters as explicit Unicode codes. These are
+preview representations; stored bytes and package hashes remain unchanged.
+Python, shell and JSON files up to 128 KiB of displayed text use local server-side
+syntax highlighting. Other sources and larger previews remain plain text; the
+existing 1 MiB file preview ceiling still applies. Review warnings before approval.
+
 ## Preparation, approval, and accounting
 
 A job revision binds the exact source files, generated batch script, environment
