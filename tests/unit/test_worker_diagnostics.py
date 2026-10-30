@@ -113,11 +113,11 @@ def test_parallel_attempt_failures_keep_their_own_context(configured, caplog, mo
 
 def test_hostile_metadata_and_exception_class_cannot_add_log_content(caplog):
     caplog.set_level(logging.WARNING)
-    secret = "PRIVATE_TOKEN\nforged-log"
-    error = type(secret, (Exception,), {})(secret)
+    hostile_metadata = "PRIVATE_TOKEN\nforged-log"
+    error = type(hostile_metadata, (Exception,), {})(hostile_metadata)
     with pytest.raises(Exception) as caught:
-        with diagnostics.operation({"operation": {secret: secret}, "attempt_id": secret,
-                "connection_id": secret, "generation": secret}, secret):
+        with diagnostics.operation({"operation": {hostile_metadata: hostile_metadata}, "attempt_id": hostile_metadata,
+                "connection_id": hostile_metadata, "generation": hostile_metadata}, hostile_metadata):
             raise error
     assert caught.value is error
     record, = failures(caplog)
