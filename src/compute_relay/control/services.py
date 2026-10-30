@@ -485,8 +485,10 @@ def serialize_job(job, *, package=False):
     if package or job.manifest:
         result["manifest"] = job.manifest
     if package:
+        from .review_text import decode_preview
         result["files"] = [{"path": entry.path, "sha256": entry.blob.sha256, "size_bytes": entry.blob.size_bytes,
-            "text": read_blob(entry.blob).decode("utf-8", errors="replace") if entry.blob.size_bytes <= 1024 * 1024 else None}
+            **(decode_preview(read_blob(entry.blob)) if entry.blob.size_bytes <= 1024 * 1024
+               else {"text": None, "invalid_utf8": False})}
             for entry in job.files.select_related("blob").order_by("path")]
     return result
 

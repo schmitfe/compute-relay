@@ -499,8 +499,9 @@ def review(request, job_id):
                 if execution["id"] == request.POST.get("execution_request_id"):
                     execution["draft_comment"] = request.POST.get("comment", "")[:4000]
         from .review_text import prepare_review_files
-        prepare_review_files(detail["files"])
+        source_styles = prepare_review_files(detail["files"])
         response = render(request, "broker/review.html", {"job": job, "detail": detail, "manifest_text": json.dumps(job.manifest, indent=2),
+                                                      "source_styles": source_styles,
                                                       "attempt_diagnostics": human_attempt_diagnostics(job, job.attempts.select_related("connection__worker").order_by("-created_at")),
                                                       "allowance": services.allowance(job.project), "error": error, "idempotency_key": str(uuid.uuid4())})
         response["Cache-Control"] = "no-store, private"

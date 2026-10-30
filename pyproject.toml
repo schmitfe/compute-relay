@@ -18,6 +18,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "mcp>=1.12,<2",
   "waitress>=3.0.2,<4",
+  "Pygments>=2.19,<3",
 ]
 
 [project.optional-dependencies]
