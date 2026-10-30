@@ -66,10 +66,13 @@ acceptance. Planning contracts are collected by the same pytest run. The
 disposable application images install
 locked runtime dependencies without test extras or an editable source install.
 
-The manual `Optional disposable Slurm acceptance` workflow builds a synthetic
-SSH/Slurm/accounting cluster and runs the personal-connector smoke test. See
+The `Disposable Slurm acceptance` workflow runs after every merge/push to `main`
+and can also be started manually. It builds a synthetic SSH/Slurm/accounting
+cluster and runs personal-connector, recovery and investigation checks. See
 [container testing](container-testing.md). Its credentials and data are generated
-for the fixture and are removed afterward. It never accesses a real site.
+for the fixture and are removed afterward. It never accesses a real site or
+requires a VPN. A supported release must have a successful run for its exact
+commit, in addition to recorded acceptance for its supported real-site classes.
 
 ## Real-cluster acceptance
 
