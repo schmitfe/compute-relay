@@ -21,7 +21,7 @@ from compute_relay.remote.bundles import bundle_source
 from compute_relay.worker.client import ControlError
 from test_support.unit_test_async_worker import Backend, configured
 from test_support.unit_test_control import broker, budgeted, dispatched, prepared_job, submit_receipt
-from test_support.unit_test_remote_bundles import prepared, site
+from test_support.unit_test_remote_bundles import prepared, sacct_job, site
 
 
 @pytest.fixture
@@ -37,9 +37,7 @@ def remote(site):
         calls.append(command)
         if command == "sbatch":
             return {"returncode": 0, "stdout": "42;fixture", "stderr": ""}
-        timestamp = native["submitted_at"]
-        row = (f"42|COMPLETED|1|1|cpu=1|0:0|{timestamp}|{timestamp}|{timestamp}|"
-            f"broker-attempt:{native['attempt_id']}|{native['work_dir']}|\n")
+        row = json.dumps({"jobs": [sacct_job(native)], "errors": []})
         return {"returncode": 0, "stdout": "" if command == "squeue" else row, "stderr": ""}
 
     helper["scheduler"] = scheduler

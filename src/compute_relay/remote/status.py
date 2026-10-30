@@ -4,15 +4,19 @@ import re
 
 from .jobs import own_record
 from .protocol import JOB_PROTOCOL, STATUS_BATCH_SIZE
-from .scheduler import scheduler
+from .scheduler import sacct_response, scheduler, scheduler_rows
 
 
-def status_rows(response, job_ids):
+def status_rows(response, job_ids, fields):
     grouped = {job_id: [] for job_id in job_ids}
-    for line in response.get("stdout", "").splitlines():
-        job_id = line.split("|", 1)[0].strip()
-        if job_id in grouped:
-            grouped[job_id].append(line)
+    try:
+        rows = scheduler_rows(response, fields)
+        if any(row[0] not in grouped for row in rows):
+            raise ValueError("Unexpected scheduler identity")
+    except ValueError:
+        return {job_id: {"returncode": 1, "stdout": "", "stderr": "Malformed scheduler records"} for job_id in job_ids}
+    for row in rows:
+        grouped[row[0]].append("|".join(row))
     return {job_id: {"returncode": response["returncode"],
         "stdout": "\n".join(lines), "stderr": ""} for job_id, lines in grouped.items()}
 
@@ -38,12 +42,12 @@ def observe(config, request):
     if not valid:
         return {"items": results}
     job_ids = sorted({job_id for job_id, _ in valid.values()})
-    queue = status_rows(scheduler(config, "squeue", ["-h", "-j", ",".join(job_ids), "-o", "%i|%T|%k|%V"]), job_ids)
+    queue = status_rows(scheduler(config, "squeue", ["-h", "-j", ",".join(job_ids), "-o", "%i|%T|%k|%V"]), job_ids, 4)
     missing = [job_id for job_id in job_ids if not queue[job_id]["stdout"]]
     accounting = {}
     if missing:
-        accounting = status_rows(scheduler(config, "sacct", ["-j", ",".join(missing), "-X", "-D", "-P", "-n",
-            "--format=JobIDRaw,State,ElapsedRaw,AllocCPUS,AllocTRES,ExitCode,Submit,Start,End,Comment%128,WorkDir%4096"]), missing)
+        accounting = status_rows(sacct_response(scheduler(config, "sacct",
+            ["--json", "-j", ",".join(missing), "-X", "-D"])), missing, 11)
     for attempt_id, (job_id, gpus) in valid.items():
         results[attempt_id] = {"queue": queue[job_id],
             "accounting": accounting.get(job_id, {"returncode": 0, "stdout": "", "stderr": ""}), "expected_gpus": gpus}

@@ -9,6 +9,7 @@ from .filesystem import open_directory, open_regular, uuid_value, write_json
 from .jobs import own_record, submission_time_matches
 from .status import observe
 from .protocol import JOB_PROTOCOL
+from .scheduler import scheduler_rows
 
 
 def cleanup_terminal(config, request, record):
@@ -18,10 +19,7 @@ def cleanup_terminal(config, request, record):
     queue, accounting = result["queue"], result["accounting"]
     if queue["returncode"] or queue["stdout"].strip() or accounting["returncode"]:
         raise ValueError("Remote cleanup requires terminal scheduler evidence")
-    rows = [line.split("|") for line in accounting["stdout"].splitlines() if line.strip()]
-    for row in rows:
-        if row[-1] == "":
-            row.pop()
+    rows = scheduler_rows(accounting, 11)
     if len(rows) != 1 or len(rows[0]) != 11:
         raise ValueError("Remote cleanup requires one exact native allocation")
     row = [field.strip() for field in rows[0]]

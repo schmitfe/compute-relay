@@ -12,7 +12,7 @@ from .collection import output_transfer, read_logs
 from .cleanup import cleanup
 from .jobs import own_record, reconcile, submission_time_matches, submit, stage_input
 from .protocol import JOB_OPERATIONS, JOB_PROTOCOL
-from .scheduler import scheduler
+from .scheduler import scheduler, scheduler_rows
 from .status import observe
 
 def execute_jobs(config, request):
@@ -40,7 +40,10 @@ def execute_jobs(config, request):
     job_id = identity["job_id"]
     if op == "cancel":
         live = scheduler(config, "squeue", ["-h", "-j", job_id, "-o", "%i|%k|%V"])
-        rows = [line.split("|") for line in live["stdout"].splitlines() if line.strip()]
+        try:
+            rows = scheduler_rows(live, 3)
+        except ValueError:
+            return {"outcome": "identity_mismatch"}
         marker = "broker-attempt:" + identity["attempt_id"]
         if live["returncode"] or not rows:
             # Empty squeue is not completion or nonacceptance evidence. Keep

@@ -291,6 +291,18 @@ payload bound; it never skips older submission, cancellation or recovery work
 to fill a group. A single query reads the live jobs, followed by accounting for
 jobs absent from the queue. Every item retains its own verified journal binding,
 generation-fenced lease, heartbeat, accounting and output-recovery state.
+
+Accounting reads require Slurm's `sacct --json` support. The normalizer accepts
+the relevant Slurm 22.05 allocation schema and modern finite-number wrappers and
+single-state lists. It preserves every historical allocation record and rejects
+structured errors, missing accounting/identity fields and delimiter or line
+separators in free-text fields before emitting the fixed compact worker protocol.
+There is no fallback to parsing unquoted `sacct` text; unsupported JSON remains
+unresolved and retains the compute reservation. Scheduler warnings alone do not
+invalidate otherwise complete structured records. The existing 2 MiB scheduler
+response cap also applies to JSON: a large recovery history for a reused job name
+can exceed it and remain uncertain, requiring operator review. The recovery time
+window stays unchanged so long-running allocations remain discoverable.
 Invalid or uncertain status data never establishes completion or releases funds.
 
 Single-job and grouped work share the same package verification, durable report

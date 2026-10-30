@@ -10,7 +10,7 @@ from compute_relay.backends import FakeBackend, SlurmBackend
 from compute_relay.backends.slurm import parse_observation
 from compute_relay.remote.bundles import bundle_source
 from compute_relay.remote.protocol import STATUS_BATCH_SIZE
-from test_support.unit_test_remote_bundles import prepared, site
+from test_support.unit_test_remote_bundles import prepared, sacct_job, site
 
 
 def namespace():
@@ -38,8 +38,8 @@ def test_hundreds_of_attempts_use_two_queries_per_batch_without_quadratic_respon
             if command == "squeue" and int(job_id) % 2:
                 rows.append(f"{job_id}|RUNNING|{marker}|{timestamp}")
             elif command == "sacct" and not int(job_id) % 2:
-                rows.append(f"{job_id}|COMPLETED|1|1|cpu=1|0:0|{timestamp}|{timestamp}|{timestamp}|{marker}|{native['work_dir']}|")
-        return {"returncode": 0, "stdout": "\n".join(rows), "stderr": ""}
+                rows.append(sacct_job(native))
+        return {"returncode": 0, "stdout": json.dumps({"jobs": rows, "errors": []}) if command == "sacct" else "\n".join(rows), "stderr": ""}
     helper["scheduler"] = scheduler
     items = []
     for _ in range(count):
@@ -111,8 +111,7 @@ def test_failed_accounting_query_cannot_settle_from_partial_stdout():
     helper["own_record"] = lambda *args: {"manifest": {"maximum_allocation": {"gpu_devices": 0}}}
     native = {"attempt_id": "attempt", "job_id": "7", "submitted_at": "2026-10-21T12:00:00+00:00"}
     def scheduler(config, command, args):
-        return {"returncode": int(command == "sacct"), "stderr": "", "stdout": "" if command == "squeue" else (
-            "7|COMPLETED|1|1|cpu=1|0:0|2026-10-21T12:00:00|2026-10-21T12:00:00|2026-10-21T12:00:01|broker-attempt:attempt||")}
+        return {"returncode": int(command == "sacct"), "stderr": "", "stdout": "" if command == "squeue" else json.dumps({"jobs": [sacct_job(native)], "errors": []})}
     helper["scheduler"] = scheduler
     response = helper["execute_jobs"]({}, {"operation": "observe", "protocol": "slurm-jobs/v1", "items": [
         {"native_identity": native, "manifest_sha256": "a" * 64}]})
