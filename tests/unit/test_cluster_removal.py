@@ -331,3 +331,23 @@ def test_shared_connector_can_complete_accounting_after_force_removal(management
     assert current.state == "succeeded" and current.accounting_state == "settled"
     assert context.grant.reserved_cpu == 0 and context.grant.spent_cpu == 3
     assert LedgerEntry.objects.filter(attempt=current, action="settle").count() == 1
+
+
+def test_failed_collection_requires_explicit_unfinished_work_acknowledgement(management):
+    context = management
+    linked = context.connections[0]
+    existing = attempt(context, "settled")
+    existing.state, existing.collection_state = "succeeded", "failed"
+    existing.collection_failures = 3
+    existing.native_identity = {"job_id": "123", "work_dir": "/private/retained-job-directory"}
+    existing.save()
+    client = human(context.owner)
+    url = f"/clusters/{linked.id}/remove/"
+    page = client.get(url)
+    assert page.context["unfinished"]["outputs"] == 1
+    fields = {"connection_revision_sha256": linked.revision_sha256}
+    assert client.post(url, fields).status_code == 409
+    fields.update(action="remove_anyway", acknowledge_unfinished="yes")
+    assert client.post(url, fields).status_code == 302
+    existing.refresh_from_db()
+    assert existing.collection_state == "failed" and existing.accounting_state == "settled"

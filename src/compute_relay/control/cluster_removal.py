@@ -25,10 +25,13 @@ def _active_configuration(registration=None, connection=None):
 def _unfinished(connection):
     if connection is None:
         return {"attempts": 0, "accounting": 0, "outputs": 0, "reserved_cpu": 0, "reserved_gpu": 0}
+    from .cluster_services import unfinished_configuration_work
     pending = ~Q(accounting_state__in=["settled", "released"])
-    counts = Attempt.objects.filter(connection=connection).filter(pending | Q(collection_pending=True)).aggregate(
+    outputs = Q(collection_pending=True) | Q(native_identity__isnull=False,
+        accounting_state__in=["settled", "released"], collection_state__in=["pending", "retry_pending", "failed"])
+    counts = Attempt.objects.filter(connection=connection).filter(unfinished_configuration_work()).aggregate(
         attempts=Count("id"), accounting=Count("id", filter=pending),
-        outputs=Count("id", filter=Q(collection_pending=True)),
+        outputs=Count("id", filter=outputs),
         reserved_cpu=Sum("reservation_cpu", filter=pending), reserved_gpu=Sum("reservation_gpu", filter=pending))
     return {key: value or 0 for key, value in counts.items()}
 

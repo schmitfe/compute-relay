@@ -929,7 +929,11 @@ def retry_collection(attempt):
     """Revisit the same finished native allocation without admitting compute."""
     with transaction.atomic():
         Project.objects.select_for_update().get(id=attempt.job.project_id)
+        connection = Connection.objects.select_for_update().get(id=attempt.connection_id)
         attempt = Attempt.objects.select_for_update().get(id=attempt.id)
+        if (connection.archived or not connection.setup_complete or not connection.configuration_confirmed
+                or attempt.job.manifest.get("connection_revision_sha256") != connection.revision_sha256):
+            raise BrokerError("REVISION_CHANGED", "Restore this attempt's confirmed cluster configuration before retrying output collection.", 409)
         if attempt.remote_cleanup.get("state") in {"queued", "running", "complete"}:
             raise BrokerError("OUTPUT_CLEANUP_REQUESTED", "Remote output cleanup was requested. Collection cannot reopen these files.", 409)
         if not attempt.native_identity or not terminal_observation(attempt.observation):

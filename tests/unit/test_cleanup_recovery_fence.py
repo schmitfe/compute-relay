@@ -18,3 +18,20 @@ def test_remote_cleanup_fences_explicit_collection_recovery(broker, state):
     assert raised.value.code == "OUTPUT_CLEANUP_REQUESTED"
     attempt.refresh_from_db()
     assert not attempt.collection_pending and attempt.collection_state == "complete"
+
+
+@pytest.mark.parametrize("change", ["revision", "configuration_pending", "removed"])
+def test_collection_cannot_reopen_after_configuration_change_begins(broker, change):
+    job, attempt = completed(broker)
+    if change == "revision":
+        broker.connection.revision_sha256 = "d" * 64
+    elif change == "configuration_pending":
+        broker.connection.setup_complete = False
+    else:
+        broker.connection.archived = True
+    broker.connection.save()
+    with pytest.raises(BrokerError) as denied:
+        services.retry_collection(attempt)
+    assert denied.value.code == "REVISION_CHANGED"
+    attempt.refresh_from_db()
+    assert not attempt.collection_pending

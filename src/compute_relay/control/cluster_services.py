@@ -18,6 +18,25 @@ PROFILE_FIELDS = {"alias", "backend", "revision_sha256", "allowed_hosts", "allow
 SITE_FIELDS = {"partitions", "accounts", "qos", "allocated_cpus", "allocated_gpus", "cpu_allocation_quantum", "maximum_cpus", "maximum_gpus", "maximum_memory_mib", "maximum_time_limit_seconds", "automatic_execution_allowed"}
 
 
+def unfinished_configuration_work():
+    return (~Q(accounting_state__in=["settled", "released"]) | Q(collection_pending=True)
+        | Q(native_identity__isnull=False, collection_state__in=["pending", "retry_pending", "failed"])
+        | Q(remote_cleanup__state__in=["queued", "running"])
+        | Q(lease_expires_at__gt=timezone.now()))
+
+
+def configuration_busy(connection):
+    """Keep a current binding until recovery and already-requested cleanup finish."""
+    return Attempt.objects.filter(connection=connection).filter(unfinished_configuration_work()).exists()
+
+
+def require_idle_configuration(connection):
+    if configuration_busy(connection):
+        raise BrokerError("CONNECTION_BUSY",
+            "Finish execution, accounting, output recovery and requested cleanup before changing this cluster configuration. "
+            "If recovery is impossible, explicitly remove the cluster using its unfinished-work acknowledgement first.", 409)
+
+
 def publish_profiles(worker, document):
     from compute_relay.extensions import EXTENSIONS
     extensions = document.get("extensions", [])
@@ -103,9 +122,8 @@ def report_discovery(worker, connection_id, document):
             revision = digest(config)
             if revision != document.get("connection_revision_sha256"):
                 raise BrokerError("INVALID_DISCOVERY", "Discovery binding does not match.")
-            if revision != connection.revision_sha256 and Attempt.objects.filter(connection=connection).exclude(
-                    accounting_state__in=["settled", "released"]).exists():
-                raise BrokerError("CONNECTION_BUSY", "Finish accounting for existing attempts before changing this cluster configuration.", 409)
+            if revision != connection.revision_sha256:
+                require_idle_configuration(connection)
             snapshot = document.get("discovery_snapshot")
             if not isinstance(snapshot, dict) or len(rfc8785.dumps(snapshot)) > 1024 * 1024:
                 raise BrokerError("DISCOVERY_LIMIT", "Discovery exceeds the snapshot limit.", 413)
