@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import hashlib
 import json
 import subprocess
@@ -9,6 +10,17 @@ from compute_relay.backends import BackendError, prepare
 
 def digest(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def sacct_job(native, *, state="COMPLETED", elapsed=1, cpus=1):
+    """The relevant Slurm 22.05 JSON allocation fields, without source bytes."""
+    submitted = int(datetime.datetime.fromisoformat(native["submitted_at"]).timestamp())
+    return {"job_id": int(native["job_id"]), "state": {"current": state},
+        "comment": {"job": "broker-attempt:" + native["attempt_id"]},
+        "working_directory": native.get("work_dir", ""),
+        "time": {"elapsed": elapsed, "submission": submitted, "start": submitted, "end": submitted + elapsed},
+        "tres": {"allocated": [{"type": "cpu", "name": None, "count": cpus}]},
+        "exit_code": {"status": "SUCCESS", "return_code": 0}}
 
 
 class LocalFixedTransport:
@@ -51,8 +63,14 @@ elif command=='squeue':
 elif command=='scancel':
     data['state']='CANCELLED'; state.write_text(json.dumps(data))
 elif command=='sacct':
+    assert '--json' in sys.argv
+    jobs=[]
     if data.get('state')=='CANCELLED':
-        print('42|CANCELLED|1|1|cpu=1|0:0|'+data['submitted']+'|'+data['submitted']+'|'+data['submitted']+'|'+data['marker']+'|'+data.get('work_dir','')+'|')
+        instant=int(datetime.datetime.fromisoformat(data['submitted']).replace(tzinfo=datetime.timezone.utc).timestamp())
+        jobs=[{{'job_id':42,'state':{{'current':'CANCELLED'}},'comment':{{'job':data['marker']}},
+            'working_directory':data.get('work_dir',''),'time':{{'elapsed':1,'submission':instant,'start':instant,'end':instant+1}},
+            'tres':{{'allocated':[{{'type':'cpu','name':None,'count':1}}]}},'exit_code':{{'status':'SUCCESS','return_code':0}}}}]
+    print(json.dumps({{'jobs':jobs,'errors':[]}}))
 ''')
     program.chmod(0o700)
     paths = {}

@@ -12,6 +12,7 @@ from compute_relay.diagnostics import operation as diagnostic_operation
 
 from compute_relay.transports import OpenSSHTransport, TransportError
 from compute_relay.remote.protocol import STATUS_BATCH_SIZE
+from compute_relay.remote.scheduler import scheduler_rows
 
 from .discovery import parse_discovery
 from .preparation import (
@@ -72,8 +73,11 @@ def parse_observation(native_identity: dict, queue: dict, accounting: dict, expe
     unknown = {"state": "unknown", "native_state": "UNKNOWN", "terminal": False,
                "accounting": {"final": False}, "source": "none"}
     if queue.get("returncode") == 0:
-        for line in queue.get("stdout", "").splitlines():
-            fields = [field.strip() for field in line.strip().split("|")]
+        try:
+            rows = scheduler_rows(queue, 4)
+        except ValueError:
+            return {**unknown, "detail": "Malformed queue records; observation deferred"}
+        for fields in rows:
             if fields and fields[0] == job_id:
                 if len(fields) != 4 or fields[2] != marker or not submission_time_matches(fields[3], native_identity):
                     return {**unknown, "detail": "Live native job identity no longer matches the broker attempt"}
@@ -83,8 +87,11 @@ def parse_observation(native_identity: dict, queue: dict, accounting: dict, expe
                         "accounting": {"final": False}, "source": "squeue"}
     if accounting.get("returncode") != 0:
         return unknown
-    rows = [[field.strip() for field in line.split("|")] for line in accounting.get("stdout", "").splitlines() if line.strip()]
-    rows = [row for row in rows if len(row) >= 11 and row[0] == job_id]
+    try:
+        rows = scheduler_rows(accounting, 11)
+    except ValueError:
+        return {**unknown, "detail": "Malformed accounting records; settlement deferred"}
+    rows = [row for row in rows if row[0] == job_id]
     if len(rows) != 1:
         return {**unknown, "detail": "Missing or multiple allocation records; settlement deferred"}
     row = rows[0]

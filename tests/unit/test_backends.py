@@ -2,6 +2,7 @@
 
 import asyncio
 from test_support.unit_test_backends import ATTEMPT, REVISION, metadata_module_catalog, observation, sample
+from test_support.unit_test_remote_bundles import sacct_job
 
 import base64
 import copy
@@ -278,7 +279,8 @@ def test_nonzero_sbatch_rpc_result_never_refunds_or_retries(remote_request, monk
     assert calls == ["sbatch", "squeue", "sacct"]
 
 
-def test_completed_job_lost_reply_can_recover_from_accounting_marker(remote_request, monkeypatch):
+@pytest.mark.parametrize("change", ["valid", "duplicate", "old_submission", "wrong_marker", "delimiter"])
+def test_completed_job_lost_reply_can_recover_from_accounting_marker(remote_request, monkeypatch, change):
     import datetime as dt
 
     def scheduler(config, command, args, **kwargs):
@@ -286,16 +288,25 @@ def test_completed_job_lost_reply_can_recover_from_accounting_marker(remote_requ
             raise TimeoutError("response lost")
         if command == "squeue":
             return {"returncode": 0, "stdout": "", "stderr": ""}
-        assert "--format=JobIDRaw,Comment,Submit" in args
+        assert "--json" in args and not any(arg.startswith("--format") for arg in args)
         assert any(arg.startswith("--starttime=") for arg in args)
         assert any(arg.startswith("--user=") for arg in args)
         timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-        return {"returncode": 0, "stdout": f"42|broker-attempt:{ATTEMPT}|{timestamp}|\n", "stderr": ""}
+        native = {"job_id": "42", "attempt_id": ATTEMPT, "submitted_at": timestamp + "+00:00"}
+        record = sacct_job(native)
+        if change == "old_submission": record["time"]["submission"] -= 3600
+        elif change == "wrong_marker": record["comment"]["job"] = "broker-attempt:another"
+        elif change == "delimiter": record["comment"]["job"] += "|additional field"
+        return {"returncode": 0, "stdout": json.dumps({"jobs": [record] * (2 if change == "duplicate" else 1), "errors": []}), "stderr": ""}
 
     monkeypatch.setattr(helper, "scheduler", scheduler)
     assert helper.execute(remote_request["config"], remote_request)["outcome"] == "submission_uncertain"
     reconcile = {**remote_request, "operation": "reconcile"}
-    assert helper.execute(remote_request["config"], reconcile)["native_identity"]["job_id"] == "42"
+    result = helper.execute(remote_request["config"], reconcile)
+    if change == "valid":
+        assert result["native_identity"]["job_id"] == "42"
+    else:
+        assert result["outcome"] == "submission_uncertain" and not result.get("native_identity")
 
 
 def test_remote_output_retrieval_refuses_symlink_escape(remote_request, monkeypatch, tmp_path):

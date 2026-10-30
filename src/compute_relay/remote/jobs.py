@@ -18,7 +18,7 @@ from .filesystem import (
 )
 from .prelude import MAX_FILE_TOTAL
 from .protocol import require_journal_binding, require_management_protocol
-from .scheduler import scheduler
+from .scheduler import sacct_response, scheduler, scheduler_rows
 
 def stage(attempt_dir, manifest, encoded_files):
     entries = manifest["files"]
@@ -275,12 +275,15 @@ def reconcile(config, request):
                                                    "--name=" + request["manifest"]["request"]["name"], "-o", "%i|%k|%V"])
         except Exception:
             response = {"returncode": -1, "stdout": ""}
-        matches = set()
+        matches = []
         if response["returncode"] == 0:
-            for line in response["stdout"].splitlines():
-                fields = line.split("|")
+            try:
+                rows = scheduler_rows(response, 3)
+            except ValueError:
+                return record
+            for fields in rows:
                 if len(fields) == 3 and fields[0].isdigit() and fields[1] == "broker-attempt:" + attempt_id and submission_time_matches(fields[2], record["created_at"]):
-                    matches.add(fields[0])
+                    matches.append(fields[0])
         if not matches:
             created = datetime.datetime.fromisoformat(record["created_at"])
             start = created - datetime.timedelta(seconds=60)
@@ -288,24 +291,26 @@ def reconcile(config, request):
             # This is a bounded recovery query, not an unrestricted history scan.
             end = min(now + datetime.timedelta(seconds=60), created + datetime.timedelta(days=30))
             try:
-                accounting = scheduler(config, "sacct", ["-X", "-D", "-P", "-n", "--user=" + user,
+                accounting = sacct_response(scheduler(config, "sacct", ["--json", "-X", "-D", "--user=" + user,
                     "--name=" + request["manifest"]["request"]["name"],
                     "--starttime=" + start.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "--endtime=" + end.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "--format=JobIDRaw,Comment,Submit"])
+                    "--endtime=" + end.strftime("%Y-%m-%dT%H:%M:%S")]))
             except Exception:
                 accounting = {"returncode": -1, "stdout": ""}
             if accounting["returncode"] == 0:
-                for line in accounting["stdout"].splitlines():
-                    fields = line.split("|")
-                    if len(fields) >= 3 and fields[0].isdigit() and fields[1] == "broker-attempt:" + attempt_id:
+                try:
+                    rows = scheduler_rows(accounting, 11)
+                except ValueError:
+                    return record
+                for fields in rows:
+                    if fields[0].isdigit() and fields[9] == "broker-attempt:" + attempt_id:
                         try:
-                            submitted = datetime.datetime.fromisoformat(fields[2]).replace(tzinfo=datetime.timezone.utc)
+                            submitted = datetime.datetime.fromisoformat(fields[6]).replace(tzinfo=datetime.timezone.utc)
                         except ValueError:
                             continue
-                        if start <= submitted <= end and submission_time_matches(fields[2], record["created_at"]):
-                            matches.add(fields[0])
-        if len(matches) == 1:
+                        if start <= submitted <= end and submission_time_matches(fields[6], record["created_at"]):
+                            matches.append(fields[0])
+        if len(matches) == 1 and sum(fields[0] == matches[0] for fields in rows) == 1:
             record.update(outcome="submitted", native_identity={"attempt_id": attempt_id,
                           "job_id": next(iter(matches)), "cluster": "", "submitted_at": record["created_at"],
                           "work_dir": config["remote_root"].rstrip("/") + "/" + record["attempt_path"]},
