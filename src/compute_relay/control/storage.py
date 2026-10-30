@@ -30,12 +30,25 @@ def blob_path(blob):
     return settings.ARTIFACT_ROOT / str(blob.project_id) / blob.sha256
 
 
+def _check_blob_metadata(blob, info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != blob.size_bytes:
+        raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+
+
+def check_blob_metadata(blob):
+    """Check retained presence and shape without reading or verifying contents."""
+    fd = os.open(blob_path(blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        _check_blob_metadata(blob, os.fstat(fd))
+    finally:
+        os.close(fd)
+
+
 def read_blob(blob):
     fd = os.open(blob_path(blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as handle:
         metadata = os.fstat(handle.fileno())
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size != blob.size_bytes:
-            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        _check_blob_metadata(blob, metadata)
         data = handle.read(blob.size_bytes + 1)
     if len(data) != blob.size_bytes or hashlib.sha256(data).hexdigest() != blob.sha256:
         raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
@@ -70,8 +83,7 @@ def open_verified_blob(blob):
     stream = os.fdopen(fd, "rb")
     try:
         info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != blob.size_bytes:
-            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        _check_blob_metadata(blob, info)
         key = _verification_key(blob, info)
         with _verification_lock:
             cached = key in _verified_objects
@@ -100,8 +112,7 @@ def blob_chunk(blob, offset, limit=CHUNK_BYTES):
     fd = os.open(blob_path(blob), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != blob.size_bytes:
-            raise BrokerError("OBJECT_INTEGRITY", "Stored object failed verification.", 409)
+        _check_blob_metadata(blob, info)
         stream.seek(offset)
         return stream.read(min(limit, blob.size_bytes - offset))
 

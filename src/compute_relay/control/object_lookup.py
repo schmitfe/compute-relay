@@ -6,7 +6,7 @@ from django.conf import settings
 
 from .errors import BrokerError
 from .models import Blob
-from .storage import verify_blob
+from .storage import check_blob_metadata
 from .views import body, boundary, scope
 
 
@@ -41,7 +41,9 @@ def lookup(request, project_id):
                     continue
                 raise
             try:
-                verify_blob(blob)
+                # Lookup is an existence hint. Publication and consumers verify
+                # content; a lookup never spends unbounded time hashing it.
+                check_blob_metadata(blob)
             except OSError:
                 raise BrokerError("OBJECT_UNAVAILABLE", "Stored object is unavailable; retry after storage recovery.", 409) from None
             present.append({"sha256": digest, "size_bytes": size})

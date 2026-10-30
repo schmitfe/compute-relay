@@ -18,6 +18,7 @@ from django.test import Client
 import pytest
 
 from compute_relay.control.auth import token_hash
+from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Job, Project
 from compute_relay.control.storage import store_blob, store_uploaded_blob
 from compute_relay import workspace as workspace_module
@@ -377,7 +378,7 @@ def test_real_http_cli_stages_prepares_idempotently_and_fetches_without_executin
     assert (root / "results/first/answer.txt").read_bytes() == b"synthetic-result\n"
 
 
-def test_content_lookup_checks_scope_project_size_and_stored_integrity(broker):
+def test_content_lookup_checks_scope_project_size_and_retained_metadata(broker):
     c = broker
     blob = store_uploaded_blob(c.project, b"ours")
     foreign = Project.objects.create(owner=c.outsider, name="foreign")
@@ -402,7 +403,7 @@ def test_content_lookup_checks_scope_project_size_and_stored_integrity(broker):
     c.credential.scopes = ["objects:write"]
     c.credential.save(update_fields=["scopes"])
     from compute_relay.control.storage import blob_path
-    blob_path(blob).write_bytes(b"oops")
+    blob_path(blob).write_bytes(b"wrong size")
     corrupted = post({"objects": entries[:1]})
     assert corrupted.status_code == 409 and corrupted.json()["error"]["code"] == "OBJECT_INTEGRITY"
     assert b"oops" not in corrupted.content
@@ -434,3 +435,35 @@ def test_attempt_accounting_distinguishes_requested_allocated_and_actual(broker)
     assert result["final"] is False and result["cpu_core_seconds"] is None
     attempt.accounting_state = "released"
     assert serialize_attempt(attempt)["accounting"]["cpu_core_seconds"] == 0
+
+
+def test_lookup_is_bounded_by_descriptors_not_cached_hashes(broker, monkeypatch):
+    from compute_relay.control import storage
+    from compute_relay.control.models import Blob, UploadGrant
+    import hashlib
+
+    # More objects than the verification cache holds, as in the reported cycle.
+    directory = storage.blob_path(Blob(project=broker.project, sha256="unused")).parent
+    directory.mkdir(parents=True, exist_ok=True)
+    blobs = []
+    for index in range(4100):
+        data = str(index).encode()
+        digest = hashlib.sha256(data).hexdigest()
+        (directory / digest).write_bytes(data)
+        blobs.append(Blob(project=broker.project, sha256=digest, size_bytes=len(data)))
+    Blob.objects.bulk_create(blobs)
+    UploadGrant.objects.bulk_create([UploadGrant(blob=blob) for blob in blobs])
+    monkeypatch.setattr(storage, "fingerprint", lambda *_: pytest.fail("lookup must not hash retained bytes"))
+    client = Client(HTTP_AUTHORIZATION="Bearer " + broker.token)
+    path = f"/api/v1/projects/{broker.project.id}/objects/lookup"
+    for offset in range(0, len(blobs), 100):
+        entries = [{"sha256": blob.sha256, "size_bytes": blob.size_bytes} for blob in blobs[offset:offset + 100]]
+        reply = client.post(path, {"objects": entries}, content_type="application/json")
+        assert reply.status_code == 200 and reply.json()["present"] == entries
+    blob = blobs[-1]
+    # Even unchanged size is only a hint. Actual consumption still detects damage.
+    storage.blob_path(blob).write_bytes(b"x" * blob.size_bytes)
+    entries = [{"sha256": blob.sha256, "size_bytes": blob.size_bytes}]
+    assert client.post(path, {"objects": entries}, content_type="application/json").json()["present"] == entries
+    with pytest.raises(BrokerError, match="verification"):
+        storage.read_blob(blob)
