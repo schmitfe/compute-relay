@@ -199,6 +199,21 @@ def test_export_downloads_verifies_and_acknowledges_without_starting_compute(pla
     assert resumed["summary"]["local_delivery_complete"]
 
 
+def test_completion_export_collects_execution_pages_without_attempts(planned):
+    from compute_relay.control.models import ExecutionRequest
+    from compute_relay.workspace_completion import _job_manifest
+    context, _, _ = planned
+    job = prepared_job(context)
+    rows = [ExecutionRequest(job=job, credential=context.credential) for _ in range(45)]
+    ExecutionRequest.objects.bulk_create(rows)
+    facade = ProjectFacade(HTTP(context), str(context.project.id))
+    result = _job_manifest(facade, str(job.id))
+    assert result["attempts"] == [] and len(result["execution_requests"]) == 45
+    assert {row["id"] for row in result["execution_requests"]} == {str(row.id) for row in rows}
+    assert result["summary"]["pending_approvals"] == 45
+    assert result["next_cursor"] is None and result["next_execution_cursor"] is None
+
+
 def test_metadata_only_export_does_not_claim_verification_or_ack(planned, tmp_path):
     context, group, _ = planned
     context.token = "cbp_synthetic_metadata_workspace_123456789"
@@ -314,18 +329,3 @@ def test_invalid_plan_cannot_create_metadata(planned, mutation):
     with pytest.raises(BrokerError):
         services.create(context.credential, changed)
     assert Investigation.objects.count() == 1
-
-
-def test_completion_export_collects_execution_pages_without_attempts(planned):
-    from compute_relay.control.models import ExecutionRequest
-    from compute_relay.workspace_completion import _job_manifest
-    context, _, _ = planned
-    job = prepared_job(context)
-    rows = [ExecutionRequest(job=job, credential=context.credential) for _ in range(45)]
-    ExecutionRequest.objects.bulk_create(rows)
-    facade = ProjectFacade(HTTP(context), str(context.project.id))
-    result = _job_manifest(facade, str(job.id))
-    assert result["attempts"] == [] and len(result["execution_requests"]) == 45
-    assert {row["id"] for row in result["execution_requests"]} == {str(row.id) for row in rows}
-    assert result["summary"]["pending_approvals"] == 45
-    assert result["next_cursor"] is None and result["next_execution_cursor"] is None
