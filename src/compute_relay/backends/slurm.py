@@ -8,6 +8,7 @@ import re
 from typing import Mapping
 from uuid import UUID
 from compute_relay.transfer import FileReference
+from compute_relay.diagnostics import operation as diagnostic_operation
 
 from compute_relay.transports import OpenSSHTransport, TransportError
 from compute_relay.remote.protocol import STATUS_BATCH_SIZE
@@ -161,7 +162,8 @@ class SlurmBackend:
         return output
 
     async def _call(self, operation: str, **arguments) -> dict:
-        return await self.transport.call_helper(helper_source(operation), self._request(operation, **arguments))
+        with diagnostic_operation(None, "remote"):
+            return await self.transport.call_helper(helper_source(operation), self._request(operation, **arguments))
 
     async def submit(self, attempt_id: str, manifest: dict, files: Mapping[str, bytes | FileReference]) -> dict:
         UUID(attempt_id)
