@@ -1,6 +1,8 @@
-name: Optional disposable Slurm acceptance
+name: Disposable Slurm acceptance
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +16,7 @@ jobs:
       COMPOSE_FILE: deploy/compose.test.yml:deploy/compose.personal-test.yml:deploy/compose.upgrade-test.yml
       COMPOSE_PROJECT_NAME: cb-personal-ci
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build synthetic cluster and acceptance client
@@ -36,7 +38,7 @@ jobs:
       COMPOSE_FILE: deploy/compose.test.yml:deploy/compose.investigations-test.yml
       COMPOSE_PROJECT_NAME: cb-investigation-ci
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build the disposable investigation fixture

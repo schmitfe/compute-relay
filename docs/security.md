@@ -17,9 +17,12 @@ that link, and the service exchanges it for an ordinary session and redirects
 to a URL without the token. Only a hash is stored in private local state, tied
 to the running instance and a five-minute expiry. Launching again issues a new
 link without restarting the application. Reaching loopback alone grants no
-owner access, including from another account on a shared host. Treat the launch
-link as a password. Browser sessions, CSRF checks, exact loopback-origin checks
-and host restrictions still apply. A
+owner access. Treat the launch link as a password. The supported private desktop
+assumes trusted local accounts and services: browser launch arguments may expose
+the short-lived URL, and HTTP cookies are shared across ports on the same host.
+Launch tokens and sessions are bearer credentials, not an OS-user binding.
+Browser sessions, CSRF checks, exact loopback-origin checks and host restrictions
+still apply. A
 project API key is never a substitute for the human session used to approve
 jobs or change configuration.
 
@@ -54,6 +57,13 @@ between an untrusted agent and cluster credentials requires a separate account,
 VM or host and a separately reviewed deployment. Docker administration also
 allows inspection of container credentials; the optional test containers are
 not a claim of same-account secret isolation.
+
+An agent using only a project key cannot approve its own work, issue owner keys
+or raise project allowances. An agent that controls the owner account or human
+browser can obtain owner authority. Running the service under a separate UID
+helps only when its private state, launch links and the human browser/session
+are also inaccessible to the agent. Do not pass an owner launch token to an agent
+as a substitute for a restricted project key.
 
 ## Workload approval and budget
 
