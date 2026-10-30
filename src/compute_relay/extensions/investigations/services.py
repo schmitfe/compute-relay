@@ -3,12 +3,12 @@
 from django.db import transaction
 from django.utils import timezone
 
-from compute_relay.control.auth import require_connection
-from compute_relay.control.completion import job_snapshot, revision
+from compute_relay.control.auth import allowed_connections, require_connection
+from compute_relay.control.completion import job_snapshot
 from compute_relay.control.errors import BrokerError
 from compute_relay.control.metadata import json_size, reserve_metadata
-from compute_relay.control.models import Job, Project
-from .models import Investigation, InvestigationJob
+from compute_relay.control.models import Connection, Job, Project
+from .models import Investigation, InvestigationConnection, InvestigationJob
 
 ROLES = {"core", "validation", "exploration"}
 
@@ -34,6 +34,7 @@ def validate_plan(plan):
 
 def require_write(credential):
     from compute_relay.control.auth import require_credential_actor
+    Project.objects.select_for_update().get(id=credential.project_id)
     credential.refresh_from_db()
     require_credential_actor(credential)
     if credential.revoked or credential.expires_at <= timezone.now() or "investigations:write" not in credential.scopes:
@@ -46,17 +47,31 @@ def create(credential, document):
     if set(document) != {"name", "plan"} or not isinstance(document["name"], str) or not 1 <= len(document["name"].strip()) <= 80:
         raise BrokerError("INVALID_PLAN", "Use a name of 1 through 80 characters and a plan.")
     validate_plan(document["plan"])
-    Project.objects.select_for_update().get(id=credential.project_id)
+    connections = list(allowed_connections(credential).values_list("id", flat=True))
+    if not connections:
+        raise BrokerError("CONNECTION_DENIED", "An investigation requires access to at least one cluster.", 403)
     group = Investigation.objects.create(project=credential.project, name=document["name"], plan=document["plan"])
-    reserve_metadata(credential.project, "investigation", group.id, json_size(document) + 2048)
+    InvestigationConnection.objects.bulk_create([
+        InvestigationConnection(investigation=group, connection_id=connection_id) for connection_id in connections])
+    _resize(group)
     return {"id": str(group.id), "name": group.name, "state": group.state,
         "plan_limits": "agent_guidance; project_grant_enforces_compute_admission"}, 201
 
 
+def visible(credential):
+    inaccessible = Connection.objects.exclude(id__in=allowed_connections(credential))
+    return Investigation.objects.filter(project=credential.project).exclude(
+        connection_scope__connection__in=inaccessible)
+
+
+def require_access(credential, group):
+    if not visible(credential).filter(id=group.id).exists():
+        raise BrokerError("CONNECTION_DENIED", "This key cannot access every cluster in the investigation's scope.", 403)
+
+
 def checked(credential, identifier):
     group = Investigation.objects.get(id=identifier, project=credential.project)
-    for member in group.members.select_related("job"):
-        require_connection(credential, member.job.request["connection_id"])
+    require_access(credential, group)
     return group
 
 
@@ -66,13 +81,17 @@ def filter_jobs(query, credential, identifier):
 
 
 def validate_related_execution(job, credential):
-    if InvestigationJob.objects.filter(job=job, investigation__state="closed").exists():
+    member = InvestigationJob.objects.select_related("investigation").filter(job=job).first()
+    if member:
+        require_access(credential, member.investigation)
+    if member and member.investigation.state == "closed":
         raise BrokerError("INVESTIGATION_CLOSED", "This investigation's scope is closed; no new execution request is permitted.", 409)
 
 
 def _resize(group):
     reserve_metadata(group.project, "investigation", group.id,
-        json_size(group.plan) + len(group.report.encode()) + 2048 + 512 * group.members.count())
+        json_size({"name": group.name, "plan": group.plan}) + len(group.report.encode())
+        + 2048 + 512 * group.members.count() + 128 * group.connections.count())
 
 
 @transaction.atomic
@@ -80,9 +99,11 @@ def bind_job(job, credential, context):
     require_write(credential)
     if not isinstance(context, dict) or set(context) - {"id", "role"} or "id" not in context or context.get("role", "core") not in ROLES:
         raise BrokerError("INVALID_PLAN", "Use an investigation ID and core, validation or exploration role.")
-    Project.objects.select_for_update().get(id=credential.project_id)
     group = Investigation.objects.select_for_update().get(id=context["id"], project=credential.project)
+    require_access(credential, group)
     require_connection(credential, job.request["connection_id"])
+    if not group.connections.filter(id=job.request["connection_id"]).exists():
+        raise BrokerError("CONNECTION_DENIED", "The job's cluster is outside this investigation's fixed scope.", 403)
     prior = InvestigationJob.objects.filter(job=job).first()
     if prior:
         if prior.investigation_id != group.id or prior.role != context.get("role", "core"):
@@ -114,6 +135,7 @@ def add_jobs(credential, group, document):
 
 
 def snapshot(credential, group):
+    require_access(credential, group)
     summaries, jobs = [], []
     for member in group.members.select_related("job").order_by("created_at", "job_id"):
         require_connection(credential, member.job.request["connection_id"])
@@ -132,6 +154,7 @@ def snapshot(credential, group):
         usage[field] + reserved[field] >= budget[field] if budget[field] > 0
         else usage[field] + reserved[field] > 0 for field in usage)
     return {"schema_version": "1.0", "id": str(group.id), "project_id": str(group.project_id), "name": group.name,
+        "connection_ids": sorted(str(identifier) for identifier in group.connections.values_list("id", flat=True)),
         "state": group.state, "plan": group.plan, "conclusion": group.conclusion, "report": group.report,
         "plan_limits": "agent_guidance; project_grant_enforces_compute_admission",
         "summary": {"job_count": len(jobs), "attempts": attempts, "pending_approvals": pending,
@@ -153,8 +176,8 @@ def finish(credential, group, document):
             or not isinstance(document["report"], str) or not 1 <= len(document["report"].strip()) <= 16000
             or type(document["cancel_unstarted"]) is not bool):
         raise BrokerError("INVALID_REQUEST", "Record sufficient, inconclusive or user_stopped, a report and cancel_unstarted.")
-    Project.objects.select_for_update().get(id=credential.project_id)
-    group = Investigation.objects.select_for_update().get(id=group.id)
+    group = Investigation.objects.select_for_update().get(id=group.id, project=credential.project)
+    require_access(credential, group)
     if group.state == "closed":
         if (group.conclusion, group.report) != (document["conclusion"], document["report"]):
             raise BrokerError("INVESTIGATION_CLOSED", "This investigation already has a different closing report.", 409)

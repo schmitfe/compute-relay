@@ -43,8 +43,15 @@ Use `create_investigation(name, plan)` to record the plan, then
 `add_investigation_jobs`; revisions inherit the same group and role. A job has
 one stable membership. A group holds at most 128 packages, and attachment accepts
 at most 32 explicit job IDs per call. Grouped creation is atomic: a denied group
-cannot leave an orphan job. Each member's connection and input provenance remain
-subject to the current key's authorization.
+cannot leave an orphan job. An investigation snapshots the creating key's
+currently accessible project clusters; creation requires at least one. Its cluster scope cannot be widened by later
+project changes or by a broader sibling key. Reading, listing, attaching jobs and
+closing require current access to every cluster in that scope, including for an
+empty investigation. New jobs, explicit attachments and revisions must remain
+within the saved scope. Keys with equivalent authority can collaborate or rotate
+without transferring ownership. Current project/key restrictions and cluster
+revocations still apply, and each member's input provenance remains subject to
+the current key's authorization.
 
 `plan` requires `question`, `deliverable`, `core_experiments`,
 `required_validation`, `stopping_rule`, `budget`, and `diagnostic_limit`.

@@ -19,7 +19,7 @@ def investigations(request, project_id):
     state = request.GET.get("state", "open")
     if state not in {"open", "closed", "all"}:
         raise ValueError("Invalid investigation filter")
-    query = Investigation.objects.filter(project=project)
+    query = services.visible(credential)
     if state != "all":
         query = query.filter(state=state)
     cursor = int(request.GET.get("cursor", 0))

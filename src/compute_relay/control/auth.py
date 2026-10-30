@@ -52,13 +52,19 @@ def worker_identity(request):
     return worker
 
 
-def connection_allowed(credential, connection_id):
+def allowed_connections(credential):
     """A key can narrow its project authority; it can never widen it."""
-    restricted = credential.allowed_connection_ids
-    return credential.issued_by_id is not None and credential.project.owner_id == credential.issued_by_id and credential.project.connections.filter(
-        id=connection_id, enabled=True, archived=False, setup_complete=True, owner_id=credential.issued_by_id,
-        worker__owner_id=credential.issued_by_id, worker__revoked=False).exists() and (
-        restricted is None or str(connection_id) in restricted)
+    query = credential.project.connections.filter(enabled=True, archived=False, setup_complete=True,
+        owner_id=credential.issued_by_id, worker__owner_id=credential.issued_by_id, worker__revoked=False)
+    if credential.issued_by_id is None or credential.project.owner_id != credential.issued_by_id:
+        return query.none()
+    if credential.allowed_connection_ids is not None:
+        query = query.filter(id__in=credential.allowed_connection_ids)
+    return query
+
+
+def connection_allowed(credential, connection_id):
+    return allowed_connections(credential).filter(id=connection_id).exists()
 
 
 def require_connection(credential, connection_id):

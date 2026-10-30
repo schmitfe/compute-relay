@@ -4,6 +4,7 @@ import asyncio
 from copy import deepcopy
 import json
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
 from django.test import Client
@@ -11,7 +12,7 @@ from django.test import Client
 from compute_relay.control import services as core
 from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Artifact, Attempt, Job, Project, ResultAccess
+from compute_relay.control.models import Artifact, Attempt, Connection, Environment, Job, MetadataUsage, Project, ProjectCredential, ResultAccess
 from compute_relay.extensions.investigations import services
 from compute_relay.extensions.investigations.models import Investigation, InvestigationJob
 from compute_relay.mcp.facade import ProjectFacade, create_server
@@ -314,3 +315,174 @@ def test_invalid_plan_cannot_create_metadata(planned, mutation):
     with pytest.raises(BrokerError):
         services.create(context.credential, changed)
     assert Investigation.objects.count() == 1
+
+
+@pytest.fixture
+def two_clusters(planned):
+    context, group, document = planned
+    connection = Connection.objects.create(owner=context.owner, worker=context.worker, name="second", backend="fake",
+        configuration=context.connection.configuration, revision_sha256="d" * 64)
+    environment = Environment.objects.create(owner=context.owner, connection=connection, name="second-python",
+        configuration=context.environment.configuration, revision_sha256="f" * 64)
+    context.project.connections.add(connection)
+    context.project.environments.add(environment)
+    # The original group's scope stays at the first cluster even when project access grows.
+    context.credential.allowed_connection_ids = [str(context.connection.id)]
+    context.credential.save()
+    other = SimpleNamespace(**vars(context))
+    other.connection, other.environment = connection, environment
+    other.credential, other.token = sibling_key(context, None)
+    return context, group, document, other
+
+
+def sibling_key(context, connection_ids):
+    token = "synthetic-sibling-" + uuid4().hex
+    credential = ProjectCredential.objects.create(project=context.project, issued_by=context.owner, name="sibling",
+        prefix="synthetic", token_hash=token_hash(token), scopes=context.credential.scopes,
+        expires_at=context.credential.expires_at, allowed_connection_ids=connection_ids)
+    return credential, token
+
+
+@pytest.mark.parametrize("populated", [False, True])
+def test_disjoint_key_cannot_poison_or_close_investigation(two_clusters, populated):
+    context, group, _, other = two_clusters
+    original = prepared_job(context)
+    if populated:
+        attach(context, group, original)
+    other.credential.allowed_connection_ids = [str(other.connection.id)]
+    other.credential.save()
+    foreign_job = prepared_job(other)
+    attacker = ProjectFacade(HTTP(other), str(context.project.id))
+    assert attacker.list_investigations()["investigations"] == []
+    for operation in (
+        lambda: attacker.get_investigation(str(group.id)),
+        lambda: attacker.finish_investigation(str(group.id), "user_stopped", "Closed by another key.", False),
+        lambda: attacker.add_investigation_jobs(str(group.id), [str(foreign_job.id)]),
+        lambda: attacker.prepare_job(foreign_job.request, investigation_id=str(group.id)),
+    ):
+        before = Job.objects.count()
+        with pytest.raises(ControlError) as error:
+            operation()
+        assert error.value.status == 403 and Job.objects.count() == before
+    owner = ProjectFacade(HTTP(context), str(context.project.id))
+    assert owner.get_investigation(str(group.id))["state"] == "open"
+    assert owner.add_investigation_jobs(str(group.id), [str(original.id)])["accepted"]
+    assert owner.finish_investigation(str(group.id), "sufficient", "Original access retained.")["state"] == "closed"
+    assert not InvestigationJob.objects.filter(job=foreign_job).exists()
+
+
+def test_broader_sibling_cannot_expand_scope_by_attachment_creation_or_revision(two_clusters):
+    context, group, _, other = two_clusters
+    original, foreign = prepared_job(context), prepared_job(other)
+    attach(context, group, original)
+    broad = ProjectFacade(HTTP(other), str(context.project.id))
+    assert broad.get_investigation(str(group.id))["connection_ids"] == [str(context.connection.id)]
+    for operation in (
+        lambda: broad.add_investigation_jobs(str(group.id), [str(foreign.id)]),
+        lambda: broad.prepare_job(foreign.request, investigation_id=str(group.id)),
+        lambda: broad.revise_job(str(original.id), foreign.request),
+    ):
+        before = Job.objects.count()
+        with pytest.raises(ControlError) as error:
+            operation()
+        assert error.value.status == 403 and Job.objects.count() == before
+    assert list(group.members.values_list("job_id", flat=True)) == [original.id]
+
+
+def test_scope_filters_before_pagination_and_applies_to_empty_groups(two_clusters):
+    context, group, document, other = two_clusters
+    broad = ProjectFacade(HTTP(other), str(context.project.id))
+    broad_group = broad.client.request("POST", f"/api/v1/projects/{context.project.id}/investigations", document)
+    narrow = ProjectFacade(HTTP(context), str(context.project.id))
+    own_group = narrow.client.request("POST", f"/api/v1/projects/{context.project.id}/investigations", document)
+    page = narrow.list_investigations(limit=1)
+    assert [item["id"] for item in page["investigations"]] == [str(group.id)]
+    assert page["next_cursor"] == 1
+    page = narrow.list_investigations(cursor=1, limit=1)
+    assert [item["id"] for item in page["investigations"]] == [own_group["id"]]
+    assert page["next_cursor"] is None
+    for operation in (
+        lambda: narrow.get_investigation(broad_group["id"]),
+        lambda: narrow.list_project_jobs("all", investigation_id=broad_group["id"]),
+        lambda: narrow.finish_investigation(broad_group["id"], "user_stopped", "Not authorized."),
+    ):
+        with pytest.raises(ControlError) as error:
+            operation()
+        assert error.value.status == 403
+    assert len(broad.list_investigations()["investigations"]) == 3
+
+
+def test_scope_survives_key_rotation_and_honors_current_project_revocation(two_clusters):
+    context, group, _, _ = two_clusters
+    old = ProjectFacade(HTTP(context), str(context.project.id))
+    credential, token = sibling_key(context, [str(context.connection.id)])
+    rotated = ProjectFacade(HTTP(SimpleNamespace(token=token)), str(context.project.id))
+    context.credential.revoked = True
+    context.credential.save()
+    with pytest.raises(ControlError) as error:
+        old.get_investigation(str(group.id))
+    assert error.value.status == 401
+    assert rotated.get_investigation(str(group.id))["id"] == str(group.id)
+    context.project.connections.remove(context.connection)
+    with pytest.raises(ControlError) as error:
+        rotated.get_investigation(str(group.id))
+    assert error.value.status == 403 and rotated.list_investigations()["investigations"] == []
+    context.project.connections.add(context.connection)
+    assert rotated.get_investigation(str(group.id))["id"] == str(group.id)
+
+
+@pytest.mark.parametrize("revocation", ["disabled", "archived", "worker", "owner", "key"])
+def test_current_cluster_authority_filters_investigation_reads(two_clusters, revocation):
+    context, group, _, _ = two_clusters
+    if revocation == "worker":
+        context.worker.revoked = True
+        context.worker.save()
+    elif revocation == "key":
+        context.credential.allowed_connection_ids = []
+        context.credential.save()
+    elif revocation == "owner":
+        context.project.owner = context.outsider
+        context.project.save()
+    else:
+        if revocation == "disabled": context.connection.enabled = False
+        else: context.connection.archived = True
+        context.connection.save()
+    api = ProjectFacade(HTTP(context), str(context.project.id))
+    with pytest.raises(ControlError) as error:
+        api.get_investigation(str(group.id))
+    assert error.value.status == 403
+    if revocation != "owner":
+        assert api.list_investigations()["investigations"] == []
+
+
+def test_scope_rows_are_accounted_and_connections_cannot_be_deleted(planned):
+    from django.db.models.deletion import ProtectedError
+    context, group, document = planned
+    before = MetadataUsage.objects.get(kind="investigation", object_id=str(group.id)).size_bytes
+    assert group.connections.get() == context.connection
+    assert before >= len(json.dumps(document).encode()) + 2048 + 128
+    with pytest.raises(ProtectedError):
+        context.connection.delete()
+
+
+def test_key_without_clusters_cannot_create_unscoped_investigation(planned):
+    context, group, document = planned
+    context.credential.allowed_connection_ids = []
+    context.credential.save()
+    api = ProjectFacade(HTTP(context), str(context.project.id))
+    with pytest.raises(ControlError) as error:
+        api.client.request("POST", f"/api/v1/projects/{context.project.id}/investigations", document)
+    assert error.value.status == 403 and Investigation.objects.count() == 1
+
+
+
+def test_narrowed_key_cannot_execute_member_of_broader_investigation(two_clusters):
+    context, group, document, other = two_clusters
+    broad = ProjectFacade(HTTP(other), str(context.project.id))
+    broad_group = broad.client.request("POST", f"/api/v1/projects/{context.project.id}/investigations", document)
+    job = prepared_job(context)
+    broad.add_investigation_jobs(broad_group["id"], [str(job.id)])
+    narrow = ProjectFacade(HTTP(context), str(context.project.id))
+    with pytest.raises(ControlError) as error:
+        narrow.client.request("POST", f"/api/v1/jobs/{job.id}/execution-requests", {})
+    assert error.value.status == 403 and not job.execution_requests.exists()
