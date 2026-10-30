@@ -48,7 +48,8 @@ currently accessible project clusters; creation requires at least one. Its clust
 project changes or by a broader sibling key. Reading, listing, attaching jobs and
 closing require current access to every cluster in that scope, including for an
 empty investigation. New jobs, explicit attachments and revisions must remain
-within the saved scope. Keys with equivalent authority can collaborate or rotate
+within the saved scope, including the producer clusters of referenced input
+artifacts. An explicit upload is an independent copy. Keys with equivalent authority can collaborate or rotate
 without transferring ownership. Current project/key restrictions and cluster
 revocations still apply, and each member's input provenance remains subject to
 the current key's authorization.

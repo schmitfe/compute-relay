@@ -183,6 +183,28 @@ reset job limits. Exclusive personal connectors are revoked; shared connectors
 can continue accounting for existing jobs. Retained unresolved job pages show
 that their cluster configuration was removed and their status may be stale.
 
+Cluster configuration edits, binding-changing discovery and personal connector
+re-pairing wait until accounting, output recovery, requested cleanup and active
+leases finish. Failed output collection with a native job identity remains
+recoverable work. A snapshot-only discovery refresh can keep the same binding.
+This protects the current installation; it does not migrate old alpha bindings.
+After an explicit removal or incompatible update, remote leftovers may require
+manual cleanup.
+
+Remote cleanup protects registered environments and storage roots across
+connections using the same normalized host, SSH account and port. Profile names
+and connector identities do not separate the same destination. A registered
+parent work root permits cleanup of ordinary child attempt directories, while a
+registered root inside an attempt protects that attempt. Pending personal path
+registrations and queued/running cleanup exclude one another until canonical
+paths are known; environment publication uses the same owner fence. Different
+DNS aliases for one server are not inferred to be the same destination.
+
+Worker failures record the operation, phase, validated job/cluster identifiers,
+lease generation, safe error category and elapsed time. They omit exception
+messages, remote output, tokens, private paths and frame-local values. Durable
+journals and accounting remain authoritative after an error.
+
 ## Local storage and metadata bounds
 
 Object storage and durable metadata have separate admission accounting. Current
