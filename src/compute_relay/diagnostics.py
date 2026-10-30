@@ -44,7 +44,7 @@ def failure(lease, phase, error, started):
 @contextmanager
 def operation(lease, phase):
     lease = _CURRENT.get() if lease is None else lease
-    token = _CURRENT.set(lease)
+    context_reset = _CURRENT.set(lease)
     started = time.monotonic()
     try:
         yield
@@ -52,4 +52,4 @@ def operation(lease, phase):
         failure(lease, phase, error, started)
         raise
     finally:
-        _CURRENT.reset(token)
+        _CURRENT.reset(context_reset)
