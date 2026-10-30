@@ -467,13 +467,15 @@ def test_default_recipe_can_inspect_anaconda_then_save_detected_conda_environmen
     {"collection_pending": False, "collection_state": "failed", "collection_failures": 3},
     {"collection_state": "complete", "remote_cleanup": {"state": "queued"}},
     {"collection_state": "complete", "remote_cleanup": {"state": "running"}},
-    {"collection_state": "complete", "lease_expires_at": timezone.now() + timedelta(minutes=1)},
+    {"collection_state": "complete", "lease_expires_at": timedelta(minutes=1)},
 ])
 def test_settled_attempt_recovery_blocks_configuration_reset_and_repair(personal, fields):
     from compute_relay.control.models import Attempt
     from compute_relay.control.personal_connectors import check_idle
     from compute_relay.control.errors import BrokerError
     attempt = active_attempt(personal)
+    if "lease_expires_at" in fields:
+        fields = {**fields, "lease_expires_at": timezone.now() + fields["lease_expires_at"]}
     Attempt.objects.filter(id=attempt.id).update(accounting_state="settled", state="succeeded",
         native_identity={"job_id": "123"}, **fields)
     response = personal.human.post(f"/clusters/{personal.connection.id}/configuration/", configuration_fields(personal))
