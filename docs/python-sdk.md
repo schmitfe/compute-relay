@@ -61,6 +61,25 @@ or use a modest interval. The existing optional workflow module can represent a
 bounded DAG with server-enforced dependencies through MCP; the SDK does not add a
 second workflow engine or optional-module wrappers.
 
+## Reuse ZIP packing and extraction
+
+The SDK exposes the local file helpers without requiring an initialized workspace:
+
+```python
+from compute_relay.sdk import pack_zip, unpack_zip, write_archive_helper
+
+pack_zip("/absolute/path/to/science", ["src/model.py", "data/input.csv"], "source.zip")
+write_archive_helper("/absolute/path/to/science", "relay-files.pyz")
+unpack_zip("/absolute/path/to/science", "results/RUN/result.zip", "results/extracted",
+           max_files=1000, max_bytes=1024**3)
+```
+
+Stage the exported helper and archive with the reviewed entrypoint to use the
+same ZIP commands inside a compute job without installing Compute Relay there.
+Each output must be fresh, with existing parent directories. Packing takes
+explicit files, and extraction validates paths, types, CRCs and bounded expanded
+sizes. See [archive commands and limits](data-transfer.md#zip-helpers-for-local-files-and-compute-jobs).
+
 ## Authority and completion
 
 The script runs on the agent's workspace device. No Python execution endpoint is

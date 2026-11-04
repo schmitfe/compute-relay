@@ -7,6 +7,7 @@ import stat
 
 
 MAX_FILE_BYTES = 1024 * 1024
+PRIVATE_NAMES = {".compute-relay", ".compute-relay-receipt.json", ".git", ".codex", ".claude", ".ssh", ".aws", "_broker"}
 
 
 def absolute_path(value):

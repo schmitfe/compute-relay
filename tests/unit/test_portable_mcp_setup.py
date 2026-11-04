@@ -238,7 +238,7 @@ def test_usage_guide_records_shell_quoted_module_commands_without_assuming_conso
         if "--directory" in words:
             assert words[words.index("--directory") + 1] == str(project)
         actions.add(words[4])
-    assert {"--help", "stage", "prepare", "fetch"} <= actions
+    assert {"--help", "stage", "prepare", "fetch", "zip", "archive-helper"} <= actions
     assert TOKEN not in guide and "BROKER_PROJECT_TOKEN=" not in guide
     selected = ("codex", "claude") if client == "both" else (client,)
     for name in selected:

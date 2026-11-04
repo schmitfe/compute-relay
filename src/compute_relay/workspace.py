@@ -14,7 +14,7 @@ from jsonschema import ValidationError
 
 from compute_relay.domain.validation import relative_path, strict_json, validate
 from compute_relay.local_config import broker_url, validate_key
-from compute_relay.local_filesystem import absolute_path, check_path, ensure_directory, parent_descriptor, read_regular
+from compute_relay.local_filesystem import PRIVATE_NAMES, absolute_path, check_path, ensure_directory, parent_descriptor, read_regular
 from compute_relay.worker.client import ControlError, JsonClient
 from compute_relay.transfer import CHUNK_BYTES, INLINE_BYTES, MAX_FILE_BYTES, MAX_BUNDLE_BYTES, fingerprint
 
@@ -22,7 +22,6 @@ from compute_relay.transfer import CHUNK_BYTES, INLINE_BYTES, MAX_FILE_BYTES, MA
 MAX_SOURCE_BYTES = 1024 * 1024
 MAX_ARTIFACT_BYTES = MAX_FILE_BYTES
 MAX_RESULT_BYTES = MAX_BUNDLE_BYTES
-PRIVATE_NAMES = {".compute-relay", ".compute-relay-receipt.json", ".git", ".codex", ".claude", ".ssh", ".aws", "_broker"}
 
 
 def _logical(value):
@@ -394,8 +393,10 @@ class WorkspaceClient:
 
 
 def register_commands(subparsers):
-    files = subparsers.add_parser("files", help="Stage explicit workspace files or fetch checksummed results")
+    files = subparsers.add_parser("files", help="Stage or pack explicit files, extract ZIPs, or fetch checksummed results")
     actions = files.add_subparsers(dest="file_action", required=True)
+    from .archives import register_commands as register_archive_commands
+    register_archive_commands(actions)
     stage = actions.add_parser("stage", help="Upload missing source objects and save a reusable bundle receipt")
     stage.add_argument("paths", nargs="*")
     stage.add_argument("--manifest", help="Workspace JSON file containing a files list of relative paths")

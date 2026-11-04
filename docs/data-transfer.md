@@ -51,6 +51,52 @@ whole group. `--resume`, `--no-download` and explicit `--acknowledge` preserve
 the distinction between retained artifacts, local integrity and scientific
 acceptance. See [completion and its consistency limits](investigations.md).
 
+## ZIP helpers for local files and compute jobs
+
+Use the supplied helpers rather than writing packing and extraction routines:
+
+```sh
+compute-relay files zip --output source.zip src/model.py data/input.csv
+compute-relay files archive-helper --output relay-files.pyz
+compute-relay files stage cluster_run.py relay-files.pyz source.zip
+```
+
+The exported `relay-files.pyz` contains the same archive implementation and its
+standard-library helpers. It contains no project configuration or credentials.
+Stage it as an ordinary input beside the reviewed entrypoint; the compute
+environment only needs Python 3.12 or newer, without Compute Relay installed.
+Inside the job, use its selected Python interpreter to run:
+
+```sh
+python relay-files.pyz unzip source.zip --output work
+# Run the workload and write work/results.csv, then:
+python relay-files.pyz zip --output result.zip work/results.csv
+```
+
+Declare `result.zip` in the job's outputs. Download it through ordinary verified
+collection, then extract locally:
+
+```sh
+compute-relay files unzip results/RUN/result.zip --output results/extracted
+```
+
+Paths are relative to `--directory` (default: current directory). Output parents
+must already exist. These local file operations require no initialized project
+or broker access. Packing takes explicit ordinary owned files; it does not scan
+directories recursively. Extraction requires a new destination and rejects
+traversal, links, private configuration paths, duplicate/conflicting names and
+encrypted entries. Output permissions are private; an owner execute bit is
+preserved, but timestamps and other permissions are not.
+
+Defaults allow 10,000 entries, 8 GiB per file and 64 GiB of expanded content.
+`--max-files` and `--max-bytes` can tighten these limits. ZIP metadata parsing is
+also bounded to 16 MiB. File contents are streamed and CRCs checked during
+extraction; normal failures remove the new extraction directory and never
+overwrite existing paths. A killed process or machine failure can leave partial
+extraction; choose a fresh directory on retry. ZIP CRCs do not replace the
+broker's SHA-256 transfer verification or scientific validation. Inspect code
+before running it; extraction itself never executes archived files.
+
 ## Output recovery without another compute run
 
 Human owners can explicitly reclaim eligible results through
