@@ -322,8 +322,9 @@ jobs absent from the queue. Every item retains its own verified journal binding,
 generation-fenced lease, heartbeat, accounting and output-recovery state.
 
 Accounting reads require Slurm's `sacct --json` support. The normalizer accepts
-the relevant Slurm 22.05 allocation schema and modern finite-number wrappers and
-single-state lists. It preserves every historical allocation record and rejects
+the relevant Slurm 22.05 and 23.11 allocation schemas, including finite-number
+wrappers, singleton state/exit-status lists and the explicit no-signal encoding.
+It preserves every historical allocation record and rejects
 structured errors, missing accounting/identity fields and delimiter or line
 separators in free-text fields before emitting the fixed compact worker protocol.
 There is no fallback to parsing unquoted `sacct` text; unsupported JSON remains

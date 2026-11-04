@@ -23,6 +23,17 @@ def sacct_job(native, *, state="COMPLETED", elapsed=1, cpus=1):
         "exit_code": {"status": "SUCCESS", "return_code": 0}}
 
 
+def slurm_23_11_job(native, *, state="COMPLETED", elapsed=1, cpus=1):
+    """Relevant fields captured from Slurm 23.11.4, with synthetic identity."""
+    record = sacct_job(native, state=state, elapsed=elapsed, cpus=cpus)
+    record["state"]["current"] = [state]
+    record["tres"]["allocated"][0]["name"] = ""
+    record["exit_code"] = {
+        "status": ["SUCCESS"], "return_code": {"set": True, "infinite": False, "number": 0},
+        "signal": {"id": {"set": False, "infinite": False, "number": 0}, "name": ""}}
+    return record
+
+
 class LocalFixedTransport:
     def __init__(self):
         self.operations = []

@@ -50,6 +50,14 @@ def _sacct_number(value):
     return value
 
 
+def _sacct_exit_number(value):
+    # An unset zero means no exit code/signal, never missing resource usage.
+    if (isinstance(value, dict) and value.get("set") is False and value.get("infinite") is False
+            and type(value.get("number")) is int and value["number"] == 0):
+        return None
+    return None if value is None else _sacct_number(value)
+
+
 def _sacct_text(value):
     # The compact protocol is framed only after JSON has separated free text.
     if (not isinstance(value, str) or len(value) > 4096 or value != value.strip()
@@ -88,7 +96,7 @@ def _sacct_row(job):
         if not isinstance(kind, str) or name is not None and not isinstance(name, str):
             raise ValueError("Invalid sacct resource descriptor")
         if kind == "cpu":
-            if name is not None:
+            if name not in (None, ""):
                 raise ValueError("Ambiguous sacct CPU resource")
             key = "cpu"
         elif kind == "gres" and isinstance(name, str) and (name == "gpu" or name.startswith("gpu:")):
@@ -108,18 +116,24 @@ def _sacct_row(job):
         resources["cpu"] = 0
     exit_code = job["exit_code"]
     status = exit_code["status"]
+    if isinstance(status, list) and len(status) == 1:
+        status = status[0]
     if status not in {"SUCCESS", "ERROR", "SIGNALED"}:
         raise ValueError("Unknown sacct exit status")
-    code = exit_code["return_code"]
+    code = _sacct_exit_number(exit_code["return_code"])
     signal = exit_code.get("signal")
+    if signal is not None:
+        if not isinstance(signal, dict) or ("signal_id" in signal) == ("id" in signal):
+            raise ValueError("Ambiguous sacct signal ID")
+        signal = signal["signal_id"] if "signal_id" in signal else signal["id"]
+        signal = _sacct_exit_number(signal)
     if status == "SIGNALED":
-        signal = _sacct_number(signal["signal_id"])
-        if signal == 0:
+        if signal is None or signal == 0:
             raise ValueError("Missing sacct termination signal")
-        code = 0 if code is None else _sacct_number(code)
-    else:
-        code = _sacct_number(code)
-        signal = 0 if signal is None else _sacct_number(signal["signal_id"])
+        code = 0 if code is None else code
+    elif code is None:
+        raise ValueError("Missing sacct return code")
+    signal = 0 if signal is None else signal
     comment = job["comment"]["job"]
     comment = _sacct_text("" if comment is None else comment)
     workdir = _sacct_text(job["working_directory"])

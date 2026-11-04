@@ -10,7 +10,7 @@ from compute_relay.backends import FakeBackend, SlurmBackend
 from compute_relay.backends.slurm import parse_observation
 from compute_relay.remote.bundles import bundle_source
 from compute_relay.remote.protocol import STATUS_BATCH_SIZE
-from test_support.unit_test_remote_bundles import prepared, sacct_job, site
+from test_support.unit_test_remote_bundles import prepared, sacct_job, site, slurm_23_11_job
 
 
 def namespace():
@@ -146,3 +146,22 @@ def test_malformed_status_for_one_attempt_does_not_hide_another_observation(site
     assert observations[native["attempt_id"]]["state"] == "running"
     assert observations[other["attempt_id"]]["state"] == "unknown"
     assert observations[other["attempt_id"]]["accounting"] == {"final": False}
+
+
+def test_fixed_helper_collects_verified_completion_from_slurm_23_11():
+    helper = namespace()
+    helper["own_record"] = lambda *args: {"manifest": {"maximum_allocation": {"gpu_devices": 0}}}
+    native = {"attempt_id": str(uuid4()), "job_id": "7", "submitted_at": "2026-10-21T12:00:00+00:00"}
+    calls = []
+    def scheduler(config, command, args):
+        calls.append(command)
+        return {"returncode": 0, "stderr": "", "stdout": "" if command == "squeue" else
+            json.dumps({"jobs": [slurm_23_11_job(native, elapsed=3, cpus=2)], "errors": []})}
+    helper["scheduler"] = scheduler
+    result = helper["execute_jobs"]({}, {"operation": "observe", "protocol": "slurm-jobs/v1", "items": [
+        {"native_identity": native, "manifest_sha256": "a" * 64}]})
+    value = result["items"][native["attempt_id"]]
+    observation = parse_observation(native, value["queue"], value["accounting"])
+    assert observation["state"] == "completed" and observation["terminal"]
+    assert observation["accounting"] == {"final": True, "cpu_core_seconds": 6, "gpu_device_seconds": 0}
+    assert calls == ["squeue", "sacct"]

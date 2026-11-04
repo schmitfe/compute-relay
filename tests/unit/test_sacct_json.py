@@ -7,7 +7,7 @@ import pytest
 from compute_relay.backends.slurm import parse_observation
 from compute_relay.remote.scheduler import sacct_response, scheduler_rows
 from compute_relay.remote.status import status_rows
-from test_support.unit_test_remote_bundles import sacct_job
+from test_support.unit_test_remote_bundles import sacct_job, slurm_23_11_job
 
 NATIVE = {"job_id": "42", "attempt_id": "55555555-5555-4555-8555-555555555555",
     "submitted_at": "2026-10-21T12:00:00+00:00", "work_dir": "/managed/original-attempt"}
@@ -117,3 +117,56 @@ def test_json_query_errors_and_bounds_have_no_delimited_fallback():
     assert sacct_response(response([], errors=[{"error": "plugin unavailable"}]))["returncode"] == 1
     assert sacct_response(response([sacct_job(NATIVE)] * 1025))["returncode"] == 1
     assert sacct_response(response([sacct_job(NATIVE)], warnings=[{"description": "deprecated plugin"}]))["returncode"] == 0
+
+
+@pytest.mark.parametrize("state,status,code,signal", [
+    ("COMPLETED", "SUCCESS", 0, None), ("FAILED", "ERROR", 1, None),
+    ("FAILED", "SIGNALED", None, 9), ("CANCELLED", "SIGNALED", None, 15),
+])
+def test_slurm_23_11_completion_keeps_accounting_and_exit_status(state, status, code, signal):
+    record = slurm_23_11_job(NATIVE, state=state, elapsed=3, cpus=2)
+    record["exit_code"]["status"] = [status]
+    record["exit_code"]["return_code"] = None if code is None else {"set": True, "infinite": False, "number": code}
+    if signal is not None:
+        record["exit_code"]["signal"] = {"id": {"set": True, "infinite": False, "number": signal}, "name": "Terminated"}
+    result = observation(record)
+    assert result["terminal"] and result["native_state"] == state
+    assert result["accounting"] == {"final": True, "cpu_core_seconds": 6, "gpu_device_seconds": 0}
+    assert result["exit_code"] == f"{code or 0}:{signal or 0}"
+
+
+@pytest.mark.parametrize("path,value", [
+    (("exit_code", "status"), []), (("exit_code", "status"), ["SUCCESS", "ERROR"]),
+    (("exit_code", "signal", "id", "set"), 0),
+    (("exit_code", "signal", "id", "number"), False),
+    (("exit_code", "signal", "id", "number"), 9),
+    (("exit_code", "signal", "id", "infinite"), True),
+    (("exit_code", "signal"), {}),
+    (("exit_code", "signal"), {"id": 0, "signal_id": 9}),
+    (("exit_code", "return_code", "set"), False),
+    (("tres", "allocated", 0, "name"), "other"),
+])
+def test_slurm_23_11_ambiguous_or_unset_fields_stay_unsettled(path, value):
+    record = slurm_23_11_job(NATIVE)
+    parent = record
+    for key in path[:-1]: parent = parent[key]
+    parent[path[-1]] = value
+    assert not observation(record)["accounting"]["final"]
+
+
+def test_slurm_23_11_signaled_exit_requires_a_known_nonzero_signal():
+    record = slurm_23_11_job(NATIVE, state="FAILED")
+    record["exit_code"]["status"] = ["SIGNALED"]
+    record["exit_code"]["return_code"] = None
+    assert not observation(record)["accounting"]["final"]
+
+
+@pytest.mark.parametrize("signal", [9, 15])
+def test_slurm_23_11_signal_exit_has_an_explicitly_unset_return_code(signal):
+    record = slurm_23_11_job(NATIVE, state="FAILED", elapsed=3, cpus=2)
+    record["exit_code"] = {"status": ["SIGNALED"],
+        "return_code": {"set": False, "infinite": False, "number": 0},
+        "signal": {"id": {"set": True, "infinite": False, "number": signal}, "name": "Terminated"}}
+    result = observation(record)
+    assert result["terminal"] and result["accounting"]["final"]
+    assert result["exit_code"] == f"0:{signal}"
