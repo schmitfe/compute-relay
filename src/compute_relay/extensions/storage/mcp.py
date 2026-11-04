@@ -10,7 +10,7 @@ def register(server, facade):
 
     @server.tool(annotations=readonly)
     def get_project_storage() -> dict:
-        """Read approved target IDs, advisory budgets and cached capacity/unknowns. Does not probe or scan storage."""
+        """Read selected role targets and their canonical remote roots, advisory budgets and cached capacity/unknowns. Does not probe or scan storage."""
         return facade.client.request("GET", f"/api/v1/projects/{facade.project_id}/storage")
 
     @server.tool(annotations=readonly)

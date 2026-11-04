@@ -81,7 +81,7 @@ def test_exact_personal_directory_can_be_saved_and_used_for_advisory_project_inv
     assert inventory["bindings"][0]["targets"]["results"] == str(target.id)
     assert inventory["pools"][0]["probe_supported"] is False
     assert inventory["pools"][0]["measurement_status"] == "not_observed"
-    assert "root" not in inventory["targets"][0]
+    assert inventory["targets"][0]["root"] == target.root
     assert personal.human.post(f"/projects/{personal.project.id}/storage/pools/{target.pool_id}/probes/", {"enabled": "true"}).status_code == 409
     assert b"Owner-selected directory" in personal.human.get(f"/projects/{personal.project.id}/storage/").content
 
@@ -113,6 +113,12 @@ def test_canonical_parent_alias_resolution_is_displayed_and_explicitly_confirmed
     registration.refresh_from_db()
     assert registration.root == "/home-alias/researcher/results"
     assert services.target_current(target)
+
+    services.save_project_storage(personal.owner, personal.project, personal.connection,
+        {"results": target, "retained_bytes_estimate": 0, "retained_inodes_estimate": 0})
+    inventory = services.inventory(personal.project, credential=personal.credential)
+    assert inventory["targets"][0]["root"] == resolved
+    assert registration.root not in str(inventory)
 
 
 @pytest.mark.parametrize("confirmation", [None, "/scratch/researcher/other", "/scratch/../researcher/results"])

@@ -4,6 +4,13 @@ Read get_project_context once for permitted targets, effective limits,
 environments, review requirements and shared allowance. Refresh focused data
 when it changes or a resource/budget rejection requires a new decision.
 
+With storage enabled, read get_project_storage before using a shared project
+directory. For the chosen cluster and role, resolve its bindings[].targets ID
+against targets[].id and use the exact canonical targets[].root in the workload.
+Do not guess remote paths from target names. Selected locations do not change
+the job's working directory; declared outputs must still be written relative to
+the attempt directory for collection.
+
 Choose local work for derivations, analysis and small checks that fit the device
 actually running the code. Use a hybrid workflow for development and analysis
 locally with larger cluster stages. A sandbox, client device and broker host can

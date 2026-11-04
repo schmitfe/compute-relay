@@ -330,7 +330,7 @@ def inventory(project, *, credential=None, now=None):
     return {"schema_version": "1.0", "project_id": str(project.id), "advisory_only": True,
         "enforced_at_dispatch": False, "probe_wired": True, "budget": budget_data, "bindings": bindings,
         "targets": [{"id": str(target.id), "project_id": str(target.project_id), "name": target.name, "connection_id": str(target.connection_id),
-                     "pool_id": str(target.pool_id), "roles": target.roles, "capabilities": target.capabilities}
+                     "root": target.root, "pool_id": str(target.pool_id), "roles": target.roles, "capabilities": target.capabilities}
                     for target in targets.values()], "pools": list(pools.values()),
         "note": "Estimates and cached observations do not enforce OS quotas or change where existing jobs write."}
 

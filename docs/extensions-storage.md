@@ -106,11 +106,21 @@ creates only its requested final directory. Manual usage values are labeled
 Both routes require a valid project bearer key with `jobs:read`:
 
 - `GET /api/v1/projects/<project-id>/storage` returns allowed target IDs, roles,
-  capabilities, selected locations, shared budgets, retained usage estimates,
-  and cached pool/quota observations. Agent responses omit absolute roots.
+  capabilities, canonical remote `root` paths, selected locations, shared budgets,
+  retained usage estimates, and cached pool/quota observations. Only current
+  targets selected for this project and permitted by the key's cluster scope are
+  returned; other project locations and pool probe paths are omitted.
 - `POST /api/v1/projects/<project-id>/storage/plan` accepts up to five distinct
   role estimates. It is read-only, needs no idempotency key, and creates no jobs,
   approvals, reservations or files.
+
+With MCP, use `get_project_storage`. Resolve the selected cluster's
+`bindings[].targets[role]` ID against `targets[].id`, then use that target's
+exact `root` in the workload. Do not reconstruct a path from its display name.
+These settings do not change a job's working directory: declared output paths
+are still relative to its attempt directory. Code writing into a shared project
+location must explicitly copy or package the desired results into its declared
+outputs for collection.
 
 ```json
 {

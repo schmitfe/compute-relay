@@ -104,8 +104,8 @@ def test_inventory_and_plan_are_read_only_scoped_and_explicit_about_unknown_capa
     assert payload["probe_wired"] is True and payload["advisory_only"] is True
     assert payload["pools"][0]["probe_enabled"] is False
     assert payload["pools"][0]["measurement_status"] == "not_observed"
-    assert "/approved/project-space" not in response.content.decode()
-    assert "root" not in payload["targets"][0]
+    assert payload["targets"][0]["root"] == target.root == "/approved/project-space"
+    assert payload["bindings"][0]["targets"]["results"] == payload["targets"][0]["id"]
     response = client.post(f"/api/v1/projects/{resources.project.id}/storage/plan", json.dumps(plan(resources, target)),
                            content_type="application/json", **headers(resources))
     assert response.status_code == 200, response.content
