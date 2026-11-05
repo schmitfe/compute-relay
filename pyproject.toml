@@ -21,6 +21,11 @@ dependencies = [
   "Pygments>=2.19,<3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/schmitfe/compute-relay"
+Documentation = "https://github.com/schmitfe/compute-relay/tree/main/docs"
+Issues = "https://github.com/schmitfe/compute-relay/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-django>=4.10,<5", "build>=1.2,<2"]
 

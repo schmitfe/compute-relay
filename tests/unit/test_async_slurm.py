@@ -47,7 +47,8 @@ def test_async_adapter_uses_fixed_helper_and_cross_process_durable_submission_fe
                 # temporary tree. The uploaded job script is merely staged.
                 result = await asyncio.to_thread(subprocess.run,
                     [sys.executable, "-I", "-c", source], input=json.dumps(request).encode(),
-                    capture_output=True, timeout=10, env={"PATH": "/usr/bin:/bin", "LANG": "C"})
+                    capture_output=True, timeout=10, start_new_session=True,
+                    env={"PATH": "/usr/bin:/bin", "LANG": "C"})
                 assert result.returncode == 0, result.stderr.decode(errors="replace")
                 return json.loads(result.stdout)
 

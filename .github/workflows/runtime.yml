@@ -5,6 +5,7 @@ on:
   push:
     branches: [main, codex/beta-0.1]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -62,6 +63,9 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Install the locked package and test tools
         run: uv sync --locked --extra test
+      - name: Verify native macOS OpenSSH master lifecycle
+        if: runner.os == 'macOS'
+        run: uv run --locked --extra test python tools/ssh_session_smoke.py
       - name: Unit, SQLite and local integration checks
         # Darwin's default temporary prefix exhausts OpenSSH's socket path bound.
         run: uv run --locked --extra test python -m pytest -q --basetemp=/tmp/cr-tests
@@ -69,9 +73,6 @@ jobs:
         run: |
           uv run --locked --extra test python tools/local_smoke.py
           uv run --locked --extra test python tools/local_smoke.py --mode budgeted --mcp-jobs 100
-      - name: Verify native macOS OpenSSH master lifecycle
-        if: runner.os == 'macOS'
-        run: uv run --locked --extra test python tools/ssh_session_smoke.py
       - name: Check all bundled migrations
         run: BROKER_EXTENSIONS=storage,environments,workflows,investigations uv run --locked --extra test python -m django makemigrations --check --dry-run --settings=compute_relay.control.settings
       - name: Build and verify a clean installed wheel

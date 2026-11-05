@@ -124,7 +124,8 @@ def test_fixture_run_enrolls_and_controls_probes_with_explicit_project_scope(tmp
                 return b""
             if path == f"/api/v1/projects/{project_id}/storage":
                 return {"project_id": project_id if inventory_matches else str(uuid4()),
-                    "targets": [{"id": target_id, "connection_id": fixture["connection_id"], "pool_id": pool_id}],
+                    "targets": [{"id": target_id, "connection_id": fixture["connection_id"], "pool_id": pool_id,
+                        "root": "/home/brokerjob/jobs", "project_id": project_id}],
                     "pools": [{"id": pool_id, "probe_enabled": True, "probe_supported": True, "observation": {
                         "source": "statvfs", "status": "available", "observed_at": datetime.now(timezone.utc).isoformat(),
                         "identity_verified": False, "total_bytes": 1000, "available_bytes": 500,

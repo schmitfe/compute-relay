@@ -156,7 +156,8 @@ bounded receipt, plus no-follow ordinary `pyvenv.cfg`/`bin/python` metadata.
 Links/special files in those checked paths fail. It runs no interpreter or pip.
 Control publishes only after successful execution, definitive settled accounting
 and matching current-policy finalization. Fake, failed, uncertain, mismatched or
-stale-generation results cannot publish. Automatic permission additionally needs
+unaccepted results cannot publish. An accepted collection receipt keeps its original
+generation when later accounting polls advance the attempt. Automatic permission needs
 a complete verified inventory and still-authorized creating key; otherwise a
 human promotes the revision.
 
@@ -167,8 +168,10 @@ and policy revision/hash; it neither reattests the prefix nor shares it across
 projects. Same-UID cluster code can modify these files.
 
 `WorkerReport.extension_data` preserves finalization before post-commit hooks.
-Internal `services.sync_from_report(report)` retries publication from saved
-metadata without remote execution. Missing finalization cannot be declared
+Normal worker polling retries up to four settled unpublished builds from those
+accepted reports, with a durable 30-second backoff. Publication uses the same
+validation and locking as the initial hook; replay cannot rebuild, duplicate an
+environment or charge again. Missing/invalid finalization cannot be declared
 successful; no user-facing prefix repair/revalidation operation exists.
 
 ## Storage, retention and current limits
@@ -191,10 +194,11 @@ BROKER_TEST_PORT=18767 docker compose -p cb-environment-acceptance -f deploy/com
 
 `tools/environment_build_smoke.py` requires fixture confirmation/metadata, refuses
 fake/nonfixture targets and reads no SSH/worker credential. It builds an approved
-empty venv from `fixture-python/1.0`, verifies accounting/finalization, promotes it
-with a human session, then runs a second approved job using its prefix/modules.
-Checks include output hashes, cache reuse, two submission slots and zero reserved
-compute. Default target is Bookworm `linux-x86_64`/Python `3.11`; other fixture
+venv from `fixture-python/1.0` with a pinned synthetic wheel, verifies automatic
+publication under owner permission, and imports the wheel in a follow-up job.
+It repeats with wheel version 2.0 in a new immutable prefix. Checks include output
+hashes, module retention, cache reuse, four admissions and zero reserved compute.
+Default target is Bookworm `linux-x86_64`/Python `3.11`; other fixture
 architectures need explicit target options. Cleanup applies only to that named
 stack. Unit/configuration checks do not establish that this native run passed.
 

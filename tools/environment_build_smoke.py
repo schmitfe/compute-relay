@@ -192,7 +192,7 @@ def main():
     parser.add_argument("--confirm-disposable-fixture", action="store_true")
     args = parser.parse_args()
     if not args.confirm_disposable_fixture:
-        parser.error("Supply --confirm-disposable-fixture; this runs two approved compute jobs on the disposable fixture")
+        parser.error("Supply --confirm-disposable-fixture; this runs four owner-authorized jobs on the disposable fixture")
     if not 1 <= args.timeout <= 900:
         parser.error("timeout must be from 1 through 900 seconds")
     try:

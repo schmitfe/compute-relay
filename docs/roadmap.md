@@ -8,10 +8,9 @@ needs concrete user/site demand. Shipped behavior belongs in the guides.
 | Work | Completion gate |
 | --- | --- |
 | Site recovery | Record interruption/recovery on advertised authentication, accounting and storage classes, including VPN loss and delayed accounting where controlled tests are permitted. Follow [site acceptance](testing.md#real-cluster-acceptance). |
-| Environment publication recovery | A post-commit hook failure can leave a settled build `awaiting_finalization`. Retry its accepted durable report through normal operation using existing `sync_from_report`; preserve metadata/generation validation and prove no remote rebuild, duplicate environment or charge. |
-| Broader beta acceptance | Complete the [capability matrix](testing.md#first-beta-release-gates) for GPU jobs, agent-created venvs, DAGs, advisory storage and investigations. Existing smoke scripts alone are not pass evidence. |
-| macOS for 0.1 | Fix filesystem-name and process-test portability, add Mac CI and verify the desktop/SSH lifecycle. Required checks are in the [beta matrix](testing.md#first-beta-release-gates). |
-| Portal responsiveness | Capture and diagnose a recurrence of the unexplained four-minute stall, then test its cause and concurrent recovery. [Stack capture](runtime.md#diagnosing-an-unresponsive-portal) is available; successful synthetic bursts have not established a fix. |
+| Broader beta acceptance | Keep exact-candidate CI green and record accepted site classes against the [capability matrix](testing.md#first-beta-release-gates). Native CPU/GPU and module evidence is in [runtime](runtime.md#acceptance-evidence-and-remaining-reliability-work); fixture success does not certify every institutional site. |
+| macOS for 0.1 | Complete Intel/Apple Silicon CI and a human desktop walkthrough including browser launch, terminal MFA, reconnect and shutdown. Filesystem aliases, process checks and system-OpenSSH lifecycle are automated. |
+| Release publishing | Configure the PyPI trusted publisher and protected GitHub `pypi` environment, verify prerelease metadata and complete the [release checklist](testing.md#first-beta-release-gates). Publication is release-only after platform and disposable Slurm checks pass. |
 
 ## P2 — accepted follow-up work
 
@@ -53,6 +52,7 @@ an isolation walkthrough before recommendation; see [owner-session boundaries](s
 
 ## Optional maintenance
 
+- Investigate the unreproduced portal stall only if it recurs; keep [stack capture](runtime.md#diagnosing-an-unresponsive-portal) available. It is deferred, not a demonstrated fix.
 - Validate cookie/account isolation before supporting untrusted local services;
   private-desktop launch-token behavior is currently accepted.
 - Add browser hardening, upload headroom checks or wait fairness only for a

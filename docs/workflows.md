@@ -51,16 +51,17 @@ resume the same node rather than rejecting policy or multiplying attempts.
 `tools/workflow_smoke.py` requires `--confirm-disposable-fixture` and synthetic
 metadata for `slurm-fixture`, `brokerjob` and its staging root. It refuses fake/
 nonfixture targets, reads no SSH/worker credentials and uses the synthetic owner
-session plus a limited key. Its review-only project has exactly three lifetime
+session plus a limited key. Its review-only project has exactly four lifetime
 slots for:
 
 1. `produce`: `[1,2,3]` plus newline.
-2. `double`: `[2,4,6]` plus newline from the first retained artifact.
-3. `sum`: `{"sum":12}` plus newline from the second.
+2. Independent `double` and `triple` branches: `[2,4,6]` and `[3,6,9]` from that artifact.
+3. `sum`: `{"sum":30}` only after both branches finish and provide their artifacts.
 
 Checks require reviewed dependency identities/hashes, one request/attempt per
-node, all three slots consumed, positive native CPU usage and zero reservation.
-Repeated advance must preserve identities. Use a fresh named disposable stack:
+node, all four slots consumed, positive native CPU usage and zero reservation.
+Repeated advance preserves identities; revoking the creating key denies further
+advance with HTTP 401. Use a fresh named disposable stack:
 
 ```sh
 BROKER_TEST_PORT=18768 docker compose -p cb-workflow-acceptance -f deploy/compose.test.yml -f deploy/compose.workflows-test.yml up --build -d control worker
