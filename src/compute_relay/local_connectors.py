@@ -2,8 +2,8 @@
 
 OpenSSH authentication stays on the launcher's main thread. Already connected
 workers serve asynchronously on a separate event loop while the next cluster
-asks for its passphrase or second factor. Failed or expired logins require an
-explicit new start request; the supervisor never repeats MFA automatically.
+asks for its passphrase or second factor. Unattended startup requires current
+owner permission; failed logins require an explicit new start request.
 """
 
 from __future__ import annotations
@@ -56,7 +56,8 @@ def connector_directory(data_directory, registration_id):
 
 def _validate_request(document, expected_origin=None):
     fields = {"schema_version", "request_id", "registration_id", "broker_url", "name", "target", "setup"}
-    if not isinstance(document, dict) or set(document) != fields or document["schema_version"] != "1.0":
+    if (not isinstance(document, dict) or set(document) - {"reconnect"} != fields or document["schema_version"] != "1.0"
+            or type(document.get("reconnect", False)) is not bool):
         raise LocalConnectorError("The local connector start request is invalid.")
     try:
         UUID(document["request_id"])
@@ -184,6 +185,7 @@ class _ServingLoop:
     """Serve authenticated connectors while the main thread handles new SSH prompts."""
     def __init__(self, extensions):
         self.extensions = extensions
+        self.tasks = {}
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run, name="compute-relay-connectors", daemon=True)
         self.thread.start()
@@ -202,6 +204,7 @@ class _ServingLoop:
         state, session, directory, deadline, status = connection
 
         async def serve_one():
+            self.tasks[str(directory)] = asyncio.current_task()
             try:
                 await serve(state, session, directory, deadline=deadline, status=status, extensions=self.extensions, scheduler=self.scheduler)
             except asyncio.CancelledError:
@@ -215,8 +218,18 @@ class _ServingLoop:
                     context.__exit__(None, None, None)
                 except Exception:
                     status.problem("Connector cleanup was interrupted. Check the local session before restarting it.")
+                finally:
+                    self.tasks.pop(str(directory), None)
 
         return asyncio.run_coroutine_threadsafe(serve_one(), self.loop)
+
+    def stop(self, path):
+        async def drain():
+            task = self.tasks.get(path)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        asyncio.run_coroutine_threadsafe(drain(), self.loop).result(timeout=30)
 
     def close(self):
         async def stop():
@@ -237,21 +250,28 @@ class _ServingLoop:
             self.thread.join(timeout=2)
 
 
-def _arguments(directory, *, label, base_url, verbose, non_interactive, registry_directory, registration_id=None, target=None, setup=None):
+def _arguments(directory, *, label, base_url, verbose, non_interactive, registry_directory, registration_id=None, target=None, setup=None,
+               automatic_start=False):
     return argparse.Namespace(state_directory=str(directory), connector_label=label, setup=str(setup) if setup else None,
         identity_file=None, known_hosts=None, choose_identity=False, non_interactive=non_interactive,
         allow_insecure_http=False, once=False, verbose=verbose, register_connector=True,
         registry_directory=str(registry_directory), expected_broker_url=base_url,
-        expected_registration_id=registration_id, expected_target=target)
+        expected_registration_id=registration_id, expected_target=target, automatic_start=automatic_start)
 
 
-def _start(args, serving, active):
-    from .worker.personal_connector import connected
+def _start(args, serving, active, *, reconnect=False):
+    from .worker.personal_connector import ConnectorStartupError, connected
     label = display_label(args.connector_label)
     path = args.state_directory
     if path in active and not active[path].done():
-        print(f"[{label}] Connector is already running in this application.", flush=True)
-        return
+        if not reconnect:
+            print(f"[{label}] Connector is already running in this application.", flush=True)
+            return
+        try:
+            serving.stop(path)
+        except Exception:
+            print(f"[{label}] The previous connector is still stopping. Wait before reconnecting; other clusters remain available.", file=sys.stderr, flush=True)
+            return
     context = connected(args)
     try:
         connection = context.__enter__()
@@ -259,6 +279,9 @@ def _start(args, serving, active):
         raise
     except BlockingIOError:
         print(f"[{label}] Another connector is already using this saved identity. Its existing session was left running.", file=sys.stderr, flush=True)
+        return
+    except ConnectorStartupError as error:
+        print(f"[{label}] {error}", file=sys.stderr, flush=True)
         return
     except Exception:
         # SSH prints its own human login diagnostics directly to the terminal.
@@ -277,9 +300,9 @@ def run_connectors(base_url, state_directory, registry_directory=None, verbose=F
     """Keep the single-user application's own connectors available until stopped.
 
     Invoke on the foreground main thread after the loopback web server is
-    healthy. Initial logins are attempted once per launch. A serving connector
-    handles bounded network recovery; a failed authentication, exhausted recovery
-    circuit or expired session requires an explicit human start request.
+    healthy. Initial key logins are attempted once with current owner permission.
+    A serving connector handles permitted renewal and bounded network recovery;
+    interactive authentication requires an explicit human start request.
     """
     from .worker.personal_connector import read_private
     from .extensions import async_worker_names, configured_names
@@ -314,7 +337,7 @@ def run_connectors(base_url, state_directory, registry_directory=None, verbose=F
                         non_interactive=non_interactive, registry_directory=registry.directory,
                         registration_id=request["registration_id"], target=request["target"])
                     if request["setup"] is None:
-                        _start(_arguments(directory, **common), serving, active)
+                        _start(_arguments(directory, **common), serving, active, reconnect=request.get("reconnect", False))
                     else:
                         with requests.setup_file(request) as setup:
                             _start(_arguments(directory, setup=setup, **common), serving, active)
@@ -344,7 +367,7 @@ def run_connectors(base_url, state_directory, registry_directory=None, verbose=F
                     print(f"[{display_label(profile.name)}] Saved connector is unavailable. Check its private state directory.", file=sys.stderr, flush=True)
                     continue
                 _start(_arguments(profile.state_directory, label=profile.name, base_url=base_url,
-                    verbose=verbose, non_interactive=non_interactive, registry_directory=registry.directory), serving, active)
+                    verbose=verbose, non_interactive=True, registry_directory=registry.directory, automatic_start=True), serving, active)
             stop_event.wait(poll_interval)
     finally:
         serving.close()

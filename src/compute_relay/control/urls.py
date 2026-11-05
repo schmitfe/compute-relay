@@ -39,6 +39,7 @@ urlpatterns = [
     path("internal/v1/connectors/tasks", connector_setup.tasks),
     path("internal/v1/connectors/tasks/<uuid:task_id>/report", connector_setup.report),
     path("clusters/<uuid:connection_id>/configuration/", connector_setup.configure),
+    path("clusters/<uuid:connection_id>/connector-settings/", connector_setup.connector_settings),
     path("clusters/<uuid:connection_id>/directories/", connector_setup.directories),
     path("clusters/<uuid:connection_id>/test/", cluster_checks.check),
     path("clusters/setup/<uuid:registration_id>/remove/", cluster_removal.registration),

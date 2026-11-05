@@ -161,6 +161,7 @@ def test_saved_connectors_authenticate_sequentially_and_keep_serving_during_late
     @contextmanager
     def connected(args):
         assert threading.get_ident() == main_thread
+        assert args.automatic_start and args.non_interactive
         label = args.connector_label
         events.append(("authenticate", label))
         if label == "busy":
@@ -287,6 +288,58 @@ def test_server_shutdown_does_not_authenticate_saved_connectors(data_directory, 
     saved(data_directory, "agmn")
     monkeypatch.setattr(personal_connector, "connected", lambda _: pytest.fail("Stopped server triggered SSH"))
     local.run_connectors(ORIGIN, data_directory, server_alive=lambda: False)
+
+
+def test_explicit_reconnect_drains_only_selected_connector_before_main_thread_login(data_directory, monkeypatch):
+    events = []
+    healthy_running = threading.Event()
+    main_thread = threading.get_ident()
+
+    @contextmanager
+    def connected(args):
+        assert threading.get_ident() == main_thread
+        if args.connector_label == "selected" and "selected-started" in events:
+            assert "selected-drained" in events and "selected-closed" in events
+            assert "healthy-drained" not in events
+        events.append(args.connector_label + "-started")
+        try:
+            yield {"name": args.connector_label}, object(), Path(args.state_directory), None, ConnectorStatus({"name": args.connector_label})
+        finally:
+            events.append(args.connector_label + "-closed")
+
+    async def serve(state, *args, **kwargs):
+        if state["name"] == "healthy":
+            healthy_running.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(.02)
+            events.append(state["name"] + "-drained")
+
+    monkeypatch.setattr(personal_connector, "connected", connected)
+    monkeypatch.setattr(personal_connector, "serve", serve)
+    serving, active = local._ServingLoop([]), {}
+    args = {name: local._arguments(data_directory / name, label=name, base_url=ORIGIN,
+        verbose=False, non_interactive=False, registry_directory=data_directory) for name in ("selected", "healthy")}
+    try:
+        local._start(args["selected"], serving, active)
+        local._start(args["healthy"], serving, active)
+        assert healthy_running.wait(2)
+        local._start(args["selected"], serving, active, reconnect=True)
+        assert events.count("selected-started") == 2
+        assert "healthy-drained" not in events
+    finally:
+        serving.close()
+
+
+def test_reconnect_drain_timeout_never_starts_a_second_identity(data_directory, monkeypatch, capsys):
+    args = local._arguments(data_directory / "selected", label="selected", base_url=ORIGIN,
+        verbose=False, non_interactive=False, registry_directory=data_directory)
+    def timed_out(path):
+        raise TimeoutError
+    monkeypatch.setattr(personal_connector, "connected", lambda _: pytest.fail("A timed-out drain started another SSH login"))
+    local._start(args, SimpleNamespace(stop=timed_out), {args.state_directory: SimpleNamespace(done=lambda: False)}, reconnect=True)
+    assert "still stopping" in capsys.readouterr().err
 
 
 def test_local_supervisor_propagates_selected_extensions_to_every_serving_worker(data_directory, monkeypatch):

@@ -68,7 +68,8 @@ def setup_document(request, registration, *, revision_required=True):
             "pairing_token": secret, "expires_at": enrollment.expires_at.isoformat(),
             "target": ssh, "remote_root": registration.requested_root,
             "site_profile": site_profile(registration),
-            "local": registration.connector_settings}
+            "local": {key: value for key, value in registration.connector_settings.items()
+                if key in {"identity_file", "known_hosts", "session_seconds", "module_availability_enabled", "automatic_reconnect_enabled"}}}
         audit(None, owner.id, "connector.setup_issued", enrollment.id)
     response = HttpResponse(json.dumps(document, indent=2) + "\n", content_type="application/json")
     response["Content-Disposition"] = 'attachment; filename="personal-connector.json"'

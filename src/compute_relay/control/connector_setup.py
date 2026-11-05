@@ -1,6 +1,6 @@
 """Human-owned post-login setup; agents cannot browse or change SSH scope."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 import re
 from urllib.parse import urlencode
@@ -168,12 +168,61 @@ def authenticated_connection(request, document):
     return worker, connection
 
 
+@human_view
+def connector_settings(request, connection_id):
+    if request.method != "POST":
+        from django.http import HttpResponseNotAllowed
+        return HttpResponseNotAllowed(["POST"])
+    if request.headers.get("Authorization") or set(request.POST) - {"setup_revision", "automatic_reconnect_enabled", "csrfmiddlewaretoken"}:
+        raise BrokerError("INVALID_REQUEST", "Connector settings require a human form request.")
+    reference = own_connection(request.user, connection_id)
+    with transaction.atomic():
+        connection, _worker, registration = locked_connection(reference)
+        if request.POST.get("setup_revision") != str(registration.revision):
+            raise BrokerError("SETUP_CHANGED", "Reload the cluster before saving connector settings.", 409)
+        value = request.POST.get("automatic_reconnect_enabled", "")
+        if value not in {"", "on"}:
+            raise BrokerError("INVALID_REQUEST", "Choose whether automatic reconnection is allowed.")
+        registration.connector_settings = {**registration.connector_settings, "automatic_reconnect_enabled": value == "on"}
+        registration.revision += 1
+        registration.save(update_fields=["connector_settings", "revision"])
+        audit(None, request.user.id, "connector.reconnection_policy_updated", registration.id,
+            {"automatic_reconnect_enabled": value == "on"})
+    return redirect(f"/clusters/{connection.id}/#connector")
+
+
+def session_status(document, worker, registration):
+    if set(document) - {"connection_id", "status_only", "runtime"} or document.get("status_only") is not True:
+        raise BrokerError("INVALID_REQUEST", "Session status accepts only its connection and redacted runtime fields.")
+    if "runtime" in document:
+        runtime = document["runtime"]
+        if (not isinstance(runtime, dict) or set(runtime) != {"state", "expires_at"}
+                or not isinstance(runtime.get("state"), str)
+                or runtime["state"] not in {"connected", "recovering", "authentication_required", "stopped"}):
+            raise BrokerError("INVALID_REQUEST", "Invalid connector session status.")
+        expires = runtime["expires_at"]
+        if expires is not None:
+            try:
+                if not isinstance(expires, str) or len(expires) > 64 or not timezone.is_aware(datetime.fromisoformat(expires)):
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise BrokerError("INVALID_REQUEST", "Session expiry must be an explicit timestamp.") from None
+        if runtime["state"] == "connected" and expires is None:
+            raise BrokerError("INVALID_REQUEST", "A connected session needs its expiry timestamp.")
+        registration.connector_settings = {**registration.connector_settings,
+            "runtime": {"worker_id": str(worker.id), **runtime}}
+        registration.save(update_fields=["connector_settings"])
+    return {"automatic_reconnect_enabled": registration.connector_settings.get("automatic_reconnect_enabled") is True}
+
+
 @boundary("POST")
 def tasks(request):
     document = body(request, maximum=16 * 1024)
     worker, reference = authenticated_connection(request, document)
     with transaction.atomic():
         connection, worker, _registration = locked_connection(reference, worker)
+        if "status_only" in document:
+            return session_status(document, worker, _registration)
         defaults_deferred = False
         if document.get("hello") is True:
             if document.get("protocol") != "personal-connector/v1":

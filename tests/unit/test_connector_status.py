@@ -25,3 +25,9 @@ def test_progress_is_opt_in_and_interruptions_are_deduplicated(capsys):
     assert "verbose only" not in output.out
     assert output.err.count("Operation interrupted") == 1
     assert output.out.count("operation resumed") == 1
+
+
+def test_optional_personal_session_status_allows_cluster_rendering_without_registration():
+    from types import SimpleNamespace
+    from compute_relay.control.templatetags.broker_local_runtime import connector_session
+    assert connector_session(SimpleNamespace(worker_id="managed-worker")) == {}

@@ -29,9 +29,12 @@ def bootstrap(monkeypatch):
         class Session:
             def __init__(self, *args, **kwargs):
                 self.closed = False
+                self.automatic = False
                 sessions.append(self)
             def start(self, **kwargs):
                 pass
+            async def reconnect_async(self):
+                self.automatic = True
             def close(self):
                 self.closed = True
         monkeypatch.setattr(ssh_session, "SSHSession", Session)
@@ -90,3 +93,30 @@ def test_shortcut_write_failure_does_not_discard_successful_pairing(bootstrap, m
     assert "startup shortcut could not be saved" in output.err
     assert "synthetic-secret" not in output.err + output.out
     assert sessions[0].closed
+
+
+@pytest.mark.parametrize("permission", [False, True])
+def test_application_autostart_checks_current_owner_permission_before_noninteractive_ssh(bootstrap, monkeypatch, permission):
+    data, state, sessions, args = bootstrap
+    state.update(worker_token="synthetic-saved-worker", connection_id=str(uuid4()), automatic_reconnect_enabled=True)
+    connector.write_private(Path(args.state_directory) / "state.json", state)
+    args.automatic_start = True
+    calls = []
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        def request(self, method, path, document):
+            assert not sessions
+            calls.append(document)
+            return {"automatic_reconnect_enabled": permission}
+    monkeypatch.setattr(connector, "JsonClient", Client)
+    if permission:
+        with connector.connected(args):
+            assert len(sessions) == 1
+            assert sessions[0].automatic
+    else:
+        with pytest.raises(connector.ConnectorStartupError, match="Reconnect"):
+            with connector.connected(args):
+                pytest.fail("Revoked owner permission started SSH")
+        assert not sessions
+    assert calls and calls[0]["status_only"] is True

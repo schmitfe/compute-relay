@@ -43,6 +43,8 @@ class RegistrationForm(forms.Form):
     session_minutes = forms.IntegerField(required=False, min_value=1, max_value=1440,
         initial=480, label="SSH session lifetime (minutes)",
         help_text="Default: 480 minutes (8 hours). The cluster may require you to sign in again sooner.")
+    automatic_reconnect_enabled = forms.BooleanField(required=False, label="Allow automatic SSH reconnection",
+        help_text="Allow key-only reconnection and session renewal while the application is open. Passwords, key passphrases and second factors are never saved or replayed. A failed login requires Reconnect.")
     setup_revision = forms.IntegerField(required=False, min_value=1, widget=forms.HiddenInput)
 
     def clean_host(self):
@@ -69,6 +71,8 @@ class RegistrationForm(forms.Form):
             self.add_error(None, "Only Slurm clusters can be added here.")
         data["backend"] = "slurm"
         settings = {"session_seconds": (data.get("session_minutes") or 480) * 60}
+        if data.get("automatic_reconnect_enabled"):
+            settings["automatic_reconnect_enabled"] = True
         for field in ("identity_file", "known_hosts"):
             value = data.get(field, "")
             if not value:
@@ -82,7 +86,7 @@ class RegistrationForm(forms.Form):
 
     @property
     def advanced_fields(self):
-        return [self[name] for name in ("port", "remote_root", "identity_file", "known_hosts", "session_minutes")]
+        return [self[name] for name in ("port", "remote_root", "identity_file", "known_hosts", "session_minutes", "automatic_reconnect_enabled")]
 
     @property
     def advanced_open(self):
@@ -110,6 +114,7 @@ def edit(request, registration_id):
         **{key: value for key, value in registration.connector_settings.items()
            if key in {"identity_file", "known_hosts"}},
         "session_minutes": registration.connector_settings.get("session_seconds", 28800) // 60,
+        "automatic_reconnect_enabled": registration.connector_settings.get("automatic_reconnect_enabled", False),
         "setup_revision": registration.revision})
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():

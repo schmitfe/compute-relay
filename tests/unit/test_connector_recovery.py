@@ -11,6 +11,24 @@ from compute_relay.worker.recovery import RetryGate, SessionRecovery, reachable
 from compute_relay.worker import personal_connector
 
 
+@pytest.fixture(autouse=True)
+def control_channel(monkeypatch):
+    from compute_relay.worker import async_client
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def request(self, *args, **kwargs):
+            return {"automatic_reconnect_enabled": True}
+        async def close(self):
+            pass
+    monkeypatch.setattr(async_client, "AsyncJsonClient", Client)
+
+
+def connector_state(**changes):
+    return {"session_seconds": 300, "broker_url": "https://broker.invalid", "worker_token": "synthetic-worker",
+        "connection_id": "00000000-0000-0000-0000-000000000001", **changes}
+
+
 def test_retry_gate_allows_only_one_recovery_probe_and_ignores_stale_success():
     async def scenario():
         clock = [0]
@@ -96,12 +114,11 @@ def test_failed_handshake_or_authentication_opens_circuit_until_explicit_restart
     assert "private diagnostic" not in " ".join(c.messages)
 
 
-def test_flapping_connections_have_a_cooldown_and_lifetime_authentication_cap():
+def test_successful_reconnections_keep_cooldown_without_exhausting_a_lifetime_budget():
     c = fixture()
-    for _ in range(3):
+    for _ in range(5):
         assert asyncio.run(c.recovery.reconnect(c.session, c.status)) is True
-    assert asyncio.run(c.recovery.reconnect(c.session, c.status)) is False
-    assert len(c.starts) == len(c.probes) == 3
+    assert len(c.starts) == len(c.probes) == 5
     assert all(later - earlier >= 60 for earlier, later in zip(c.starts, c.starts[1:]))
 
 
@@ -124,12 +141,12 @@ def test_reachability_probe_sends_no_ssh_authentication(monkeypatch):
 
 def test_connector_resumes_same_state_only_after_session_operations_drained(monkeypatch, tmp_path):
     events = []
-    state = {"session_seconds": 300}
+    state = connector_state()
     async def run(received, session, directory, **kwargs):
         assert received is state and directory == tmp_path
         events.append("drained" if not events else "resumed")
         return "session_lost" if len(events) == 1 else None
-    async def recover(self, session, status):
+    async def recover(self, session, status, **kwargs):
         assert events == ["drained"]
         events.append("reconnected")
         return True
@@ -142,19 +159,67 @@ def test_connector_resumes_same_state_only_after_session_operations_drained(monk
     assert events == ["drained", "reconnected", "resumed", "closed"]
 
 
-def test_recovery_does_not_extend_original_session_deadline(monkeypatch, tmp_path, capsys):
-    closed = []
-    async def lost(*args, **kwargs):
-        return "session_lost"
-    async def blocked(*args):
-        await asyncio.Event().wait()
+def test_expiry_renews_only_with_current_owner_permission_and_restarts_fresh_deadline(monkeypatch, tmp_path):
+    events, deadlines = [], []
+    async def expired(*args, deadline, **kwargs):
+        deadlines.append(deadline)
+        return "session_expired" if len(deadlines) == 1 else "revoked"
+    async def recover(*args, authorize, **kwargs):
+        assert await authorize()
+        events.append("renewed")
+        return True
     async def close():
-        closed.append(True)
-    monkeypatch.setattr(personal_connector, "_serve_session", lost)
-    monkeypatch.setattr(SessionRecovery, "reconnect", blocked)
-    asyncio.run(personal_connector.serve({"session_seconds": 300}, SimpleNamespace(close_async=close), tmp_path,
-        deadline=time.monotonic() + .02))
-    assert closed == [True] and "lifetime reached during recovery" in capsys.readouterr().err
+        events.append("closed")
+    monkeypatch.setattr(personal_connector, "_serve_session", expired)
+    monkeypatch.setattr(SessionRecovery, "reconnect", recover)
+    asyncio.run(personal_connector.serve(connector_state(), SimpleNamespace(close_async=close), tmp_path,
+        deadline=time.monotonic() - 1))
+    assert deadlines[1] > deadlines[0] + 299 and events == ["renewed", "closed"]
+
+
+def test_expiry_does_not_authenticate_without_owner_permission(monkeypatch, tmp_path, capsys):
+    from compute_relay.worker.async_client import AsyncJsonClient
+    calls = []
+    async def request(self, method, path, body):
+        calls.append(body)
+        return {"automatic_reconnect_enabled": False}
+    async def expired(*args, **kwargs):
+        return "session_expired"
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Expiry authenticated without current owner consent")
+    async def close():
+        pass
+    monkeypatch.setattr(AsyncJsonClient, "request", request)
+    monkeypatch.setattr(personal_connector, "_serve_session", expired)
+    monkeypatch.setattr(SessionRecovery, "reconnect", forbidden)
+    asyncio.run(personal_connector.serve(connector_state(), SimpleNamespace(close_async=close), tmp_path))
+    assert calls[-1]["runtime"]["state"] == "authentication_required"
+    assert "Reconnect" in capsys.readouterr().err
+
+
+def test_owner_revocation_before_automatic_authentication_sends_no_credentials():
+    c = fixture()
+    async def revoked():
+        return False
+    assert asyncio.run(c.recovery.reconnect(c.session, c.status, authorize=revoked)) is False
+    assert not c.starts
+
+
+def test_setup_account_verification_pause_does_not_stop_existing_job_tracking(monkeypatch, tmp_path):
+    from compute_relay.worker.async_client import AsyncJsonClient
+    from compute_relay.worker.client import ControlError
+    events = []
+    async def paused(self, *args, **kwargs):
+        raise ControlError("AUTH_REQUIRED", 403)
+    async def tracking(*args, **kwargs):
+        events.append("tracked")
+        return "revoked"
+    async def close():
+        events.append("closed")
+    monkeypatch.setattr(AsyncJsonClient, "request", paused)
+    monkeypatch.setattr(personal_connector, "_serve_session", tracking)
+    asyncio.run(personal_connector.serve(connector_state(), SimpleNamespace(close_async=close), tmp_path))
+    assert events == ["tracked", "closed"]
 
 
 def test_revocation_never_triggers_connection_recovery(monkeypatch, tmp_path):
@@ -166,4 +231,4 @@ def test_revocation_never_triggers_connection_recovery(monkeypatch, tmp_path):
         pass
     monkeypatch.setattr(personal_connector, "_serve_session", revoked)
     monkeypatch.setattr(SessionRecovery, "reconnect", forbidden)
-    asyncio.run(personal_connector.serve({"session_seconds": 300}, SimpleNamespace(close_async=close), tmp_path))
+    asyncio.run(personal_connector.serve(connector_state(), SimpleNamespace(close_async=close), tmp_path))
