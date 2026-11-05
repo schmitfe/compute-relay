@@ -15,8 +15,9 @@ The distribution is not yet published. Pip installation from checkout/repository
 wheel in a virtual environment also works; all runtime dependencies are included
 and uv is not required at runtime. Checkout runs use `uv sync --locked` and
 `uv run --locked compute-relay`; `uv.lock` governs development/CI/fixtures.
-Docker is only for optional native acceptance. Stop the launcher before replacing
-its installed environment; incompatible updates follow fresh setup below.
+Docker is only for optional native acceptance. For updating a uv installation,
+see [tool management](https://docs.astral.sh/uv/guides/tools/). Stop the launcher
+before replacing its environment; incompatible updates follow fresh setup below.
 
 ## First launch
 
