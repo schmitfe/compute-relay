@@ -46,6 +46,8 @@ def open_session_directory(directory, *, create=False):
         raise SessionStorageError("STATE_PATH_INVALID")
     from compute_relay.local_filesystem import absolute_path
     value = str(absolute_path(value))
+    if len(os.fsencode(str(Path(value) / "s"))) > 100:
+        raise SessionStorageError("STATE_PATH_INVALID")
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     root_uid = os.fstat(descriptor).st_uid
     parts = Path(value).parts[1:]

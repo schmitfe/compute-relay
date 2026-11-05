@@ -114,7 +114,7 @@ def test_runtime_configuration_is_stable_private_key_free_and_fail_closed(connec
     first = session.runtime_configuration()
     assert connection == original
     assert first["revision_sha256"] == original["revision_sha256"]
-    assert first["ssh"]["mode"] == "mfa" and first["ssh"]["control_path"] == str(state / "s")
+    assert first["ssh"]["mode"] == "mfa" and first["ssh"]["control_path"] == str(session.state_directory / "s")
     assert "identity_file" not in first["ssh"]
     assert first == SSHSession(connection, state).runtime_configuration()
     transport = OpenSSHTransport(first)
