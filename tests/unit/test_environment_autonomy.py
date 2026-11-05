@@ -138,7 +138,15 @@ def test_agent_inspects_builds_and_updates_usable_environment_without_per_build_
         (directory / "stderr.log").write_bytes(result.stderr)
         Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
         asyncio.run(worker.execute(core.lease_work(c.worker)["lease"]))
-        return Attempt.objects.get(id=attempt.id)
+        attempt.refresh_from_db()
+        assert attempt.accounting_state == "settled" and attempt.collection_pending
+        assert not attempt.artifacts.exists()
+        collection = core.lease_work(c.worker)["lease"]
+        assert collection["collection_only"] and collection["native_identity"] == attempt.native_identity
+        asyncio.run(worker.execute(collection))
+        attempt.refresh_from_db()
+        assert attempt.collection_state == "complete" and not attempt.collection_pending
+        return attempt
 
     first_inspection = invoke(server, "inspect_environment", {"environment_id": str(c.base.id), "idempotency_key": "initial-inventory"})
     resumed = invoke(server, "inspect_environment", {"environment_id": str(c.base.id), "idempotency_key": "recovered-inventory"})

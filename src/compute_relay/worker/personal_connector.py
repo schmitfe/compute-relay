@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import contextmanager, ExitStack
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,7 @@ class ConnectorStartupError(ValueError):
         "SETUP_EXPIRED": "Pairing expired; download a fresh connector setup from the cluster page.",
         "ALREADY_PAIRED": "This connector is already paired. Resume without --setup, or use a new state directory.",
         "PAIRING_UNCERTAIN": "A previous pairing outcome is uncertain. Download a new setup and choose a new state directory.",
+        "RECONNECT_REQUIRED": "Choose Reconnect on the cluster page to sign in. Automatic SSH startup is not currently permitted by the owner.",
     }
 
     def __init__(self, code):
@@ -78,12 +80,11 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     identifier = str(UUID(setup["registration_id"]))
     owner = str(UUID(setup["owner_id"]))
     JsonClient(setup["broker_url"], setup["pairing_token"], allow_insecure_http=allow_insecure_http)
-    from datetime import datetime, timezone
     if datetime.fromisoformat(setup["expires_at"]) <= datetime.now(timezone.utc):
         raise ConnectorStartupError("SETUP_EXPIRED")
     hints = setup["local"]
-    if (not isinstance(hints, dict) or set(hints) - {"identity_file", "known_hosts", "session_seconds", "module_availability_enabled"}
-            or type(hints.get("module_availability_enabled", False)) is not bool):
+    if (not isinstance(hints, dict) or set(hints) - {"identity_file", "known_hosts", "session_seconds", "module_availability_enabled", "automatic_reconnect_enabled"}
+            or any(type(hints.get(field, False)) is not bool for field in ("module_availability_enabled", "automatic_reconnect_enabled"))):
         raise ValueError("Invalid local connector hints.")
     ssh = setup["target"]
     if not isinstance(ssh, dict) or set(ssh) != {"host", "user", "port"}:
@@ -106,6 +107,7 @@ def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, all
     return {"schema_version": "1.0", "owner_id": owner, "registration_id": identifier, "name": setup["name"],
         "broker_url": setup["broker_url"], "connection": private, "session_seconds": lifetime,
         "allow_insecure_http": allow_insecure_http, "site_profile": site_profile,
+        "automatic_reconnect_enabled": hints.get("automatic_reconnect_enabled", False),
         "module_discovery_mode": "auto", "module_availability_enabled": hints.get("module_availability_enabled", False)}
 
 
@@ -138,35 +140,83 @@ def pair(setup, state, session, *, client_factory=JsonClient):
     return {**state, "worker_id": result["worker_id"], "worker_token": result["worker_token"], "connection_id": result["connection_id"]}
 
 
+async def _report_session(client, state, state_directory, phase, deadline=None):
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=max(0, deadline - time.monotonic()))).isoformat() if deadline is not None else None
+    result = await client.request("POST", "/internal/v1/connectors/tasks", {
+        "connection_id": state["connection_id"], "status_only": True,
+        "runtime": {"state": phase, "expires_at": expires}})
+    enabled = result.get("automatic_reconnect_enabled", False)
+    if type(enabled) is not bool:
+        raise ControlError("INVALID_CONTROL_RESPONSE")
+    if enabled != state.get("automatic_reconnect_enabled", False):
+        from .personal_setup import save_state
+        updated = {**state, "automatic_reconnect_enabled": enabled}
+        save_state(state_directory, updated)
+        state.update(updated)
+    return enabled
+
+
 async def serve(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None, scheduler=None):
+    from .async_client import AsyncJsonClient
     from .recovery import SessionRecovery
     status = status or ConnectorStatus(state)
     deadline = deadline if deadline is not None else time.monotonic() + state["session_seconds"]
     recovery = SessionRecovery()
+    client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
+    phase, revoked = "connected", False
+
+    async def report(next_phase, expiry=None):
+        nonlocal phase, revoked
+        phase = next_phase
+        try:
+            return await _report_session(client, state, state_directory, phase, expiry)
+        except ControlError as error:
+            if error.status == 401:
+                revoked = True
+                status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
+            elif error.status == 403:
+                status.problem("Automatic SSH reconnection is paused until account verification is current. Existing jobs will still be tracked.")
+            else:
+                status.interrupted("broker")
+            return False
+
     try:
         while True:
-            reason = await _serve_session(state, session, state_directory, once=once, deadline=deadline, status=status, extensions=extensions, scheduler=scheduler)
-            if reason != "session_lost" or once:
+            await report("connected", deadline)
+            if revoked:
                 return
+            warning = asyncio.get_running_loop().call_later(max(0, deadline - time.monotonic() - 300),
+                status.notice, "SSH session expires within five minutes. Automatic renewal requires your permission; use Reconnect on the cluster page for local sign-in.")
             try:
-                async with asyncio.timeout(max(0, deadline - time.monotonic())):
-                    if not await recovery.reconnect(session, status):
-                        return
-            except TimeoutError:
-                status.problem("SSH session lifetime reached during recovery. Restart the connector to sign in again.")
+                reason = await _serve_session(state, session, state_directory, once=once, deadline=deadline, status=status, extensions=extensions, scheduler=scheduler, client=client)
+            finally:
+                warning.cancel()
+            if reason not in {"session_lost", "session_expired"} or once:
+                revoked = reason == "revoked"
                 return
+            if not await report("recovering", deadline):
+                await report("authentication_required")
+                status.problem("SSH sign-in is required. Choose Reconnect on this cluster's page; existing jobs retain their recorded state.")
+                return
+            if not await recovery.reconnect(session, status, authorize=lambda: report("recovering", deadline)):
+                await report("authentication_required")
+                return
+            deadline = time.monotonic() + state["session_seconds"]
     finally:
-        await session.close_async()
+        try:
+            await session.close_async()
+            if phase != "authentication_required" and not revoked:
+                await report("stopped")
+        finally:
+            await client.close()
 
 
-async def _serve_session(state, session, state_directory, *, once=False, deadline=None, status=None, extensions=None, scheduler=None):
-    from .async_client import AsyncJsonClient
+async def _serve_session(state, session, state_directory, *, client, once=False, deadline=None, status=None, extensions=None, scheduler=None):
     from .personal_setup import PersonalWorker
     from .journal import Journal
     from .recovery import RetryGate
     status = status or ConnectorStatus(state)
     alias, profile = runtime_profile(state, session)
-    client = AsyncJsonClient(state["broker_url"], state["worker_token"], allow_insecure_http=state.get("allow_insecure_http", False), max_response_bytes=384 * 1024 * 1024)
     try:
         parallelism = remote_parallelism()
         worker = PersonalWorker(client, {}, Journal(state_directory / "journal"), credential_profiles={alias: profile},
@@ -182,7 +232,7 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
                 except ControlError as error:
                     if error.status in {401, 403}:
                         status.problem("Connector access was withdrawn. Sign in to the portal before reconnecting.")
-                        return
+                        return "revoked"
                     await broker_gate.failed()
                     status.interrupted("broker")
                 else:
@@ -234,9 +284,8 @@ async def _serve_session(state, session, state_directory, *, once=False, deadlin
             except _ConnectorStopped as stopped_error:
                 return stop_reason or stopped_error.reason
     except TimeoutError:
-        status.problem("SSH session lifetime reached. Restart the connector to sign in again.")
-    finally:
-        await client.close()
+        status.problem("SSH session lifetime reached. Checking whether a new session is permitted.")
+        return "session_expired"
 
 
 @contextmanager
@@ -287,12 +336,24 @@ def connected(args):
             raise ConnectorStartupError("PAIRING_UNCERTAIN")
         status = ConnectorStatus(state, verbose=getattr(args, "verbose", False), label=getattr(args, "connector_label", None))
         status.progress("Preparing a new connector." if setup else "Resuming your saved connector.")
+        automatic_start = getattr(args, "automatic_start", False)
+        if automatic_start:
+            policy = JsonClient(state["broker_url"], state["worker_token"],
+                allow_insecure_http=state.get("allow_insecure_http", False)).request("POST", "/internal/v1/connectors/tasks", {
+                    "connection_id": state["connection_id"], "status_only": True,
+                    "runtime": {"state": "authentication_required", "expires_at": None}})
+            if policy.get("automatic_reconnect_enabled") is not True:
+                raise ConnectorStartupError("RECONNECT_REQUIRED")
         session = SSHSession(state["connection"], directory, lifetime_seconds=state["session_seconds"])
         try:
             ssh = state["connection"]["ssh"]
             target = display_label(f"{ssh['user']}@{ssh['host']}:{ssh.get('port', 22)}")
-            status.notice(f"Connecting to {target}. Complete any OpenSSH host-key, passphrase or MFA prompt in this terminal.")
-            session.start(interactive=not args.non_interactive)
+            status.notice(f"Connecting to {target}. " + ("Using owner-permitted key authentication without prompts." if automatic_start
+                else "Complete any OpenSSH host-key, passphrase or MFA prompt in this terminal."))
+            if automatic_start:
+                asyncio.run(session.reconnect_async())
+            else:
+                session.start(interactive=not args.non_interactive)
             status.progress("SSH authentication succeeded; connecting to the broker.")
             deadline = time.monotonic() + state["session_seconds"]
             if setup:

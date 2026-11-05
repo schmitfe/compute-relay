@@ -12,7 +12,7 @@
 <section id="connector"><details{% if not cluster.setup_complete %} open{% endif %}><summary>Connect to this cluster</summary>
 <p>Run this cluster's connector on your device. SSH authentication, key passphrases and second-factor prompts remain local.</p>
 {% if local_start %}
-<form method="post" action="/clusters/{{ cluster.id }}/start-local/">{% csrf_token %}<input type="hidden" name="setup_revision" value="{% if personal_setup %}{{ personal_setup.revision }}{% endif %}"><button>Start connector locally</button></form>
+<form method="post" action="/clusters/{{ cluster.id }}/start-local/">{% csrf_token %}<input type="hidden" name="setup_revision" value="{% if personal_setup %}{{ personal_setup.revision }}{% endif %}"><input type="hidden" name="reconnect" value="yes"><button>Reconnect this cluster</button></form>
 <p>Complete this cluster's SSH prompts in the application terminal. Connected workers remain available while another cluster asks for authentication.</p>
 <details><summary>Download setup for a separate connector</summary>
 {% endif %}
@@ -21,6 +21,9 @@
 <p>Leave the SSH key path empty to open a native file picker on your device at interactive startup. Use <code>--choose-identity</code> to select another key, or <code>--identity-file /absolute/path/to/key</code> without a graphical session. The key is never uploaded. If needed, set its private permissions locally with <code>chmod 600 /absolute/path/to/key</code>.</p>
 <p>Setup does not submit a compute job or enable automatic spending.</p>
 {% if local_start %}</details>{% endif %}
+{% if personal_configuration and personal_setup %}<form method="post" action="/clusters/{{ cluster.id }}/connector-settings/">{% csrf_token %}<input type="hidden" name="setup_revision" value="{{ personal_setup.revision }}">
+<p><label><input type="checkbox" name="automatic_reconnect_enabled"{% if personal_setup.connector_settings.automatic_reconnect_enabled %} checked{% endif %}> Allow automatic SSH reconnection and session renewal while the application is open</label></p>
+<p>Only a key that needs no passphrase or second factor can reconnect automatically. Passwords and MFA answers are never retained. A failed authentication stops automatic attempts until you choose Reconnect. Turning this off prevents the next automatic login; existing jobs continue.</p><button>Save connector permission</button></form>{% endif %}
 </details></section>
 {% endif %}
 <section>

@@ -130,6 +130,7 @@ def finish(workspace, *, job_id=None, investigation_id=None, output, resume=Fals
                         verified[attempt_id] = {"state": "not_downloaded", "files": []}
                     complete = (attempt["state"] in {"succeeded", "failed", "cancelled", "expired"}
                         and attempt.get("accounting", {}).get("final") is True
+                        and not attempt.get("collection_pending", False)
                         and attempt.get("collection_state") not in {"retry_pending", "failed"}
                         and (attempt["state"] != "succeeded" or not attempt.get("missing_outputs")))
                     if acknowledge and complete and verified[attempt_id]["state"] in {"verified", "not_applicable"}:

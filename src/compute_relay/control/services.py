@@ -439,7 +439,7 @@ def serialize_attempt(attempt):
     return {"id": str(attempt.id), "execution_request_id": str(attempt.execution_request_id),
         "state": attempt.state, "accounting_state": attempt.accounting_state,
         "native_identity": attempt.native_identity, "error_code": attempt.error_code,
-        "collection_state": attempt.collection_state, "tracking": diagnostics["tracking"],
+        "collection_state": attempt.collection_state, "collection_pending": attempt.collection_pending, "tracking": diagnostics["tracking"],
         "native_state": diagnostics["native_state"], "exit_code": diagnostics["exit_code"],
         "accounting": {"final": final, "cpu_core_seconds": cpu, "gpu_device_seconds": gpu,
             "elapsed_seconds": diagnostics["elapsed_seconds"],
@@ -537,13 +537,14 @@ def lease_work(worker, *, management_only=False, exclude_attempt_ids=()):
                 _defer_lease(attempt, now)
                 continue
             result = {"lease": lease}
-            if lease["operation"] == "observe":
+            if lease["operation"] == "observe" and not lease.get("collection_only"):
                 used = _lease_size_bound(attempt, entries)
                 observations = []
                 # Do not skip over an older submission, cancellation, recovery
                 # or another connection just to fill a batch.
                 for extra in candidates[:STATUS_BATCH_SIZE - 1]:
                     if (not extra.native_identity or extra.cancel_requested or extra.connection_id != attempt.connection_id
+                            or extra.collection_pending and terminal_observation(extra.observation)
                             or extra.remote_cleanup.get("state") in {"queued", "running"}):
                         break
                     files = list(extra.job.files.select_related("blob"))
@@ -619,7 +620,7 @@ def _lease_attempt(attempt, entries, now):
         "prepared": {"manifest": attempt.job.manifest, "manifest_sha256": attempt.job.manifest_sha256, "files": files}, "native_identity": attempt.native_identity}
     lease["log_cursors"] = {stream: {"cursor": value.get("next_cursor", 0), "file_id": value.get("file_id")}
         for stream, value in attempt.log_state.items() if stream in {"stdout", "stderr"}}
-    if attempt.collection_pending and attempt.accounting_state in {"settled", "released"}:
+    if attempt.collection_pending and terminal_observation(attempt.observation):
         lease["collection_only"] = True
         lease["observation"] = attempt.observation
     if attempt.job.extension_name in control_names():
@@ -875,6 +876,8 @@ def report(worker, attempt_id, data):
                     attempt.collection_state = "retry_pending"
             if attempt.collection_state == "complete" and attempt.error_code in {"OUTPUT_COLLECTION_FAILED", "OUTPUT_MISSING"}:
                 attempt.error_code = ""
+        elif outcome == "observed" and terminal_observation(attempt.observation) and attempt.collection_state == "pending":
+            attempt.collection_pending = True
         if attempt.error_code != "OBSERVED_OVERAGE" and outcome not in {"cancel_unknown", "cancel_identity_mismatch"}:
             attempt.error_code = data.get("error_code", attempt.error_code)[:80]
         attempt.lease_expires_at = None
@@ -892,8 +895,8 @@ def report(worker, attempt_id, data):
             delay = 30 if previous_cancel_error == "CANCEL_UNCONFIRMED" else 5
         elif outcome == "cancel_identity_mismatch":
             delay = 60
-        if attempt.collection_pending and attempt.accounting_state in {"settled", "released"}:
-            delay = 15 * max(1, attempt.collection_failures)
+        if attempt.collection_pending and terminal_observation(attempt.observation):
+            delay = 15 * attempt.collection_failures
         if (attempt.cancel_requested and attempt.native_identity and outcome in {"submitted", "observed"}
                 and attempt.error_code != "CANCEL_IDENTITY_MISMATCH"):
             delay = 0  # A cancellation arriving during observation must not inherit its backoff.

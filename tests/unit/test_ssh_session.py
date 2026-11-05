@@ -165,6 +165,7 @@ def test_async_session_checks_and_shutdown_use_native_bounded_ssh_without_identi
 def test_async_shutdown_finishes_owned_exit_when_cancelled(connection, state, runner, monkeypatch):
     from compute_relay.transports.openssh import OpenSSHTransport
     session = SSHSession(connection, state).start()
+    runner.close()
     entered, release = asyncio.Event(), asyncio.Event()
     async def native_run(*args):
         entered.set()
@@ -181,6 +182,7 @@ def test_async_shutdown_finishes_owned_exit_when_cancelled(connection, state, ru
         with pytest.raises(asyncio.CancelledError):
             await task
         assert session._directory_fd is None
+        assert not (state / "s").exists()
     asyncio.run(scenario())
 
 
@@ -192,6 +194,42 @@ def test_recovery_removes_only_our_refused_stale_socket(connection, state, runne
     monkeypatch.setattr(session, "_control_async", dead_master)
     assert asyncio.run(session.retire_async()) is True
     assert not (state / "s").exists() and session._directory_fd is None
+
+
+@pytest.mark.parametrize("initial_permission", [False, True])
+def test_denied_outage_shutdown_retires_owned_stale_socket_before_explicit_restart(connection, state, runner, monkeypatch, initial_permission):
+    from compute_relay.worker import async_client, personal_connector
+    from compute_relay.worker.recovery import SessionRecovery
+    session = SSHSession(connection, state).start()
+    runner.close()
+    phases = []
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def request(self, method, path, document):
+            phases.append(document["runtime"]["state"])
+            return {"automatic_reconnect_enabled": initial_permission if len(phases) == 1 else False}
+        async def close(self):
+            pass
+    async def lost(*args, **kwargs):
+        return "session_lost"
+    async def dead_master(operation):
+        raise TransportError("master unavailable")
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Denied automatic recovery initiated authentication")
+    monkeypatch.setattr(async_client, "AsyncJsonClient", Client)
+    monkeypatch.setattr(personal_connector, "_serve_session", lost)
+    monkeypatch.setattr(session, "_control_async", dead_master)
+    monkeypatch.setattr(SessionRecovery, "reconnect", forbidden)
+    runtime = {"broker_url": "https://broker.invalid", "worker_token": "synthetic-worker",
+        "connection_id": "00000000-0000-0000-0000-000000000001", "session_seconds": 300}
+    asyncio.run(personal_connector.serve(runtime, session, state))
+    assert phases[-1] == "authentication_required" and session._directory_fd is None
+    assert not (state / "s").exists()
+    assert sum("-M" in command for command, _ in runner.calls) == 1
+    restarted = SSHSession(connection, state).start(interactive=True)
+    assert restarted.check()
+    restarted.close()
 
 
 def test_recovery_does_not_unlink_a_still_listening_master(connection, state, runner, monkeypatch):

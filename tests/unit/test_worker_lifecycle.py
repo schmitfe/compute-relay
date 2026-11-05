@@ -180,7 +180,7 @@ def test_lost_final_response_replays_original_receipt_before_acquiring_work(life
     invoke(c.restart(), "poll_once")
     assert c.control.calls[0][1].endswith("/report")
     assert c.control.calls[0][2] == original
-    assert c.backend.calls == ["observe", "output_manifest"]
+    assert c.backend.calls == ["observe"]
     assert c.journal.read_report(c.lease["attempt_id"]) is None
 
 
@@ -196,24 +196,41 @@ def test_superseded_lease_rebinds_saved_terminal_result_without_scheduler_requer
     invoke(c.restart(), "execute", c.lease)
     assert reports(c)[-1]["generation"] == 2
     assert reports(c)[-1]["observation"]["accounting"]["final"] is True
-    assert c.backend.calls == ["observe", "output_manifest"]
+    assert c.backend.calls == ["observe"]
 
 
 def test_saved_accounting_survives_interrupted_collection_and_new_generation(lifecycle):
     c = lifecycle
     management(c, "observe")
     final_observation(c)
+    invoke(c.worker, "execute", c.lease)
+    c.lease.update(id=str(uuid4()), generation=2, collection_only=True, observation=deepcopy(c.backend.observation))
     c.backend.interrupt_collection = True
     with pytest.raises(InterruptedCollection):
         invoke(c.worker, "execute", c.lease)
     assert c.journal.read_report(c.lease["attempt_id"])["phase"] == "observed"
-    assert reports(c) == []
+    assert len(reports(c)) == 1 and "collection_state" not in reports(c)[0]
     c.backend.interrupt_collection = False
     c.backend.observation = {"state": "unknown", "terminal": False}
-    c.lease.update(id=str(uuid4()), generation=2)
+    c.lease.update(id=str(uuid4()), generation=3)
     invoke(c.restart(), "execute", c.lease)
     assert reports(c)[-1]["observation"]["accounting"]["final"] is True
     assert c.backend.calls == ["observe", "output_manifest", "output_manifest"]
+
+
+def test_legacy_observed_journal_publishes_core_before_collecting(lifecycle):
+    c = lifecycle
+    management(c, "observe")
+    final_observation(c)
+    result = {"outcome": "observed", "native_identity": c.lease["native_identity"],
+        "observation": deepcopy(c.backend.observation)}
+    c.journal.write_report(c.lease["attempt_id"], report_record(c.lease,
+        c.lease["prepared"]["manifest_sha256"], result, phase="observed"))
+    c.lease.update(id=str(uuid4()), generation=2)
+    invoke(c.restart(), "execute", c.lease)
+    assert reports(c)[-1]["observation"] == result["observation"]
+    assert "collection_state" not in reports(c)[-1] and c.backend.calls == []
+    assert c.journal.read_report(c.lease["attempt_id"]) is None
 
 
 def test_durable_final_report_cannot_rebind_to_different_native_identity(lifecycle):
@@ -226,7 +243,7 @@ def test_durable_final_report_cannot_rebind_to_different_native_identity(lifecyc
     c.lease.update(id=str(uuid4()), generation=2, native_identity={"job_id": "99", "attempt_id": c.lease["attempt_id"]})
     with pytest.raises(ValueError, match="Native identity changed"):
         invoke(c.restart(), "execute", c.lease)
-    assert c.backend.calls == ["observe", "output_manifest"]
+    assert c.backend.calls == ["observe"]
     assert c.journal.read_report(c.lease["attempt_id"]) is not None
 
 
@@ -244,6 +261,7 @@ def test_slow_collection_renews_exact_generation_without_losing_accounting(lifec
     c = lifecycle
     management(c, "observe")
     final_observation(c)
+    c.lease.update(collection_only=True, observation=deepcopy(c.backend.observation))
     c.backend.delay = 0.04
     invoke(c.worker, "execute", c.lease)
     renewals = [body for _, path, body in c.control.calls if path.endswith("/renew")]
@@ -259,6 +277,7 @@ def test_failed_renewal_preserves_terminal_evidence_for_next_valid_lease(lifecyc
     c = lifecycle
     management(c, "observe")
     final_observation(c)
+    c.lease.update(collection_only=True, observation=deepcopy(c.backend.observation))
     c.backend.delay = 0.04
     from datetime import datetime, timedelta, timezone
     c.lease["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=.02)).isoformat()

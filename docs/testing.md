@@ -74,6 +74,16 @@ for the fixture and are removed afterward. It never accesses a real site or
 requires a VPN. A supported release must have a successful run for its exact
 commit, in addition to recorded acceptance for its supported real-site classes.
 
+The personal-connector check uses a four-thread Waitress controller and includes
+a real shortened session expiry, abrupt SSH-master death, an accepted terminal
+report whose reply is lost, connector restart and interrupted multichunk output
+collection. It requires unchanged native identities, one submission of the
+recovery job, verified bytes, exact accounting and zero residual reservation.
+Concurrent health, authenticated project-page and bounded status-wait probes
+fail on errors/timeouts; CI captures bounded controller thread stacks on failure.
+Focused tests separately exercise failed key authentication, owner revocation,
+lock draining, delayed accounting and stale-socket protection.
+
 ## Real-cluster acceptance
 
 Real clusters are opt-in and outside normal CI. Use a reviewed test project,

@@ -56,7 +56,7 @@ def finish(context, node, *, output=True, final=True, state="completed"):
     if output:
         publish_output(lease, "summary.json", b'{"mean": 0.25}\n')
     core.report(context.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
-        "outcome": "observed", "native_identity": native,
+        "outcome": "observed", "native_identity": native, "collection_state": "complete",
         "observation": {"state": state, "terminal": True,
             "accounting": {"cpu_core_seconds": 1, "gpu_device_seconds": 0, "final": final}}})
     attempt.refresh_from_db()

@@ -87,11 +87,12 @@ def approve_and_wait(agent, human, node, job, timeout):
         attempt = current["attempts"][0]
         require(attempt["id"] == attempt_id and attempt["state"] not in {"failed", "cancelled", "expired"},
                 "Workflow node failed or changed its admitted attempt")
-        if attempt["state"] == "succeeded" and attempt["accounting_state"] == "settled":
+        if (attempt["state"] == "succeeded" and attempt["accounting_state"] == "settled"
+                and attempt["collection_state"] == "complete"):
             require(str(attempt.get("native_identity", {}).get("job_id", "")).isdigit(), "Workflow node lacks a native Slurm identity")
             return attempt
         time.sleep(1)
-    raise SmokeFailure("Workflow node did not settle final accounting before the deadline")
+    raise SmokeFailure("Workflow node did not finish accounting and output collection before the deadline")
 
 
 def run(base_url, demo_file, timeout):

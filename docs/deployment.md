@@ -124,6 +124,9 @@ and initialize the updated package in a new private data directory. Reconnect
 clusters and create new projects and keys. Existing client workspaces must be
 initialized with those new keys. Do not mix an earlier database or connector
 state with the new installation, or erase state while submissions are uncertain.
+Run the portal and every connector from the same installed version; restart
+both after updating. Completion handoff and reconnection permission require
+matching controller and worker behavior.
 
 A restart of the same version still preserves jobs, reservations and journals.
 The current `slurm-jobs/v1` management path verifies the original manifest,

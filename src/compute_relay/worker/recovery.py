@@ -71,7 +71,7 @@ async def reachable(host, port):
 
 
 class SessionRecovery:
-    """At most three automatic key authentications during one connector launch.
+    """One automatic key authentication per outage, with a shared rate limit.
 
     A single failed authentication/handshake opens the circuit until the human
     explicitly restarts. Each outage permits at most twelve network-only probes.
@@ -80,10 +80,10 @@ class SessionRecovery:
     def __init__(self, *, probe=reachable, sleep=asyncio.sleep, clock=time.monotonic, jitter=None):
         self.probe, self.sleep, self.clock = probe, sleep, clock
         self.jitter = jitter or (lambda: random.uniform(1, 1.2))
-        self.attempts, self.last_attempt, self.blocked = 0, None, False
+        self.last_attempt, self.blocked = None, False
 
-    async def reconnect(self, session, status):
-        if self.blocked or self.attempts >= 3:
+    async def reconnect(self, session, status, *, authorize=None):
+        if self.blocked:
             status.problem("Automatic SSH recovery limit reached. Restart this connector to sign in explicitly.")
             return False
         status.problem("SSH connection interrupted. Job state is retained; checking network availability with backoff.")
@@ -100,7 +100,9 @@ class SessionRecovery:
             await self.sleep(delay)
             if not await self.probe(ssh["host"], ssh.get("port", 22)):
                 continue
-            self.attempts += 1
+            if authorize is not None and not await authorize():
+                status.problem("Automatic SSH reconnection is not currently authorized. Choose Reconnect in the cluster page to sign in.")
+                return False
             self.last_attempt = self.clock()
             try:
                 await session.reconnect_async()

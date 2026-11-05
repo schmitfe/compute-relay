@@ -123,6 +123,15 @@ def test_downloaded_module_avail_preference_is_explicit_boolean(tmp_path, setup)
         connector.prepare(setup, tmp_path)
 
 
+def test_automatic_reconnect_permission_is_opt_in_and_strict_boolean(tmp_path, setup):
+    assert connector.prepare(setup, tmp_path)["automatic_reconnect_enabled"] is False
+    setup["local"]["automatic_reconnect_enabled"] = True
+    assert connector.prepare(setup, tmp_path)["automatic_reconnect_enabled"] is True
+    setup["local"]["automatic_reconnect_enabled"] = "true"
+    with pytest.raises(ValueError, match="Invalid local connector hints"):
+        connector.prepare(setup, tmp_path)
+
+
 @pytest.fixture
 def sessions(monkeypatch):
     created = []
@@ -296,6 +305,8 @@ def patch_async_runtime(monkeypatch, *, poll):
             pass
         async def close(self):
             closed.append(True)
+        async def request(self, *args, **kwargs):
+            return {"automatic_reconnect_enabled": False}
     class Worker:
         def __init__(self, *args, **kwargs):
             pass
@@ -317,7 +328,8 @@ def test_session_deadline_closes_http_client_and_ssh_master(tmp_path, setup, ses
     async def blocked_poll():
         await asyncio.Event().wait()
     closed = patch_async_runtime(monkeypatch, poll=blocked_poll)
-    ticks = iter([100, 161])
+    from itertools import chain, repeat
+    ticks = chain([100], repeat(161))
     monkeypatch.setattr(connector, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
     connector.main(arguments(tmp_path, setup))
     assert closed == [True] and sessions[0].closed == 1

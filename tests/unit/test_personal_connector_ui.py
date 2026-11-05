@@ -39,6 +39,13 @@ def test_invalid_session_lifetime_is_rejected(value):
     assert not form.is_valid() and "session_minutes" in form.errors
 
 
+def test_automatic_reconnect_is_an_explicit_owner_preference_in_initial_setup():
+    form = RegistrationForm(registration_data(automatic_reconnect_enabled="on"))
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["connector_settings"]["automatic_reconnect_enabled"] is True
+    assert form["automatic_reconnect_enabled"] in form.advanced_fields
+
+
 def test_advanced_ssh_validation_is_visible_without_reading_keys(management):
     client = human(management.owner)
     before = client.get("/clusters/new/")

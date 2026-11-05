@@ -48,7 +48,8 @@ def log_window(attempt, stream, cursor, limit):
     next_cursor = start + len(chunk)
     return {"stream": stream, "content_base64": base64.b64encode(chunk).decode("ascii"),
         "text": chunk.decode("utf-8", "replace"), "cursor": start, "next_cursor": next_cursor,
-        "eof": next_cursor >= end, "finished": attempt.state in {"succeeded", "failed", "cancelled", "expired"},
+        "eof": next_cursor >= end,
+        "finished": attempt.state in {"succeeded", "failed", "cancelled", "expired"} and not attempt.collection_pending,
         "truncated": cursor < beginning, "reset": reset, "available_from": beginning,
         "updated_at": state.get("updated_at") if state else None,
         "observed_at": state.get("observed_at") if state else None,

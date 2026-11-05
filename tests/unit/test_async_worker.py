@@ -15,6 +15,11 @@ from compute_relay.worker.client import ControlError
 from compute_relay.worker.concurrency import PrincipalScheduler, WorkerCapacityError
 
 
+def collection(lease):
+    lease.update(collection_only=True, observation={"state": "completed", "terminal": True,
+        "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}})
+
+
 def test_cancelled_submission_preserves_intent_and_only_reconciles_on_resume(configured):
     async def scenario():
         c = configured
@@ -49,6 +54,7 @@ def test_terminal_output_failure_keeps_final_accounting(configured):
     async def scenario():
         c = configured
         c.lease.update(operation="observe", native_identity={"job_id": "17", "attempt_id": c.lease["attempt_id"]})
+        collection(c.lease)
         c.backend.output_failure = True
         await c.worker.execute(c.lease)
         report = c.control.calls[-1][2]
@@ -67,6 +73,7 @@ def test_batch_collection_failure_does_not_lose_other_outputs_or_final_accountin
             for _ in range(2)]
         for index, lease in enumerate(leases):
             lease["native_identity"] = {"job_id": str(index + 1), "attempt_id": lease["attempt_id"]}
+            collection(lease)
 
         class PartialFailure(Backend):
             async def output_manifest(self, native, *, manifest):
@@ -222,6 +229,7 @@ def environment_context(c):
     context = {"build_id": str(uuid4()), "attempt_id": c.lease["attempt_id"], "spec_sha256": "a" * 64, "generation": 4}
     c.lease.update(operation="observe", native_identity={"job_id": "17", "attempt_id": c.lease["attempt_id"]},
         extension_context={"environments": context})
+    collection(c.lease)
     return context
 
 
@@ -525,6 +533,7 @@ def test_completed_batch_item_stops_renewing_while_other_items_collect(configure
         proposals = [{**deepcopy(c.lease), "operation": "observe", "id": str(uuid4()), "attempt_id": str(uuid4())} for _ in range(2)]
         for index, proposal in enumerate(proposals):
             proposal["native_identity"] = {"job_id": str(index + 1), "attempt_id": proposal["attempt_id"]}
+            collection(proposal)
         class RenewalControl(Control):
             async def request(self, method, path, body=None):
                 attempt = path.split("/")[-2]

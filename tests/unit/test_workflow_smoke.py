@@ -1,9 +1,10 @@
 import hashlib
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from workflow_smoke import SmokeFailure, validate_demo, verify_artifact, verify_edge
+from workflow_smoke import SmokeFailure, approve_and_wait, validate_demo, verify_artifact, verify_edge
 
 
 def fixture_demo():
@@ -29,6 +30,17 @@ def test_workflow_artifact_verifier_requires_exact_bytes_and_hash():
         verify_artifact(expected + b" ", descriptor, expected)
     with pytest.raises(SmokeFailure):
         verify_artifact(expected, {"sha256": "a" * 64}, expected)
+
+
+def test_workflow_acceptance_waits_for_outputs_after_early_settlement(monkeypatch):
+    monkeypatch.setattr("workflow_smoke.time.sleep", lambda _: None)
+    snapshots = iter({"attempts": [{"id": "attempt", "state": "succeeded", "accounting_state": "settled",
+        "native_identity": {"job_id": "17"}, "collection_state": state}], "execution_requests": [{}]}
+        for state in ("pending", "complete"))
+    agent = SimpleNamespace(request=lambda *args: next(snapshots))
+    human = SimpleNamespace(request=lambda *args: {"attempt_id": "attempt"})
+    job = {"id": "job", "manifest_sha256": "a" * 64, "attempts": [], "execution_requests": [{}]}
+    assert approve_and_wait(agent, human, {"execution_request_id": "execution"}, job, 2)["collection_state"] == "complete"
 
 
 @pytest.mark.parametrize("change", ["attempt", "artifact", "hash", "package"])

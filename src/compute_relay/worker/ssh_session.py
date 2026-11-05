@@ -328,17 +328,9 @@ class SSHSession:
         self._directory_fd = self._directory_identity = self._socket_identity = None
 
     async def close_async(self):
-        """Finish owned master shutdown even if application shutdown is cancelled."""
+        """Finish owned master retirement even if application shutdown is cancelled."""
         from compute_relay.transports.openssh import _complete_despite_cancellation
-        try:
-            metadata = self._socket_metadata()
-            if metadata is not None and self._identity(metadata) == self._socket_identity:
-                try:
-                    await _complete_despite_cancellation(asyncio.create_task(self._control_async("exit")), propagate=True)
-                except TransportError:
-                    pass
-        finally:
-            self._release_directory()
+        await _complete_despite_cancellation(asyncio.create_task(self.retire_async()), propagate=True)
 
     def close(self):
         """Ask only our validated master to exit; never connect or unlink a file."""

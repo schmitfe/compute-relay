@@ -15,9 +15,12 @@ supports either a password or explicitly chosen passwordless access. Later
 starts preserve that choice, budgets, job records, artifacts and connector
 configuration. See [installation](deployment.md) for the complete flags.
 
-The launcher starts only connectors saved for its installation. OpenSSH asks for
-key passphrases and MFA in the terminal, one cluster at a time. A browser start
-request queues that local operation; it cannot provide an SSH password or key.
+The launcher supervises only connectors saved for its installation. Saved
+connectors start unattended only with the owner's current permission and an
+eligible explicit key. Otherwise choose **Reconnect** in the portal. OpenSSH
+asks for key passphrases and MFA in the terminal, one cluster at a time. A
+browser start request queues that local operation; it cannot provide an SSH
+password or key.
 Ctrl-C shuts down the portal and connectors without cancelling cluster jobs.
 Restarting resumes the same durable state after any necessary SSH login.
 
@@ -32,9 +35,15 @@ needs no extras, and the installed application does not require uv. See
 ### SSH expiry and reconnecting a stopped connector
 
 Saved personal connectors default to an eight-hour (480-minute) SSH session.
-The configured lifetime ends tracking and closes the managed SSH master; it
-does not cancel native jobs. The portal can remain healthy while a connector
-has stopped. `auth_state: ready` describes saved setup, not current connectivity.
+Expiry drains the connector's current operations and closes its managed SSH
+master; it does not cancel native jobs. **Allow automatic SSH reconnection** is
+a saved, per-cluster owner option, off by default. When enabled, a successful
+noninteractive key-only login starts a fresh session lifetime. Revocation is
+checked before further automatic logins; a failed authentication requires human
+action. Passwords, key passphrases and MFA answers are never retained or replayed.
+The portal shows expiry and when reconnection needs authentication. It can
+remain healthy while a connector has stopped. `auth_state: ready` describes
+saved setup, not current connectivity.
 
 Job status APIs expose `tracking.status` and `tracking.last_contact_at` for current
 clusters while execution, accounting or collection remains unresolved. Contact is `recent`
@@ -46,28 +55,53 @@ not require an active connector. Compact MCP status returns
 tracking needs attention. Waiting scripts should return for human attention,
 not submit another execution.
 
-Open the cluster's **Connect to this cluster** section and choose **Start
-connector locally**, then complete SSH/MFA in the existing application terminal.
+Open the cluster's **Connect to this cluster** section and choose **Reconnect**
+(or **Start connector locally** before its first start), then complete SSH/MFA
+in the existing application terminal. Reconnect waits for this connector to
+drain and release its state lock before starting its replacement. Other
+clusters keep working.
 Alternatively, in a new terminal run `compute-relay connector --state-directory
 /absolute/path/to/that/saved/connector-state` and leave it open. Reuse the same
 state and journal; omit `--setup`. A `STATE_LOCKED` error means another connector
 owns that identity: inspect the existing launcher before retrying. Never delete
 its lock or journal to bypass it.
 
-Owner-permitted automatic renewal for unattended SSH and a simpler interactive
-reconnect flow remain accepted [roadmap work](roadmap.md). Currently an expired
-session requires an explicit start. Terminal observations are also still
-reported after output collection, so large transfers can leave a job displaying
-its last running state during recovery. The roadmap includes separating those
-reports. A successful Slurm exit is not proof that results have been delivered.
+Terminal scheduler observations and available final accounting are reported
+before final logs, module finalization or output transfer. The portal and APIs
+can show completed computation with collection pending. Collection has its own
+recoverable lease and can proceed while usage accounting is delayed; unknown
+usage retains its allowance reservation. An attempt has one active lease, so
+its next accounting poll can wait for the current collection operation. A
+successful Slurm exit is not proof that results have been delivered.
 
 On 5 November 2026, twelve real-site jobs outlived the connector session and
 remained displayed as running. Direct Slurm accounting confirmed all twelve
 completed with exit status `0:0`. After the owner reconnected, all 36 declared
 outputs (2.44 GB) were collected and every original attempt settled its exact native
 CPU usage once, without resubmission or direct database repair. This verifies
-that expiry recovery worked for this run; automatic renewal, injected VPN
-outages and early terminal-state publication remain roadmap work.
+that manual expiry recovery worked for that run. It predates the renewal and
+early-report changes above; it is not acceptance evidence for those changes.
+
+A separate 5 November branch acceptance used its own portal, connector identity,
+SSH session and remote root on agmn2. Two stdlib jobs (native IDs 197941 and
+197942) requested one CPU and 1 GiB each, and actually received two CPUs each.
+The real stdio MCP client verified all four outputs (36 MiB of payloads), observed
+completed computation before collection finished, and confirmed exactly 10
+CPU-core-seconds spent with zero reserved. All 132 concurrent health/project
+probes succeeded; the maximum latency was 130 ms. Local result cleanup and both
+remote attempt cleanups completed through the normal portal. After the shortened
+ten-minute session expired, the owner used **Reconnect** and confirmed successful
+MFA login with the same connector identity. The existing installation was untouched.
+
+Disposable native Slurm acceptance also exercises 60-second session renewal,
+eight parallel submissions, abrupt master death, an accepted terminal report
+followed by a connector crash, and interrupted 6.4 MB output collection.
+It requires one recovery-job submission, unchanged native identities, verified
+bytes, exact positive usage settlement and no residual reservation while
+ordinary portal requests and bounded status waits continue. Fault injection
+exposed a retained owned socket after reconnection was revoked; shutdown now
+uses the existing identity-checked socket retirement, including on cancellation.
+Unknown, replaced or still-listening sockets remain protected.
 
 ### Diagnosing an unresponsive portal
 

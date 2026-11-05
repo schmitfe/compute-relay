@@ -34,7 +34,7 @@ def local_origin(request):
             raise ValueError
     except (ValueError, LocalConnectorError):
         raise BrokerError("LOCAL_ORIGIN_REQUIRED", "Use the loopback address opened by the local application.", 403) from None
-    if set(request.POST) - {"setup_revision", "csrfmiddlewaretoken"}:
+    if set(request.POST) - {"setup_revision", "reconnect", "csrfmiddlewaretoken"} or request.POST.get("reconnect", "") not in {"", "yes"}:
         raise BrokerError("INVALID_REQUEST", "Local startup accepts only the saved cluster revision.", 400)
     return origin
 
@@ -74,7 +74,8 @@ def _enqueue(request, registration, origin, *, revision_required=True):
                 setup = json.loads(response.content)
                 setup["broker_url"] = origin
             return {"schema_version": "1.0", "request_id": str(uuid4()), "registration_id": str(registration.id),
-                "broker_url": origin, "name": registration.name, "target": ssh, "setup": setup}
+                "broker_url": origin, "name": registration.name, "target": ssh, "setup": setup,
+                "reconnect": request.POST.get("reconnect") == "yes"}
 
         try:
             LocalConnectorRequests(settings.DATA_DIR).enqueue(registration.id, document)

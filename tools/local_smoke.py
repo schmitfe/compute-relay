@@ -35,12 +35,13 @@ def budgeted_workflow(base_url, demo_file):
     require(execution.get("attempt_id"), "Budgeted request did not authorize automatically")
     for _ in range(40):
         detail = agent.request("GET", f"/api/v1/jobs/{job['id']}")
-        if detail["attempts"][0]["accounting_state"] == "settled":
+        if (detail["attempts"][0]["accounting_state"] == "settled"
+                and detail["attempts"][0]["collection_state"] == "complete"):
             require(detail["attempts"][0]["state"] == "succeeded", "Budgeted job did not succeed")
             break
         time.sleep(1)
     else:
-        raise RuntimeError("Budgeted fake execution did not settle")
+        raise RuntimeError("Budgeted fake execution did not finish accounting and output collection")
     budget = agent.request("GET", f"/api/v1/projects/{demo['project_id']}/allowance")
     require(budget["reserved"]["cpu_core_seconds"] == 0 and budget["spent"]["cpu_core_seconds"] > 0,
             "Budgeted job did not settle its reservation")

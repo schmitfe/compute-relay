@@ -154,16 +154,20 @@ class Worker:
         await self._execute_attempts([lease, *observations])
 
     async def _finish_observation(self, lease, work, native, backend, result):
+        terminal = result.get("outcome") == "observed" and terminal_observation(result.get("observation"))
+        if terminal:
+            if not lease.get("collection_only"):
+                return
+            self.journal.write_report(work.attempt_id, report_record(lease, work.manifest_sha256, result, phase="observed"))
         if native and result.get("outcome") in {"observed", "cancel_requested", "cancel_unknown"} and getattr(backend, "supports_live_logs", False) is True:
             try:
                 with diagnostic_operation(lease, "logs"):
                     result["log_chunks"] = await backend.read_logs(native, manifest=work.manifest, cursors=lease.get("log_cursors", {}))
             except Exception:
                 pass
-        if result.get("outcome") != "observed" or not terminal_observation(result.get("observation")):
+        if not terminal:
             return
         manifest = work.manifest
-        self.journal.write_report(work.attempt_id, report_record(lease, work.manifest_sha256, result, phase="observed"))
         try:
             from compute_relay.extensions import worker_after_observation
             with diagnostic_operation(lease, "finalize"):
@@ -223,6 +227,12 @@ class Worker:
                 if work.operation == "observe" and result is None and not lease.get("collection_only")]
             with diagnostic_operation(contexts[0][0], "observe"):
                 observed = await backend.observe(pending) if pending else {}
+            # Preserve every returned terminal result before one failed delivery can abort the batch.
+            for lease, work, native, _, result, _, _, _ in contexts:
+                if (work.operation == "observe" and result is None and not lease.get("collection_only")
+                        and terminal_observation(observed.get(work.attempt_id))):
+                    self.journal.write_report(work.attempt_id, report_record(lease, work.manifest_sha256,
+                        {"outcome": "observed", "native_identity": native, "observation": observed[work.attempt_id]}))
             for lease, work, native, _, result, renewal, item_lock, previous in contexts:
                 with diagnostic_operation(lease, "execute"):
                     if work.operation in {"submit", "reconcile"}:

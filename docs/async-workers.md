@@ -123,13 +123,22 @@ expired but unsuperseded lease can renew only within its original deadline.
 Failed renewal stops further progress on that operation and cancels its owned
 I/O, while durable evidence remains available for recovery.
 
-A terminal observation is written to the local report journal **before** module
-finalization and output collection. A complete report is stored before delivery,
-and ready reports are replayed before fresh work is polled. Lost report replies
-reuse their receipt rather than repeating submission. Interrupted collection can
-resume from the saved terminal evidence; finalization/collection failure does
-not invalidate definitive scheduler accounting. These reads may repeat, but
-they do not run the uploaded program in the connector.
+Every terminal observation returned by a status batch is durably journaled
+before any report delivery or output read can interrupt that batch. The worker
+reports execution and available accounting first, then releases that lease.
+A fresh, single-attempt collection lease reads final logs, runs module
+finalization and collects declared outputs using the saved terminal evidence.
+Status batches never include collection leases. Slow collection therefore does
+not hold back the terminal reports from the original status batch.
+
+Ready reports are replayed before fresh work is polled. Lost report replies
+reuse their receipt rather than repeating submission. Collection can start while
+final accounting is unavailable; the allowance remains reserved and another
+accounting observation follows after collection completes or exhausts its
+bounded retries. One attempt still has one active lease, so its accounting poll
+may wait for its current collection operation. Interrupted collection resumes
+without rerunning the uploaded program, and finalization/collection failure
+does not invalidate definitive scheduler accounting.
 
 When a replacement lease supersedes a report, current management authority may
 reuse terminal evidence only for the same attempt, manifest and native identity.
@@ -191,18 +200,20 @@ most twelve probes per outage. A still-live or replaced socket is not removed;
 only the unchanged, owned socket with a refused local connection can be cleaned
 up after an abrupt master death.
 
-Once the network is reachable, recovery makes one noninteractive, pinned-host,
+Automatic authentication requires the owner's saved, per-cluster permission,
+checked against the controller immediately before each attempt. Once the
+network is reachable, recovery makes one noninteractive, pinned-host,
 explicit-key authentication attempt. Password and keyboard-interactive/MFA
 authentication, agents and prompts are disabled. Any failed handshake or
-authentication opens the circuit until an explicit connector restart. Successful
-but flapping sessions allow at most three automatic reconnect attempts per
-connector launch, separated by at least 60 seconds. Recovery never extends the
-original session deadline.
+authentication opens the circuit until explicit human reconnection. Attempts
+are separated by at least 60 seconds. A successful renewal starts a fresh
+session lifetime; successful renewals have no application-lifetime count cap.
 
 An encrypted key that needs its passphrase again, an MFA-only login, a changed
 host key or rejected credentials therefore needs human login through the usual
-local start action. No passphrase, password or MFA answer is retained or replayed.
-An unencrypted authorized key can reconnect automatically. On success the same
+local **Reconnect** action. No passphrase, password or MFA answer is retained or
+replayed. An unencrypted authorized key can reconnect automatically only with
+owner permission. Revocation prevents further automatic logins. On success the same
 worker identity and journals resume: uncertain submissions reconcile, confirmed
 Slurm IDs remain the same, and existing budget reservations are preserved.
 Interrupted work may wait for its previous lease to expire (normally up to
@@ -214,8 +225,8 @@ master and the local portal. A fatal authentication failure also drains every
 lane before closing the session. Slurm allocations
 already accepted continue remotely. Restarting the same installation reconnects
 and resumes durable observation/reconciliation rather than creating replacement
-attempts. Individual session lifetime remains finite and another login may be
-required.
+attempts. Individual session lifetime remains finite. Without owner permission,
+expiry leaves the connector waiting for explicit reconnection.
 
 ## Verification
 

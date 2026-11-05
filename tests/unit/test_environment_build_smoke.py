@@ -1,10 +1,11 @@
 import hashlib
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from environment_build_smoke import SmokeFailure, validate_demo, verify_result
+from environment_build_smoke import SmokeFailure, validate_demo, verify_result, wait_job
 
 
 def fixture_demo():
@@ -34,3 +35,11 @@ def test_reuse_requires_correct_result_hash_and_real_venv_prefix():
         verify_result(content + b" ", descriptor, prefix)
     with pytest.raises(SmokeFailure, match="did not use"):
         verify_result(content, descriptor, "/different/environment")
+
+
+def test_environment_acceptance_waits_for_outputs_after_early_settlement(monkeypatch):
+    monkeypatch.setattr("environment_build_smoke.time.sleep", lambda _: None)
+    snapshots = iter({"attempts": [{"id": "attempt", "state": "succeeded", "accounting_state": "settled",
+        "collection_state": state}]} for state in ("pending", "complete"))
+    agent = SimpleNamespace(request=lambda *args: next(snapshots))
+    assert wait_job(agent, "job", "attempt", 2)["collection_state"] == "complete"

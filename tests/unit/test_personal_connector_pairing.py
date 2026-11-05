@@ -120,3 +120,13 @@ def test_only_own_human_session_with_csrf_can_download(setup_cluster):
     csrf = Client(enforce_csrf_checks=True);csrf.force_login(owner)
     assert csrf.post(path, {"setup_revision": 1}).status_code == 403
     assert human.get(path).status_code == 405
+
+
+def test_download_keeps_owner_permission_but_omits_runtime_snapshot(setup_cluster):
+    registration = setup_cluster[1]
+    registration.connector_settings.update(automatic_reconnect_enabled=True,
+        runtime={"state": "authentication_required", "worker_id": str(uuid4()), "expires_at": None})
+    registration.save(update_fields=["connector_settings"])
+    document = download(setup_cluster)
+    assert document["local"]["automatic_reconnect_enabled"] is True
+    assert "runtime" not in document["local"]

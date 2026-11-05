@@ -153,7 +153,7 @@ def test_worker_queues_concurrent_publications_without_serializing_remote_reads(
                 native = {"attempt_id": attempt, "job_id": "17"}
                 work = SimpleNamespace(attempt_id=attempt, manifest_sha256="b" * 64,
                     manifest={"request": {"outputs": ["result"]}})
-                lease = {"attempt_id": attempt, "id": str(uuid4()), "generation": 1, "operation": "observe"}
+                lease = {"attempt_id": attempt, "id": str(uuid4()), "generation": 1, "operation": "observe", "collection_only": True}
                 result = {"outcome": "observed", "native_identity": native,
                     "observation": {"terminal": True, "state": "completed", "accounting": {"final": True}}}
                 await configured.worker._finish_observation(lease, work, native, backend, result)
