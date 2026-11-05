@@ -151,7 +151,7 @@ def revealed_key(human, html):
     return values[0], str(UUID(match.group(1).decode()))
 
 
-def create_job(agent, demo, backend, source, name, *, previous_job_id=None):
+def create_job(agent, demo, backend, source, name, *, previous_job_id=None, review_required=True):
     descriptor = agent.request(
         "POST", f"/api/v1/projects/{demo['project_id']}/objects",
         {"path": "main.py", "content_base64": base64.b64encode(source).decode("ascii")},
@@ -170,7 +170,8 @@ def create_job(agent, demo, backend, source, name, *, previous_job_id=None):
     job = agent.request("POST", create_path, request)
     prepared = agent.request("POST", f"/api/v1/jobs/{job['id']}/prepare", {})
     execution = agent.request("POST", f"/api/v1/jobs/{job['id']}/execution-requests", {})
-    require(not execution.get("attempt_id"), "Review-mode request ran before human approval")
+    require(bool(execution.get("attempt_id")) != review_required,
+            "Execution did not follow the expected reviewed/budgeted policy")
     return job["id"], prepared["manifest_sha256"], execution["id"]
 
 

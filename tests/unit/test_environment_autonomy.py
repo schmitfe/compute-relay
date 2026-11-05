@@ -8,13 +8,11 @@ No institutional cluster, credentials, registry access or network installs.
 import asyncio
 import base64
 import hashlib
-import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 from uuid import uuid4
-import zipfile
 from unittest.mock import AsyncMock
 
 from django.test import Client
@@ -34,6 +32,7 @@ from compute_relay.worker.journal import Journal
 from compute_relay.worker.client import strict_json
 from compute_relay.worker.runner import Worker
 from test_support.unit_test_environment_extension import context
+from environment_build_smoke import wheel
 
 
 class HTTP:
@@ -61,18 +60,6 @@ class HTTP:
         assert response.status_code < 400, (response.status_code, response.content[:500])
         return strict_json(response.content)
 
-
-def wheel(version):
-    buffer = io.BytesIO()
-    info = f"relay_fixture-{version}.dist-info"
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("relay_fixture/__init__.py", f"__version__ = {version!r}\n")
-        archive.writestr(info + "/METADATA", f"Metadata-Version: 2.1\nName: relay-fixture\nVersion: {version}\n")
-        archive.writestr(info + "/WHEEL", "Wheel-Version: 1.0\nGenerator: relay-fixture\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
-        archive.writestr(info + "/RECORD", "")
-    content = buffer.getvalue()
-    return {"name": "relay-fixture", "version": version, "filename": f"relay_fixture-{version}-py3-none-any.whl",
-        "sha256": hashlib.sha256(content).hexdigest(), "size_bytes": len(content)}, content
 
 
 def invoke(server, name, arguments):

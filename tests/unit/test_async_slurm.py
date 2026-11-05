@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import subprocess
 import sys
 from uuid import uuid4
 
@@ -11,7 +12,6 @@ import pytest
 
 from compute_relay.backends import canonical_json_bytes, prepare
 from compute_relay.backends.slurm import SlurmBackend
-from compute_relay.transports.openssh import OpenSSHTransport
 from compute_relay.transports.openssh import TransportError
 from compute_relay.worker.runner import Worker
 from compute_relay.worker.journal import Journal
@@ -41,21 +41,22 @@ def package(tmp_path):
 def test_async_adapter_uses_fixed_helper_and_cross_process_durable_submission_fence(package):
     async def scenario():
         connection, manifest, files, sentinel, calls = package
-        transport = OpenSSHTransport({"command_timeout_seconds": 10, "ssh": {
-            "host": "never-contacted", "user": "broker", "known_hosts": "/protected/known_hosts"}})
-
         class LocalFixedHelper:
             async def call_helper(self, source, request):
                 # Only first-party remote helper code executes in this controlled
                 # temporary tree. The uploaded job script is merely staged.
-                output = await transport._run([sys.executable, "-I", "-c", source], json.dumps(request).encode())
-                return json.loads(output)
+                result = await asyncio.to_thread(subprocess.run,
+                    [sys.executable, "-I", "-c", source], input=json.dumps(request).encode(),
+                    capture_output=True, timeout=10, env={"PATH": "/usr/bin:/bin", "LANG": "C"})
+                assert result.returncode == 0, result.stderr.decode(errors="replace")
+                return json.loads(result.stdout)
 
         attempt = str(uuid4())
         backend = SlurmBackend(connection, transport=LocalFixedHelper())
-        first, second = await asyncio.gather(backend.submit(attempt, manifest, files), backend.submit(attempt, manifest, files))
-        assert first["outcome"] == second["outcome"] == "submitted"
-        assert first["native_identity"] == second["native_identity"]
+        results = await asyncio.gather(*(backend.submit(attempt, manifest, files) for _ in range(8)))
+        assert all(result["outcome"] == "submitted" for result in results)
+        first = results[0]
+        assert all(result["native_identity"] == first["native_identity"] for result in results)
         assert calls.read_text().splitlines() == ["called"] and not sentinel.exists()
         assert (await backend.reconcile(attempt, manifest))["native_identity"] == first["native_identity"]
     asyncio.run(scenario())
