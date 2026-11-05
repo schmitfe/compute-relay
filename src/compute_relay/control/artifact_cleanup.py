@@ -5,6 +5,7 @@ from datetime import timedelta
 import hashlib
 import json
 import os
+import re
 import stat
 
 from django.conf import settings
@@ -76,11 +77,17 @@ def object_directory(project):
         os.close(root)
 
 
-def file_identity(directory, blob):
-    if len(blob.sha256) != 64 or any(char not in "0123456789abcdef" for char in blob.sha256):
+def _object_name(blob):
+    name = blob.sha256
+    if not isinstance(name, str) or not re.fullmatch(r"[0-9a-f]{64}", name):
         raise BrokerError("CLEANUP_OBJECT_UNSAFE", "The stored object identifier is invalid.", 409)
+    return name
+
+
+def file_identity(directory, blob):
+    name = _object_name(blob)
     try:
-        info = os.stat(blob.sha256, dir_fd=directory, follow_symlinks=False)
+        info = os.stat(name, dir_fd=directory, follow_symlinks=False)
     except FileNotFoundError:
         return None
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
@@ -167,7 +174,7 @@ def cleanup(project, actor, token, job=None):
                     if file_identity(directory, blob) != row["identity"]:
                         raise BrokerError("CLEANUP_OBJECT_CHANGED", "An object changed during cleanup. Keep it for inspection.", 409)
                     if row["identity"] is not None:
-                        os.unlink(blob.sha256, dir_fd=directory)
+                        os.unlink(_object_name(blob), dir_fd=directory)
                         os.fsync(directory)
                     project.storage_used -= blob.size_bytes
                     project.object_count -= 1
@@ -187,6 +194,7 @@ def portal(request, project_id=None, job_id=None):
     job = get_object_or_404(Job.objects.select_related("project"), id=job_id) if job_id else None
     project = job.project if job else get_object_or_404(Project, id=project_id)
     human_permission(request.user, project)
+    path = f"/review/{job.id}/cleanup/" if job else f"/projects/{project.id}/cleanup/"
     from . import remote_cleanup
     if request.method == "POST":
         if request.POST.get("confirm") != "delete":
@@ -194,14 +202,14 @@ def portal(request, project_id=None, job_id=None):
         scope = request.POST.get("cleanup_scope", "local")
         if scope == "remote":
             remote_cleanup.queue(project, request.user, request.POST.get("preview_token"), job)
-            return redirect(request.path + "?remote_queued=1")
+            return redirect(path + "?remote_queued=1")
         if scope != "local":
             raise BrokerError("INVALID_REQUEST", "Choose local files or remote attempt directories.")
         try:
             result = cleanup(project, request.user, request.POST.get("preview_token"), job)
         except OSError as exc:
             raise BrokerError("CLEANUP_INTERRUPTED", "Cleanup was interrupted. Its remaining bytes stay charged; open a fresh preview to resume.", 503) from exc
-        return redirect(request.path + "?reclaimed=" + str(result["bytes"]))
+        return redirect(path + "?reclaimed=" + str(result["bytes"]))
     value = preview(project, job)
     token = signing.dumps({"project": str(project.id), "job": str(job.id) if job else None,
         "actor": str(request.user.id), "digest": preview_digest(value)}, salt=SALT)

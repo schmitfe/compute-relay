@@ -68,6 +68,33 @@ def test_preview_is_read_only_and_confirm_reclaims_bytes_once(management):
     assert form_post(browser, url, {"confirm": "delete", "preview_token": preview.context["preview_token"]}).status_code == 409
 
 
+@pytest.mark.parametrize("job_scope", [False, True])
+@pytest.mark.parametrize("scope", ["local", "remote"])
+def test_cleanup_redirect_uses_saved_identity_not_request_prefix(management, job_scope, scope):
+    job, _, blob, _ = output(management)
+    selected = job if job_scope else None
+    url = f"/review/{job.id}/cleanup/" if selected else f"/projects/{management.project.id}/cleanup/"
+    browser = human(management.owner)
+    with patch("compute_relay.control.remote_cleanup.queue"):
+        response = browser.post(url, {"confirm": "delete", "cleanup_scope": scope,
+            "preview_token": token(management, selected)}, SCRIPT_NAME="//untrusted.invalid",
+            HTTP_X_CSRFTOKEN=browser.cookies["csrftoken"].value)
+    suffix = "remote_queued=1" if scope == "remote" else f"reclaimed={blob.size_bytes}"
+    assert response.status_code == 302 and response["Location"] == url + "?" + suffix
+
+
+@pytest.mark.parametrize("digest", ["../outside", "/outside", "a/" + "0" * 62,
+    "g" * 64, "A" * 64, "0" * 63, "0" * 64 + "\n"])
+def test_corrupt_object_name_is_rejected_before_cleanup(management, digest):
+    _, _, blob, _ = output(management)
+    path = blob_path(blob)
+    Blob.objects.filter(id=blob.id).update(sha256=digest)
+    with pytest.raises(BrokerError) as error:
+        cleanup.preview(management.project)
+    assert error.value.code == "CLEANUP_OBJECT_UNSAFE"
+    assert path.exists() and Blob.objects.filter(id=blob.id, cleanup_pending=False).exists()
+
+
 @pytest.mark.parametrize("changes", [
     {"state": "running"}, {"state": "submission_uncertain"}, {"accounting_state": "settlement_pending"},
     {"collection_pending": True}, {"collection_state": "failed"}, {"collection_state": "retry_pending"},

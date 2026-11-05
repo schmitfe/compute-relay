@@ -498,7 +498,7 @@ def review(request, job_id):
                 else:
                     services.idempotent(job.project, f"{job_id}:decision:{request.user.id}", request.POST.get("idempotency_key"), document,
                                         lambda: services.decide(job, request.user, document))
-                return redirect(f"/review/{job_id}/")
+                return redirect(f"/review/{job.id}/")
             except BrokerError as exc:
                 error = exc.message
         import uuid
