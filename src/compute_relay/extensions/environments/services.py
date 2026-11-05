@@ -1,8 +1,9 @@
 """Optional environment builds reuse core jobs, approvals and accounting."""
 
 import hashlib
+import logging
 import posixpath
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -11,7 +12,7 @@ from compute_relay.backends.environments import render_environment
 from compute_relay.control import services as core
 from compute_relay.control.auth import human_permission, require_connection
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Attempt, Blob, Environment, Grant, Job, Project, ProjectCredential, User
+from compute_relay.control.models import Attempt, Blob, Environment, Grant, Job, Project, ProjectCredential, User, WorkerReport
 from compute_relay.control.storage import store_blob
 from compute_relay.domain.validation import validate
 
@@ -254,8 +255,10 @@ def worker_lease_context(attempt):
             "attempt_id": str(attempt.id), "generation": attempt.generation}
 
 
-def _verify_finalization(build, attempt, finalization):
-    if not isinstance(finalization, dict) or finalization.get("verified") is not True or type(finalization.get("generation")) is not int or finalization["generation"] != attempt.generation:
+def _verify_finalization(build, attempt, finalization, generation):
+    if (type(generation) is not int or not 0 <= generation <= attempt.generation
+            or not isinstance(finalization, dict) or finalization.get("verified") is not True
+            or type(finalization.get("generation")) is not int or finalization["generation"] != generation):
         raise ValueError("Unverified or stale finalization")
     identity = {"build_id": str(build.id), "spec_sha256": build.spec.sha256, "attempt_id": str(attempt.id)}
     if any(finalization.get(key) != value for key, value in identity.items()):
@@ -298,11 +301,12 @@ def _verify_finalization(build, attempt, finalization):
     return receipt
 
 
-def sync_attempt(attempt, finalization=None):
+def sync_attempt(attempt, finalization=None, *, report_generation=None):
     """No remote I/O. Safe after core settlement; failure never rolls accounting back."""
     with transaction.atomic():
         User.objects.select_for_update(no_key=True).get(id=attempt.job.project.owner_id)
         Project.objects.select_for_update().get(id=attempt.job.project_id)
+        attempt = Attempt.objects.select_for_update(of=("self",)).select_related("job__project", "connection").get(id=attempt.id)
         build = EnvironmentBuild.objects.select_for_update(of=("self",)).select_related("spec__project", "spec__connection", "policy").filter(job=attempt.job).first()
         if build is None:
             return
@@ -325,7 +329,8 @@ def sync_attempt(attempt, finalization=None):
                 else:
                     try:
                         _current_build_policy(build)
-                        receipt = _verify_finalization(build, attempt, finalization)
+                        receipt = _verify_finalization(build, attempt, finalization,
+                            attempt.generation if report_generation is None else report_generation)
                     except (ValueError, BrokerError, KeyError, TypeError):
                         build.state, build.error_code = "finalization_failed", "ENVIRONMENT_FINALIZATION_INVALID"
                     else:
@@ -361,14 +366,14 @@ def sync_attempt(attempt, finalization=None):
         build.save()
 
 
-def after_report(attempt, report):
+def after_report(attempt, report, *, report_generation=None):
     from .inspection import sync
     if sync(attempt):
         return
     finalization = report.get("environment_finalization")
     if finalization is not None:
         finalization = {**finalization, "generation": report.get("generation")}
-    sync_attempt(attempt, finalization)
+    sync_attempt(attempt, finalization, report_generation=report_generation)
 
 
 after_admission = note_build_attempt
@@ -378,7 +383,26 @@ def sync_from_report(worker_report):
     """Recover a durable post-commit hook without re-running any remote operation."""
     data = worker_report.extension_data.get("environments")
     if isinstance(data, dict):
-        after_report(worker_report.attempt, {**data, "generation": worker_report.generation})
+        after_report(worker_report.attempt, {**data, "generation": worker_report.generation},
+            report_generation=worker_report.generation)
+
+
+def before_lease(worker):
+    """Retry local publication from accepted evidence, independently of remote work."""
+    now = timezone.now()
+    pending = Attempt.objects.filter(connection__worker=worker, state="succeeded", accounting_state="settled",
+        collection_state="complete", next_poll_at__lte=now, environment_build__environment__isnull=True,
+        environment_build__isnull=False).exclude(environment_build__state="finalization_failed").order_by("next_poll_at", "id")
+    for attempt in pending[:4]:
+        if not Attempt.objects.filter(id=attempt.id, next_poll_at__lte=now).update(next_poll_at=now + timedelta(seconds=30)):
+            continue
+        report = WorkerReport.objects.filter(attempt=attempt,
+            extension_data__environments__environment_finalization__isnull=False).order_by("-generation", "lease_id").first()
+        if report:
+            try:
+                sync_from_report(report)
+            except Exception:
+                logging.getLogger(__name__).warning("Environment publication deferred")
 
 
 def promote(build, user):
