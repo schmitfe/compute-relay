@@ -105,8 +105,15 @@ local deletion is recorded as `collection_state: cleaned`; it is distinct from
 failed or missing collection. Remote cleanup is separately confirmed and
 preserves submission journals. Agent credentials do not authorize deletion.
 
-Execution state, accounting and `collection_state` are separate. A successful
-native job can have `collection_state=retry_pending` or `failed`. Each worker
+Execution state, accounting and `collection_state` are separate. Terminal
+scheduler evidence is reported before final logs, module finalization or output
+transfer, and collection gets its own lease. A successful native job can have
+`collection_state=pending`, `retry_pending` or `failed`. Collection does not wait
+for final usage accounting; unknown usage keeps its allowance reserved. The next
+accounting poll can wait for the current collection operation to finish. The
+`collection_pending` flag identifies remaining collection work; SDK result
+acknowledgement waits for it to clear, even if output bytes are already available.
+Each worker
 shares one asynchronous lock across output-write requests so its collectors do
 not starve one another; remote reads and lease renewals remain concurrent. Temporary
 publication contention (`409 UPLOAD_BUSY`) first retries the unchanged descriptor
@@ -145,7 +152,8 @@ snapshots, not an open SSH pipe or a push notification to an inactive agent.
 Each stream retains its most recent 64 KiB. Byte cursors, `available_from`,
 `truncated`, `reset`, `file_id`, `updated_at` and `observed_at` identify gaps,
 replacement and freshness. `eof` means the current snapshot is drained;
-`finished` separately identifies a terminal execution. `content_base64`
+`finished` identifies terminal execution with no collection still pending, so a
+log follower waits for the final log-read opportunity. `content_base64`
 preserves the exact raw bytes; `text` is a UTF-8 display with replacement for
 invalid bytes. Consumers should compare `file_id` between calls to recognize
 replacement. The CLI decodes UTF-8 incrementally across slices. Logs remain

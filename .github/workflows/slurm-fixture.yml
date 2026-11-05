@@ -27,6 +27,11 @@ jobs:
         run: docker compose run --rm --no-deps upgrade-smoke
       - name: Verify local pairing, SSH, reviewed Slurm execution and accounting
         run: docker compose run --rm --no-deps personal-smoke
+      - name: Capture bounded server stacks after a failed acceptance
+        if: failure()
+        run: |
+          docker compose kill -s SIGUSR1 control || true
+          docker compose logs --no-color --tail 160 control
       - name: Remove fixture state
         if: always()
         run: docker compose down --volumes --remove-orphans

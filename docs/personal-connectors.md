@@ -14,8 +14,10 @@ project limits do not replace the cluster account's permissions.
 
 Start `compute-relay`, create the cluster in the portal, and select **Start
 connector**. The launcher performs the local setup, asks for SSH/key/MFA input
-in its terminal and keeps that connector running. Saved installation connectors
-resume on subsequent launches; no separate worker token or process is needed.
+in its terminal and keeps that connector running. On subsequent launches, saved
+connectors resume without prompts only with current owner permission for
+automatic SSH reconnection. Otherwise choose **Reconnect** for local login;
+no separate worker token or process is needed.
 A browser start action only queues the local operation and never collects SSH
 credentials. The advanced direct setup below remains useful for an explicitly
 selected standalone connector.
@@ -162,10 +164,19 @@ compute-relay connector --state-directory /absolute/private/connector-state
 ```
 
 Keep the connector available while jobs need dispatch, observation or collection.
-Use a terminal where you can complete local authentication when required. A
-missing or expired SSH session must be re-established through that interactive
-startup; ordinary background operations fail closed rather than falling back to
-an ambient agent, default private keys or unattended MFA retries.
+The cluster's **Connect to this cluster** section shows session expiry and
+offers **Reconnect**. That action drains only this cluster's existing connector
+before restarting it in the application's terminal; other clusters keep working.
+Leave that terminal available for SSH, key-passphrase or MFA prompts.
+
+**Allow automatic SSH reconnection** is a saved owner-controlled option, off by
+default and editable for an already paired cluster. When enabled, an eligible
+explicit key can renew an expired session or recover after an outage without a
+prompt. Permission is checked before each automatic authentication; revoking it
+prevents further automatic logins. Failed authentication requires human action.
+Successful renewals start a new session lifetime and can continue while the
+application stays open. Background operations never use an ambient agent,
+default private keys, saved passwords or unattended MFA retries.
 
 Stopping the local connector or losing its network connection does not cancel a
 Slurm allocation. Already accepted jobs can continue remotely. Resume the same

@@ -122,8 +122,9 @@ record before making that claim.
 ## Current acceptance scope
 
 This is an optional developer fixture. The normal package uses SQLite and runs
-without Docker. The manual Slurm CI workflow exercises pairing, reviewed
-submission, outputs, accounting and cleanup using only synthetic credentials.
+without Docker. Slurm CI runs on pushes to `main` and on manual dispatch. It
+exercises pairing, reviewed submission, outputs, accounting and cleanup using
+only synthetic credentials.
 The fixture's MariaDB belongs to Slurm accounting; it is not a separate broker
 database requirement.
 
@@ -134,3 +135,20 @@ The SQLite tests additionally cover input provenance, upload-crash recovery,
 logical metadata limits/maintenance, management priority, lease renewal and
 durable report replay. These controlled faults complement the native fixture;
 they do not require filling a real disk or interrupting a real cluster.
+
+The personal connector overlay also checks natural expiry of a 60-second SSH
+session with owner-permitted renewal, eight parallel native submissions, abrupt
+master loss, an accepted early terminal report followed by a process crash,
+restart from its journal, and interruption after at least one MiB of output was
+acknowledged. It verifies output hashes, exact settlement without resubmission,
+and owner revocation followed by explicit same-state resume. Ordinary HTTP and
+one-second status waits run concurrently with collection under four Waitress
+request threads. Ordinary probes have a three-second timeout. The combined
+latency summary includes the deliberate bounded waits.
+
+Fault injection is confined to a fixture child launcher that refuses targets
+other than `brokerjob@slurm-fixture`; the application has no fault-injection
+endpoint or setting. On CI failure, `SIGUSR1` requests a controller thread dump
+before bounded logs and disposable state are removed. Stack dumps contain no
+frame locals. Passing these checks does not explain the older uncaptured portal
+stall or prove institutional VPN/MFA behavior.

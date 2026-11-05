@@ -2,6 +2,8 @@
 """Synthetic Docker-only personal connector acceptance; no institutional keys."""
 
 import argparse
+import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -11,12 +13,112 @@ import signal
 import sys
 import tempfile
 import time
+import threading
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+import httpx
+
 from container_smoke import Client, PreformattedText, SmokeFailure, create_job, revealed_key, require, run as job_smoke
+
+
+async def fault_report(request, directory, method, path, body=None):
+    reply = await request(method, path, body)
+    if (path.endswith("/report") and body.get("outcome") == "observed"
+            and body.get("observation", {}).get("terminal") is True
+            and "collection_state" not in body and (directory / "arm-terminal").exists()
+            and not (directory / "lost-terminal-reply").exists()):
+        (directory / "lost-terminal-reply").touch()
+        os._exit(73)  # Preserve the real ready journal after the broker accepted the report.
+    return reply
+
+
+def fault_connector(directory, arguments):
+    """Inject controlled faults only into this disposable connector child."""
+    from compute_relay.backends import SlurmBackend
+    from compute_relay.worker.async_client import AsyncJsonClient
+    from compute_relay.cli import main
+    state_directory = Path(arguments[arguments.index("--state-directory") + 1])
+    state = json.loads((state_directory / "state.json").read_bytes()) if (state_directory / "state.json").exists() else \
+        json.loads(Path(arguments[arguments.index("--setup") + 1]).read_bytes())
+    target = state["connection"]["ssh"] if "connection" in state else state["target"]
+    require(target.get("host") == "slurm-fixture" and target.get("user") == "brokerjob",
+        "Fault child requires the disposable fixture")
+    original_request, original_chunk, original_submit = AsyncJsonClient.request, SlurmBackend.output_chunk, SlurmBackend.submit
+
+    async def request(self, method, path, body=None):
+        return await fault_report(lambda *args: original_request(self, *args), directory, method, path, body)
+
+    async def output_chunk(self, native, **kwargs):
+        result = await original_chunk(self, native, **kwargs)
+        if kwargs["offset"] >= 1024 * 1024 and not (directory / "collection-interrupted").exists():
+            (directory / "collection-interrupted").touch()
+            async with asyncio.timeout(20):
+                while not (directory / "resume-collection").exists():
+                    await asyncio.sleep(.05)
+        return result
+
+    async def submit(self, attempt_id, *args, **kwargs):
+        with (directory / "submissions").open("a") as stream:
+            stream.write(str(attempt_id) + "\n")
+        return await original_submit(self, attempt_id, *args, **kwargs)
+
+    AsyncJsonClient.request, SlurmBackend.output_chunk, SlurmBackend.submit = request, output_chunk, submit
+    sys.argv = [sys.argv[0], *arguments]
+    main()
+
+
+class PortalProbes:
+    """Probe ordinary pages while an authenticated bounded wait occupies a thread."""
+    def __init__(self, base, human, agent, project_id, job_id, *, timeout=3):
+        self.base, self.timeout = base, timeout
+        self.session, self.token = human.cookie("sessionid"), agent.token
+        self.project_id, self.job_id = project_id, job_id
+        self.stop = threading.Event()
+        self.samples, self.errors, self.paths = [], [], set()
+
+    @property
+    def count(self):
+        return len(self.samples)
+
+    def _run(self, waiting):
+        try:
+            with httpx.Client(base_url=self.base, timeout=self.timeout, trust_env=False,
+                    cookies={"sessionid": self.session},
+                    headers={"Authorization": "Bearer " + self.token} if waiting else {}) as http:
+                revision = None
+                while not self.stop.is_set():
+                    paths = [f"/api/v1/jobs/{self.job_id}"] if waiting else ["/healthz", f"/projects/{self.project_id}/"]
+                    for path in paths:
+                        query = {"after_revision": revision, "wait_seconds": 1} if waiting and revision else {}
+                        started = time.monotonic()
+                        response = http.get(path, params=query)
+                        require(response.status_code == 200, f"Portal probe failed ({response.status_code})")
+                        self.samples.append(time.monotonic() - started)
+                        self.paths.add("wait" if query else path)
+                        if waiting:
+                            revision = response.json()["revision"]
+                    self.stop.wait(.05)
+        except Exception as error:
+            self.errors.append(type(error).__name__)
+            self.stop.set()
+
+    def __enter__(self):
+        self.threads = [threading.Thread(target=self._run, args=(waiting,), daemon=True) for waiting in (False, True)]
+        for thread in self.threads:
+            thread.start()
+        return self
+
+    def __exit__(self, kind, error, traceback):
+        self.stop.set()
+        for thread in self.threads:
+            thread.join(timeout=self.timeout + 1)
+        if kind is None:
+            require(not self.errors, "Portal probe failed; capture the control service thread stacks before cleanup")
+            require({"/healthz", f"/projects/{self.project_id}/", "wait"} <= self.paths,
+                "Portal ordinary-page and bounded-wait probes did not all execute")
 
 
 class ConfigurationFields(HTMLParser):
@@ -112,31 +214,47 @@ def finish_configuration(human, demo, directory, *, folder_name="personal-broker
     require(saved["connection"]["remote_root"] == chosen, "Selected baseline was not persisted locally")
 
 
-def interrupt_master(directory, worker):
-    """Abruptly kill only this fixture connector's owned local master."""
+def master_pid(directory):
     import re
     state = json.loads((directory / "state.json").read_bytes())
     require(state["connection"]["ssh"]["host"] == "slurm-fixture", "SSH fault injection requires the disposable fixture")
     command = ["/usr/bin/ssh", "-F", "/dev/null", "-S", str(directory / "s"),
         "-o", "BatchMode=yes", "-o", "ProxyCommand=/bin/false", "-o", "IdentityFile=none",
         "-O", "check", "--", "brokerjob@slurm-fixture"]
-    def master_pid():
-        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False)
-        match = re.search(rb"Master running \(pid=([0-9]+)\)", result.stderr)
-        return int(match.group(1)) if result.returncode == 0 and match else None
-    original = master_pid()
-    require(original is not None and worker.poll() is None, "Fixture SSH master is not running")
-    os.kill(original, signal.SIGKILL)
-    deadline = time.monotonic() + 45
+    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False)
+    match = re.search(rb"Master running \(pid=([0-9]+)\)", result.stderr)
+    return int(match.group(1)) if result.returncode == 0 and match else None
+
+
+def wait_for_master_change(directory, worker, original):
+    state = json.loads((directory / "state.json").read_bytes())
+    deadline = time.monotonic() + 95
     while time.monotonic() < deadline:
-        require(worker.poll() is None, "Connector stopped instead of recovering its SSH session")
-        restored = master_pid()
+        require(worker.poll() is None, "Connector stopped instead of renewing its permitted SSH session")
+        restored = master_pid(directory)
         if restored is not None and restored != original:
             require(json.loads((directory / "state.json").read_bytes())["worker_id"] == state["worker_id"],
                 "SSH recovery replaced the broker worker identity")
             return
         time.sleep(.25)
-    raise SmokeFailure("Connector did not recover an abruptly interrupted SSH master")
+    raise SmokeFailure("Connector did not renew its permitted SSH session")
+
+
+def interrupt_master(directory, worker):
+    """Abruptly kill only this fixture connector's owned local master."""
+    original = master_pid(directory)
+    require(original is not None and worker.poll() is None, "Fixture SSH master is not running")
+    os.kill(original, signal.SIGKILL)
+    wait_for_master_change(directory, worker, original)
+
+
+def reconnect_policy(human, demo, enabled):
+    page = human.request("GET", f"/clusters/{demo['connection_id']}/", binary=True)
+    fields = ConfigurationFields(); fields.feed(page.decode())
+    body = {"setup_revision": fields.values["setup_revision"]}
+    if enabled:
+        body["automatic_reconnect_enabled"] = "on"
+    human.request("POST", f"/clusters/{demo['connection_id']}/connector-settings/", body, form=True, binary=True)
 
 
 def parallel_dispatch(human, demo, base, directory, worker):
@@ -182,14 +300,98 @@ def parallel_dispatch(human, demo, base, directory, worker):
         require({str(item["native_identity"]["job_id"]) for item in attempts if item.get("native_identity")} == native_ids,
             "SSH recovery changed the confirmed scheduler job identities")
         require(all(item["state"] not in terminal - {"succeeded", "completed"} for item in attempts), "A parallel fixture job failed")
-        if all(item["state"] in {"succeeded", "completed"} and item["accounting_state"] == "settled" for item in attempts):
+        if all(item["state"] in {"succeeded", "completed"} and item["accounting_state"] == "settled"
+                and item["collection_state"] == "complete" for item in attempts):
             break
         time.sleep(0.5)
     else:
-        raise SmokeFailure("Parallel fixture jobs did not complete with settled accounting")
+        raise SmokeFailure("Parallel fixture jobs did not finish accounting and output collection")
     budget = agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
     require(budget["reserved"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}, "Parallel fixture retained reservations")
     require(budget["spent"]["cpu_core_seconds"] > 0, "Parallel fixture did not charge actual usage")
+
+
+def collection_recovery(human, demo, base, directory, worker, command, output, faults, agent):
+    """Crash after accepted native status, then interrupt a partially published output."""
+    before = agent.request("GET", f"/api/v1/projects/{demo['project_id']}/allowance")["spent"]
+    block, repetitions = b"native-recovery\n", 400000
+    source = ("import time\nfrom pathlib import Path\ntime.sleep(2)\nPath('result.json').write_bytes(" + repr(block) + f" * {repetitions})\n").encode()
+    (faults / "arm-terminal").touch()
+    job_id, digest, execution_id = create_job(agent, demo, "slurm", source, "interrupted-native-collection")
+    decision = human.request("POST", f"/api/v1/jobs/{job_id}/decisions", {"execution_request_id": execution_id,
+        "manifest_sha256": digest, "approved": True, "comment": "Disposable native recovery acceptance."})
+    attempt_id = decision["attempt_id"]
+    try:
+        with PortalProbes(base, human, agent, demo["project_id"], job_id) as probes:
+            deadline = time.monotonic() + 90
+            while worker.poll() is None and time.monotonic() < deadline:
+                time.sleep(.05)
+            require(worker.poll() == 73 and (faults / "lost-terminal-reply").exists(), "Native terminal reply-loss fault did not occur")
+            detail = agent.request("GET", f"/api/v1/jobs/{job_id}")
+            require(len(detail["attempts"]) == 1, "Reply loss created another compute attempt")
+            early = detail["attempts"][0]
+            require(early["state"] == "succeeded" and early["collection_state"] == "pending",
+                "Native terminal status was not public before output collection")
+            require(early["accounting_state"] in {"settled", "settlement_pending"}, "Native terminal accounting was lost")
+            native = early["native_identity"]
+            old_master = master_pid(directory)
+            if old_master is not None:
+                os.kill(old_master, signal.SIGTERM)
+            deadline = time.monotonic() + 5
+            while (directory / "s").exists() and time.monotonic() < deadline:
+                time.sleep(.05)
+            require(not (directory / "s").exists(), "Crashed fixture master did not close")
+            worker = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output, umask=0o002)
+            try:
+                deadline = time.monotonic() + 90
+                while not (faults / "collection-interrupted").exists() and time.monotonic() < deadline:
+                    require(worker.poll() is None, "Connector could not restart its durable native report")
+                    time.sleep(.05)
+                require((faults / "collection-interrupted").exists(), "Multichunk native output did not reach the interruption point")
+                pending = agent.request("GET", f"/api/v1/jobs/{job_id}")["attempts"][0]
+                require(pending["state"] == "succeeded" and pending["native_identity"] == native,
+                    "Collection hid terminal status or changed native identity")
+                interrupt_master(directory, worker)
+                (faults / "resume-collection").touch()
+                deadline = time.monotonic() + 120
+                while time.monotonic() < deadline:
+                    detail = agent.request("GET", f"/api/v1/jobs/{job_id}")
+                    require(len(detail["attempts"]) == 1, "Collection recovery created another compute attempt")
+                    final = detail["attempts"][0]
+                    require(final["native_identity"] == native and final["state"] == "succeeded", "Recovery changed native execution")
+                    if final["accounting_state"] == "settled" and final["collection_state"] == "complete":
+                        break
+                    time.sleep(.25)
+                else:
+                    raise SmokeFailure("Native collection recovery did not finish")
+                artifacts = agent.request("GET", f"/api/v1/attempts/{attempt_id}/artifacts")["artifacts"]
+                require(len(artifacts) == 1 and artifacts[0]["size_bytes"] == len(block) * repetitions, "Recovered output is missing or truncated")
+                actual = hashlib.sha256()
+                for offset in range(0, artifacts[0]["size_bytes"], 1024 * 1024):
+                    content = agent.request("GET", f"/api/v1/artifacts/{artifacts[0]['id']}/content?offset={offset}", binary=True)
+                    require(len(content) == min(1024 * 1024, artifacts[0]["size_bytes"] - offset), "Recovered output range differs")
+                    actual.update(content)
+                require(actual.hexdigest() == artifacts[0]["sha256"] == hashlib.sha256(block * repetitions).hexdigest(),
+                    "Interrupted native output failed integrity verification")
+                require((faults / "submissions").read_text().splitlines().count(attempt_id) == 1, "Recovery repeated native submission")
+                require(final["accounting"]["cpu_core_seconds"] > 0, "Recovery fixture did not establish nonzero native CPU usage")
+                expected = {key: before[key] + final["accounting"][key] for key in before}
+                for _ in range(2):
+                    allowance = agent.request("GET", f"/api/v1/projects/{demo['project_id']}/allowance")
+                    require(allowance["spent"] == expected and allowance["reserved"] == {key: 0 for key in before},
+                        "Native recovery lost or duplicated settlement, or retained a reservation")
+                    time.sleep(.25)
+            except BaseException:
+                worker.terminate(); worker.wait(timeout=15)
+                raise
+    except BaseException:
+        if worker.poll() is None:
+            worker.terminate(); worker.wait(timeout=15)
+        raise
+    print(json.dumps({"native_collection_recovery": True, "accepted_terminal_reply_lost": True,
+        "native_submissions": 1, "output_bytes": len(block) * repetitions, "sha256_verified": True,
+        "portal_probes": probes.count, "maximum_portal_latency_ms": round(max(probes.samples) * 1000, 1)}))
+    return worker
 
 
 def cluster_check(human, demo):
@@ -235,11 +437,12 @@ def cluster_check(human, demo):
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         page = human.request("GET", review_path, binary=True)
-        if b'data-state="succeeded" data-accounting-state="settled"' in page:
+        if (b'data-state="succeeded" data-accounting-state="settled"' in page
+                and b'<dt>Output collection</dt><dd>complete</dd>' in page):
             break
         time.sleep(0.5)
     else:
-        raise SmokeFailure("Cluster check did not succeed with settled accounting")
+        raise SmokeFailure("Cluster check did not finish accounting and output collection")
     page = human.request("GET", path, binary=True)
     results = PreformattedText();results.feed(page.decode())
     for block in results.blocks:
@@ -273,12 +476,14 @@ def run():
     setup = human.request("POST", f"/clusters/{demo['connection_id']}/connect/",
         {"setup_revision": revision.group(1).decode()} if revision else {}, form=True)
     require("pairing_token" in setup and "no-store" in human.last_headers.get("cache-control", ""), "Setup did not return a private pairing document")
-    setup["local"] = {"identity_file": "/run/fixture-ssh/id_ed25519", "known_hosts": "/run/fixture-ssh/known_hosts", "session_seconds": 300}
+    require(setup["local"].get("automatic_reconnect_enabled", False) is False, "Automatic reconnect was enabled without owner consent")
+    setup["local"] = {**setup["local"], "identity_file": "/run/fixture-ssh/id_ed25519",
+        "known_hosts": "/run/fixture-ssh/known_hosts", "session_seconds": 60}
     with tempfile.TemporaryDirectory(prefix="cb-", dir="/tmp") as temp:
         root = Path(temp);root.chmod(0o700)
         path = root / "setup.json";path.write_text(json.dumps(setup));path.chmod(0o600)
         directory = root / "connectors" / "lab"
-        command = [sys.executable, "-m", "compute_relay.cli", "connector", "--state-directory", str(directory),
+        command = [sys.executable, __file__, "--fault-child", str(root), "connector", "--state-directory", str(directory),
             "--non-interactive", "--allow-insecure-http"]
         log = root / "connector.log"
         with log.open("wb") as output:
@@ -301,17 +506,35 @@ def run():
                 require(not agent.request("GET", "/api/v1/connections")["connections"], "Unconfirmed configuration is available to agents")
                 run.stage = "post_login_directory_and_configuration"
                 finish_configuration(human, demo, directory)
+                reconnect_policy(human, demo, True)
                 # Real submitted Python, result hashes and final Slurm accounting
                 # all travel through the newly established master socket.
                 run.stage = "reviewed_native_job"
                 job_smoke(base, args.demo_file, 90)
+                run.stage = "natural_session_expiry"
+                original_master = master_pid(directory)
+                require(original_master is not None, "Fixture SSH master is not running before expiry")
+                wait_for_master_change(directory, worker, original_master)
                 run.stage = "eight_parallel_native_submissions"
                 parallel_dispatch(human, demo, base, directory, worker)
                 run.stage = "portal_cluster_check"
                 cluster_check(human, demo)
+                run.stage = "native_collection_reply_loss_and_restart"
+                worker = collection_recovery(human, demo, base, directory, worker, command, output, root, agent)
+                run.stage = "owner_revokes_automatic_reconnect"
+                reconnect_policy(human, demo, False)
+                current_master = master_pid(directory)
+                require(current_master is not None, "No fixture master to test revoked recovery")
+                os.kill(current_master, signal.SIGKILL)
+                worker.wait(timeout=20)
+                require(worker.returncode == 0 and master_pid(directory) is None,
+                    "Revoked automatic reconnection created another SSH login")
+                page = human.request("GET", f"/clusters/{demo['connection_id']}/", binary=True)
+                require(b"SSH sign-in required." in page, "Revoked recovery did not request a human reconnect")
             finally:
-                worker.terminate()
-                worker.wait(timeout=15)
+                if worker.poll() is None:
+                    worker.terminate()
+                    worker.wait(timeout=15)
         run.stage = "shutdown_and_resume"
         require(not (directory / "s").exists(), "Connector shutdown left its authenticated master socket")
         original = json.loads((directory / "state.json").read_bytes())
@@ -344,12 +567,18 @@ def run():
             "owner_configuration_persisted": True, "reviewed_cluster_check": True,
             "cluster_provided_modules": True, "selected_environment_inspection": True,
             "parallel_dispatch_jobs": 8, "parallel_accounting_settled": True,
-            "abrupt_ssh_recovery": True, "same_native_ids_after_recovery": True}))
+            "abrupt_ssh_recovery": True, "same_native_ids_after_recovery": True,
+            "natural_expiry_renewed": True, "revoked_reconnect_stopped": True,
+            "default_reconnect_disabled": True, "interrupted_multichunk_output": True,
+            "lost_early_report_reply_and_restart": True}))
 
 
 if __name__ == "__main__":
     try:
-        run()
+        if len(sys.argv) > 2 and sys.argv[1] == "--fault-child":
+            fault_connector(Path(sys.argv[2]), sys.argv[3:])
+        else:
+            run()
     except Exception as error:
         print(json.dumps({"ok": False, "error_type": type(error).__name__, "stage": getattr(run, "stage", "start"),
             "message": str(error) if isinstance(error, SmokeFailure) else "Fixture check failed"}), file=sys.stderr)
