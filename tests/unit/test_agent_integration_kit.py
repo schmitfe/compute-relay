@@ -1,6 +1,5 @@
 """Acceptance-kit tests execute only deterministic tiny local science."""
 
-import copy
 import importlib
 import json
 import math

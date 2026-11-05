@@ -3,11 +3,10 @@
 All identities, credentials, objects, and fake cluster profiles are synthetic.
 No test opens a host SSH key, invokes a cluster, or talks to the portal process.
 """
-from test_support.unit_test_management import agent_get, discovery_report, form_post, human, issued, key_data, management, prepared, queued_discovery
+from test_support.unit_test_management import agent_get, form_post, human, issued, key_data, management, prepared
 
 import json
 from datetime import timedelta
-from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -19,13 +18,9 @@ from django.test import Client
 from django.utils import timezone
 
 from compute_relay.control import services
-from compute_relay.control.auth import new_token, token_hash
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import (
-    Artifact, Attempt, Connection, Environment, ExecutionRequest, Grant,
-    Job, Project, ProjectCredential, User, WorkerIdentity,
-)
-from compute_relay.control.storage import store_blob, store_uploaded_blob
+from compute_relay.control.models import Artifact, Attempt, Connection, ExecutionRequest, Grant, Job, Project, ProjectCredential
+from compute_relay.control.storage import store_blob
 
 
 SCOPES = ["objects:write", "jobs:read", "jobs:write", "jobs:execute", "jobs:cancel", "artifacts:read"]
@@ -550,25 +545,3 @@ def test_effective_job_state_tracks_review_and_latest_attempt(management):
     assert b"Completed" in human(context.owner).get("/").content
     execution(context, job)
     assert services.serialize_job(job)["state"] == "awaiting_approval"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def outstanding_discovery_attempt(context, connection):
-    job = Job.objects.create(project=context.project, credential=context.credential,
-                             request={"name": "unsettled-discovery-safety-job"})
-    request = ExecutionRequest.objects.create(job=job, credential=context.credential, state="approved")
-    return Attempt.objects.create(job=job, execution_request=request, connection=connection, grant=context.grant,
-                                  state="succeeded", accounting_state="settlement_pending", reservation_cpu=95, reservation_gpu=0)

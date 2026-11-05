@@ -8,7 +8,6 @@ from uuid import uuid4
 
 import pytest
 
-from compute_relay import local_connectors as local
 from compute_relay.connector_profiles import ConnectorProfileError, ConnectorProfiles
 from compute_relay.worker import personal_connector as connector, ssh_session
 

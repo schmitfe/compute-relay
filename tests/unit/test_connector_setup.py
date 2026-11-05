@@ -3,17 +3,13 @@ from test_support.unit_test_connector_setup import configuration_fields, lease, 
 
 from datetime import timedelta
 import json
-from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 from django.test import Client
 from django.utils import timezone
 
 from compute_relay.control.auth import token_hash
-from compute_relay.control.models import (Connection, ConnectorEnrollment, ConnectorTask, ClusterRegistration,
-    User, WorkerIdentity)
-from compute_relay.control.services import digest
+from compute_relay.control.models import ConnectorEnrollment, ConnectorTask, User, WorkerIdentity
 from compute_relay.worker.enrollment import profile_metadata, resolve_connection
 
 pytestmark = pytest.mark.django_db

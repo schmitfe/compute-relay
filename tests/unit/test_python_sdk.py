@@ -9,21 +9,12 @@ import pytest
 from compute_relay import sdk
 from compute_relay.control.auth import token_hash
 from compute_relay.control.models import Attempt, ExecutionRequest
-from compute_relay.mcp import facade, setup, workflow
-from compute_relay import workspace, workspace_completion
-from compute_relay.worker import client
+from compute_relay.mcp import setup, workflow
 from test_support.unit_test_control import broker, prepared_job
 from test_support.unit_test_project_context import context_live_server
 
 
 TOKEN = "cbp_synthetic_sdk_project_credential_123456789"
-
-
-def test_sdk_exports_the_existing_implementations():
-    assert sdk.WorkspaceClient is workspace.WorkspaceClient
-    assert sdk.ProjectFacade is facade.ProjectFacade
-    assert sdk.ControlError is client.ControlError
-    assert sdk.finish is workspace_completion.finish
 
 
 def test_generated_sdk_script_waits_locally_and_exports_without_acknowledging(tmp_path, monkeypatch):

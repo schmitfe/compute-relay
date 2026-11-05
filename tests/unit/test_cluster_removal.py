@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 from django.test import Client
 from django.db import transaction
-from django.urls import include, path
 from django.utils import timezone
 
 from compute_relay.control import cluster_removal
@@ -16,20 +15,6 @@ from compute_relay.control.auth import token_hash
 from compute_relay.control.models import (Artifact, Attempt, AuditEvent, ClusterRegistration,
     Connection, ConnectorEnrollment, ExecutionRequest, Job, LedgerEntry, User, WorkerIdentity)
 from test_support.unit_test_management import management, prepared
-
-
-urlpatterns = [
-    path("clusters/setup/<uuid:registration_id>/remove/", cluster_removal.registration),
-    path("clusters/<uuid:connection_id>/remove/", cluster_removal.connection),
-    path("", include("compute_relay.control.urls")),
-]
-
-
-@pytest.fixture(autouse=True)
-def removal_routes(settings):
-    # The feature owns handlers only; the application's URL wiring is integrated
-    # separately. Keep these tests valid before and after that wiring lands.
-    settings.ROOT_URLCONF = __name__
 
 
 def human(user):

@@ -3,23 +3,21 @@
 import asyncio
 from unittest.mock import AsyncMock
 import base64
-import hashlib
 import json
 import os
 from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
-from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 import pytest
 
 from compute_relay.backends import SlurmBackend, prepare
-from compute_relay.backends.preparation import sha256, canonical_json_bytes, JOB_PROTOCOL
+from compute_relay.backends.preparation import sha256
 from compute_relay.control import services
 from compute_relay.control.models import Artifact, Attempt, Blob, LedgerEntry, UploadGrant, UploadReservation
-from compute_relay.control.storage import _writer_lock, begin_transfer, blob_path, transfer_chunk, verify_blob
+from compute_relay.control.storage import _writer_lock, begin_transfer, transfer_chunk, verify_blob
 from compute_relay.domain.lifecycle import PreparedWork
 from compute_relay.remote import helper
 from compute_relay.transfer import CHUNK_BYTES, FileReference, MAX_FILE_BYTES

@@ -15,10 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from compute_relay.backends import (
-    BackendError, SlurmBackend, canonical_json_bytes, management_protocol_supported,
-    prepare, submission_helper_is_current, verify_package,
-)
+from compute_relay.backends import BackendError, SlurmBackend, management_protocol_supported, submission_helper_is_current, verify_package
 from compute_relay.backends.preparation import helper_source
 from compute_relay.remote import bundles
 

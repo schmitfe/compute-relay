@@ -8,7 +8,6 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 from threading import Barrier, Event
@@ -22,7 +21,7 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Job, Project, ResultAccess
 from compute_relay.control.storage import store_blob, store_uploaded_blob
 from compute_relay import workspace as workspace_module
-from compute_relay.workspace import WorkspaceClient, MAX_SOURCE_BYTES, main
+from compute_relay.workspace import WorkspaceClient, main
 from test_support.unit_test_control import broker, budgeted, execution, prepared_job
 from test_support.unit_test_project_context import context_live_server
 

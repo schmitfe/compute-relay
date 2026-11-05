@@ -1,11 +1,10 @@
 """Backend contracts without cluster credentials or uploaded-code execution."""
 
 import asyncio
-from test_support.unit_test_backends import ATTEMPT, REVISION, metadata_module_catalog, observation, sample
+from test_support.unit_test_backends import ATTEMPT, REVISION, observation, package, sample
 from test_support.unit_test_remote_bundles import sacct_job
 
 import base64
-import copy
 import json
 from pathlib import Path
 
@@ -18,20 +17,12 @@ from compute_relay.backends import (
 from compute_relay.backends.preparation import sha256, JOB_PROTOCOL
 from compute_relay.backends.slurm import parse_observation
 from compute_relay.backends.discovery import parse_discovery
-from compute_relay.backends.environments import EnvironmentProfileError, render_environment, validate_environment_config
 from compute_relay.remote import helper
 from compute_relay.transports import OpenSSHTransport, TransportError
 
 
 
 
-
-
-def package(sample):
-    request, environment, connection, content = sample
-    prepared = prepare(request, environment, connection, REVISION)
-    files = {"main.py": content, **{path: source.encode() for path, source in prepared["generated_files"].items()}}
-    return prepared, files
 
 
 def test_prepare_is_deterministic_and_reserves_requested_walltime(sample):

@@ -1,7 +1,6 @@
 """Private project onboarding stays offline and never overwrites existing credentials."""
 
 import argparse
-from pathlib import Path
 import shutil
 import stat
 import subprocess

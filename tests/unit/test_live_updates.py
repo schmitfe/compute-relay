@@ -11,7 +11,7 @@ from django.utils import timezone
 import pytest
 
 from compute_relay.control import services
-from compute_relay.control.models import ApprovalDecision, Attempt, Connection, ExecutionRequest, Job, ProjectCredential
+from compute_relay.control.models import ApprovalDecision, Attempt, ExecutionRequest, ProjectCredential
 from test_support.unit_test_control import broker, execution, prepared_job
 
 

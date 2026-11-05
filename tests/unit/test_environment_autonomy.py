@@ -23,10 +23,10 @@ import pytest
 
 from compute_relay.backends import SlurmBackend
 from compute_relay.control import services as core
-from compute_relay.control.models import Attempt, Environment, Job, LedgerEntry
+from compute_relay.control.models import Attempt, Environment, LedgerEntry
 from compute_relay.extensions.environments import inspection, rendering, services
 from compute_relay.extensions.environments.inventory import INSPECTION_SCRIPT
-from compute_relay.extensions.environments.models import EnvironmentBuild, EnvironmentInspection
+from compute_relay.extensions.environments.models import EnvironmentBuild
 from compute_relay.extensions.environments.remote import REMOTE_SOURCE
 from compute_relay.mcp.facade import ProjectFacade, create_server
 from compute_relay.remote import helper

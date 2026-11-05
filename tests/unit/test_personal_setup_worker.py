@@ -2,7 +2,6 @@
 
 import asyncio
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -10,7 +9,7 @@ import pytest
 
 from compute_relay.worker import personal_setup
 from compute_relay.worker.client import ControlError
-from compute_relay.worker.enrollment import profile_metadata, resolve_connection
+from compute_relay.worker.enrollment import resolve_connection
 from compute_relay.worker.journal import Journal
 from compute_relay.worker.personal_connector import read_private, runtime_profile, write_private
 

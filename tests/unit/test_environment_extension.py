@@ -1,5 +1,5 @@
 """Optional scheduled environment builds; unit tests never run an installer."""
-from test_support.unit_test_environment_extension import context
+from test_support.unit_test_environment_extension import context, policy, request
 
 import copy
 import asyncio
@@ -9,38 +9,19 @@ import os
 import subprocess
 import sys
 import sysconfig
-from datetime import timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from django.apps import apps
 from django.db import transaction
 from django.test import Client
 from django.utils import timezone
 
 from compute_relay.control import services as core
-from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Attempt, Connection, Environment, Grant, Job, Project, ProjectCredential, User, WorkerIdentity, WorkerReport
+from compute_relay.control.models import Attempt, Environment, Job, WorkerReport
 from compute_relay.extensions.environments import rendering
 from compute_relay.extensions.environments.remote import REMOTE_SOURCE
-
-
-def policy(base):
-    return {"enabled": True, "allowed_base_environment_ids": [str(base)], "allowed_managers": ["venv"],
-        "allowed_sources": ["uploaded_wheels"], "resource_limits": {"cpus": 1, "memory_mib": 1024, "time_limit_seconds": 600},
-        "platform_tag": sysconfig.get_platform(), "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
-        "max_environment_bytes": 1000000000, "max_environment_files": 20000,
-        "minimum_free_bytes": 0, "minimum_free_files": 0}
-
-
-def request(connection, base):
-    return {"name": "stdlib-analysis", "connection_id": str(connection),
-        "base_environment": {"id": str(base), "revision_sha256": "e" * 64}, "manager": "venv", "requirements": [],
-        "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 512, "time_limit_seconds": 60},
-        "slurm": {"partition": "debug", "account": "broker"}, "estimated_bytes": 10000000, "estimated_files": 100}
 
 
 def test_empty_environment_renderer_is_pure_and_has_no_unbounded_install_path(monkeypatch):

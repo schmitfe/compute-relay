@@ -3,13 +3,12 @@ from test_support.extensions_storage_test_personal_storage_targets import comple
 
 from datetime import timedelta
 import json
-from uuid import uuid4
 
 import pytest
 from django.test import Client
 from django.utils import timezone
 
-from compute_relay.control.models import ClusterRegistration, ConnectorEnrollment, ConnectorTask, WorkerIdentity
+from compute_relay.control.models import ConnectorTask, WorkerIdentity
 from compute_relay.control.auth import token_hash
 from compute_relay.extensions.storage import services
 from compute_relay.extensions.storage.models import StorageTarget, StorageTargetRegistration

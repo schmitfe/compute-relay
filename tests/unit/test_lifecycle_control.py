@@ -6,7 +6,6 @@ from test_support.unit_test_control import submit_receipt
 from copy import deepcopy
 from datetime import timedelta
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 from django.utils import timezone

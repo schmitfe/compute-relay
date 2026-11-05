@@ -6,7 +6,6 @@ from test_support.extensions_storage_test_storage_probes import lease, probes, s
 import copy
 from datetime import timedelta
 import json
-from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -21,7 +20,6 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Job, WorkerIdentity
 from compute_relay.extensions.storage import services
 from compute_relay.extensions.storage.models import StorageObservationLease
-from compute_relay.extensions.storage.protocol import probe_context
 from compute_relay.extensions.storage.remote import REMOTE_SOURCE
 from compute_relay.extensions.storage.worker import execute
 from compute_relay.worker.enrollment import profile_metadata, resolve_connection

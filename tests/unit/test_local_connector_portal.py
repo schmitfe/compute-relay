@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 import tempfile
-from uuid import uuid4
 
 from django.test import Client
 from django.urls import path

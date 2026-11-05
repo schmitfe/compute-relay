@@ -8,7 +8,6 @@ import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -26,7 +25,7 @@ from compute_relay.control.models import (
     ExecutionRequest, Grant, Job, LedgerEntry, Project, ProjectCredential,
     StoragePool, UploadReservation, User, WorkerIdentity,
 )
-from compute_relay.control.storage import read_blob, store_blob, store_uploaded_blob
+from compute_relay.control.storage import read_blob, store_blob
 
 
 

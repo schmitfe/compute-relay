@@ -14,7 +14,6 @@ from compute_relay.control.errors import BrokerError
 from compute_relay.control.models import Attempt, ExecutionRequest, Job, Project, ProjectCredential
 from compute_relay.extensions.workflows import services
 from compute_relay.extensions.workflows.models import WorkflowRevision, WorkflowRun
-from compute_relay.extensions.workflows.validation import validate_workflow
 from test_support.unit_test_control import publish_output, broker, budgeted, decide, prepared_job, submit_receipt
 
 

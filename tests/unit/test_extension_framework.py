@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import asyncio
 
 import pytest
-from django.db import transaction
 
 from compute_relay import extensions
 from compute_relay.control import services

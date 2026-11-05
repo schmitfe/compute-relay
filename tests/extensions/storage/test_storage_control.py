@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Connection, Job, Project, ProjectCredential, User, WorkerIdentity
+from compute_relay.control.models import Job, Project, WorkerIdentity
 from compute_relay.extensions.storage import services
 from compute_relay.extensions.storage.models import ProjectStorageBinding, ProjectStorageBudget, StorageCapacityPool, StorageTarget
 from compute_relay.extensions.storage.planning import ROLES

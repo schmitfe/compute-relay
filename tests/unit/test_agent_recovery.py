@@ -2,14 +2,12 @@
 
 import json
 from copy import deepcopy
-from datetime import timedelta
 
 from django.test import Client
-from django.utils import timezone
 
 from compute_relay.control import services
 from compute_relay.control.auth import token_hash
-from compute_relay.control.models import Attempt, Project, ProjectCredential
+from compute_relay.control.models import Attempt, Project
 from test_support.unit_test_control import publish_output, broker, budgeted, dispatched, prepared_job, submit_receipt
 
 

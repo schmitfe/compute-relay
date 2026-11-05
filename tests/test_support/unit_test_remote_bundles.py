@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import hashlib
 import json
-import subprocess
 import sys
 from uuid import uuid4
 import pytest

@@ -2,7 +2,6 @@
 
 import asyncio
 from contextlib import contextmanager
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 import os
