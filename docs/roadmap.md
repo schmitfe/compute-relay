@@ -9,7 +9,7 @@ needs concrete user/site demand. Shipped behavior belongs in the guides.
 | --- | --- |
 | Site recovery | Record interruption/recovery on advertised authentication, accounting and storage classes, including VPN loss and delayed accounting where controlled tests are permitted. Follow [site acceptance](testing.md#real-cluster-acceptance). |
 | Broader beta acceptance | Keep exact-candidate CI green and record accepted site classes against the [capability matrix](testing.md#first-beta-release-gates). Native CPU/GPU and module evidence is in [runtime](runtime.md#acceptance-evidence-and-remaining-reliability-work); fixture success does not certify every institutional site. |
-| macOS for 0.1 | Complete Intel/Apple Silicon CI and a human desktop walkthrough including browser launch, terminal MFA, reconnect and shutdown. Filesystem aliases, process checks and system-OpenSSH lifecycle are automated. |
+| macOS for 0.1 | Complete Apple Silicon release-candidate CI and a human desktop walkthrough including browser launch, terminal MFA, reconnect and shutdown. Filesystem aliases, process checks and system-OpenSSH lifecycle are automated. Intel Macs are outside the tested support matrix. |
 | Release publishing | Configure the PyPI trusted publisher and protected GitHub `pypi` environment, verify prerelease metadata and complete the [release checklist](testing.md#first-beta-release-gates). Publication is release-only after platform and disposable Slurm checks pass. |
 
 ## P2 — accepted follow-up work

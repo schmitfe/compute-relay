@@ -46,7 +46,7 @@ jobs:
           assert versions and all(re.fullmatch(r"3\.\d+", version) for version in versions), "Expected Python 3 minor versions"
           full = os.environ["RELEASE_CANDIDATE"] == "true"
           print("python=" + json.dumps(versions if full else [min(versions, key=lambda v: tuple(map(int, v.split('.'))))]))
-          print("runners=" + json.dumps(["ubuntu-24.04", "macos-15", "macos-15-intel"] if full else ["ubuntu-24.04"]))
+          print("runners=" + json.dumps(["ubuntu-24.04", "macos-15"] if full else ["ubuntu-24.04"]))
           PY
 
   python:

@@ -32,7 +32,8 @@ Branch pushes use their PR check rather than duplicating it. For a release
 candidate, manually run **Local package and SQLite** on its branch with
 `release_candidate` enabled. Releases always enable this full matrix:
 `[tool.compute-relay.ci].python-versions` in `pyproject.toml`, across Linux and
-macOS 15 Apple Silicon/Intel. Every matrix job must pass before publication.
+macOS 15 Apple Silicon (six jobs). Intel Macs are outside the tested support matrix.
+Every matrix job must pass before publication.
 That version list also supplies the README badge; `project.requires-python` sets
 the install floor, not proof for untested interpreters. All jobs use the locked
 test extra, pytest, HTTP/MCP, migrations and clean-wheel acceptance. Mac jobs use
