@@ -33,7 +33,8 @@ def test_explicit_roundtrip_streams_nested_files_and_preserves_owner_execute(tmp
 
 
 @pytest.mark.parametrize("name", ["../escape", "/absolute", "dir/../escape", "dir//file", "./file",
-    "C:/file", "dir\\file", "control\nfile", "nul\0file", ".ssh/key", "src/.compute-relay/project.key"])
+    "C:/file", "dir\\file", "control\nfile", "nul\0file", ".ssh/key", "src/.compute-relay/project.key",
+    ".SSH/key", "src/.Compute-Relay/project.key"])
 def test_rejects_unsafe_names_before_creating_any_output(tmp_path, name):
     with zipfile.ZipFile(tmp_path / "source.zip", "w") as bundle:
         bundle.writestr(name.replace("\0", "X"), b"unsafe")
@@ -59,7 +60,8 @@ def test_rejects_nonregular_zip_members(tmp_path, kind):
     assert not (tmp_path / "extracted").exists()
 
 
-@pytest.mark.parametrize("names", [("a", "a"), ("a", "a/file"), ("a/file", "a"), ("a/", "a")])
+@pytest.mark.parametrize("names", [("a", "a"), ("a", "a/file"), ("a/file", "a"), ("a/", "a"),
+    ("A", "a"), ("caf\u00e9", "cafe\u0301"), ("A", "a/file")])
 def test_rejects_duplicate_and_conflicting_paths(tmp_path, names):
     with zipfile.ZipFile(tmp_path / "source.zip", "w") as bundle:
         for name in names:

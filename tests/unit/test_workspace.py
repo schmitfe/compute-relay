@@ -287,18 +287,26 @@ def test_fetch_verifies_bytes_and_records_integrity_separately_from_scientific_v
         helper.fetch(str(uuid4()), "results/run-1")
 
 
-@pytest.mark.parametrize("kind", ["traversal", "absolute", "secret", "reserved_receipt", "duplicate", "prefix_collision", "oversize", "bool_size", "bad_digest"])
+@pytest.mark.parametrize("kind", ["traversal", "absolute", "secret", "private_alias", "reserved_receipt", "duplicate",
+    "prefix_collision", "case_collision", "unicode_collision", "case_prefix_collision", "oversize", "bool_size", "bad_digest"])
 def test_fetch_inventory_rejected_before_creating_destination_or_downloading(tmp_path, kind):
     root = workspace(tmp_path / "science")
     client = TransferClient()
     entry = artifact(client)
-    if kind in {"traversal", "absolute", "secret", "reserved_receipt"}:
+    if kind in {"traversal", "absolute", "secret", "private_alias", "reserved_receipt"}:
         entry["path"] = {"traversal": "../escape", "absolute": "/tmp/escape", "secret": ".compute-relay/project.key",
-            "reserved_receipt": ".compute-relay-receipt.json"}[kind]
+            "private_alias": ".Compute-Relay/project.key", "reserved_receipt": ".compute-relay-receipt.json"}[kind]
     elif kind == "duplicate":
         artifact(client)
     elif kind == "prefix_collision":
         artifact(client, path="results")
+    elif kind == "case_collision":
+        artifact(client, path=entry["path"].upper())
+    elif kind == "unicode_collision":
+        entry["path"] = "caf\u00e9.txt"
+        artifact(client, path="cafe\u0301.txt")
+    elif kind == "case_prefix_collision":
+        artifact(client, path="RESULTS")
     elif kind == "oversize":
         entry["size_bytes"] = workspace_module.MAX_ARTIFACT_BYTES + 1
     elif kind == "bool_size":

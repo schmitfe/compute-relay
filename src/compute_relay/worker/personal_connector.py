@@ -68,7 +68,8 @@ def local_path(value):
     if (not isinstance(value, str) or not value or any(ord(c) < 32 or ord(c) == 127 for c in value)
             or not (value.startswith("/") or value.startswith("~/"))):
         raise ValueError("Use an explicit absolute or ~/ local path.")
-    return str(Path(value).expanduser().absolute())
+    from compute_relay.local_filesystem import absolute_path
+    return str(absolute_path(value))
 
 
 def prepare(setup, state_directory, *, identity_file=None, known_hosts=None, allow_insecure_http=False,
@@ -292,7 +293,8 @@ async def _serve_session(state, session, state_directory, *, client, once=False,
 def connected(args):
     """Authenticate one labeled connector, holding its local identity lock."""
     from .ssh_session import SSHSession, open_session_directory
-    directory = Path(args.state_directory).expanduser().absolute()
+    from compute_relay.local_filesystem import absolute_path
+    directory = absolute_path(args.state_directory)
     # Prevent two connector processes from consuming the same worker identity.
     # Validate and create every ancestor before key selection or lock creation.
     import fcntl

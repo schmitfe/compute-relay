@@ -44,6 +44,8 @@ def open_session_directory(directory, *, create=False):
             or value == "/" or any(character.isspace() or character in "%\x00" for character in value)
             or len(os.fsencode(str(Path(value) / "s"))) > 100):
         raise SessionStorageError("STATE_PATH_INVALID")
+    from compute_relay.local_filesystem import absolute_path
+    value = str(absolute_path(value))
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     root_uid = os.fstat(descriptor).st_uid
     parts = Path(value).parts[1:]
@@ -104,7 +106,8 @@ class SSHSession:
         if (not isinstance(directory, str) or not os.path.isabs(directory) or os.path.normpath(directory) != directory
                 or any(character.isspace() or character in "%\x00" for character in directory)):
             raise TransportError("SSH session storage must be a normalized absolute path")
-        self.state_directory = Path(directory)
+        from compute_relay.local_filesystem import absolute_path
+        self.state_directory = absolute_path(directory)
         self.socket_path = str(self.state_directory / "s")
         if len(os.fsencode(self.socket_path)) > 100:
             raise TransportError("SSH control socket path exceeds 100 bytes")

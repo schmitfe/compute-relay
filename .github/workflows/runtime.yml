@@ -3,7 +3,7 @@ name: Local package and SQLite
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, codex/beta-0.1]
   workflow_dispatch:
 
 permissions:
@@ -31,14 +31,15 @@ jobs:
           PY
 
   python:
-    name: Python ${{ matrix.python-version }}
+    name: Python ${{ matrix.python-version }} / ${{ matrix.runner }}
     needs: versions
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         python-version: ${{ fromJSON(needs.versions.outputs.python) }}
+        runner: [ubuntu-24.04, macos-15, macos-15-intel]
     env:
       BROKER_PROFILE: local
       UV_PYTHON: ${{ matrix.python-version }}

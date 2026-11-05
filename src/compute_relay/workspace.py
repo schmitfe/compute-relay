@@ -14,7 +14,7 @@ from jsonschema import ValidationError
 
 from compute_relay.domain.validation import relative_path, strict_json, validate
 from compute_relay.local_config import broker_url, validate_key
-from compute_relay.local_filesystem import PRIVATE_NAMES, absolute_path, check_path, ensure_directory, parent_descriptor, read_regular
+from compute_relay.local_filesystem import PRIVATE_NAMES, absolute_path, check_path, ensure_directory, parent_descriptor, read_regular, portable_name
 from compute_relay.worker.client import ControlError, JsonClient
 from compute_relay.transfer import CHUNK_BYTES, INLINE_BYTES, MAX_FILE_BYTES, MAX_BUNDLE_BYTES, fingerprint
 
@@ -29,7 +29,7 @@ def _logical(value):
         relative_path(value)
     except ValidationError:
         raise ValueError("Choose a canonical workspace-relative file path.") from None
-    if any(component in PRIVATE_NAMES for component in value.split("/")):
+    if any(portable_name(component) in PRIVATE_NAMES for component in value.split("/")):
         raise ValueError("Credential, Git and client configuration directories cannot be transferred.")
     return value
 
@@ -190,7 +190,7 @@ class WorkspaceClient:
 
     def stage(self, paths):
         if (not isinstance(paths, list) or not 1 <= len(paths) <= 100
-                or any(not isinstance(path, str) for path in paths) or len(set(paths)) != len(paths)):
+                or any(not isinstance(path, str) for path in paths) or len({portable_name(path) for path in paths}) != len(paths)):
             raise ValueError("Choose between one and 100 distinct source files.")
         sources, total = [], 0
         for name in paths:
@@ -305,15 +305,15 @@ class WorkspaceClient:
             if not isinstance(entry, dict):
                 raise ValueError("Invalid artifact descriptor.")
             identity, path, digest, size = str(UUID(entry.get("id", ""))), _logical(entry.get("path")), entry.get("sha256"), entry.get("size_bytes")
-            if (path in seen or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            if (portable_name(path) in seen or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
                     or type(size) is not int or not 0 <= size <= MAX_ARTIFACT_BYTES):
                 raise ValueError("Invalid or duplicate artifact descriptor.")
-            seen.add(path)
+            seen.add(portable_name(path))
             total += size
             selected.append({"id": identity, "path": path, "sha256": digest, "size_bytes": size})
         if total > MAX_RESULT_BYTES:
             raise ValueError("The result bundle exceeds the transfer limit.")
-        paths = {entry["path"] for entry in selected}
+        paths = seen
         if any("/".join(path.split("/")[:index]) in paths for path in paths for index in range(1, len(path.split("/")))):
             raise ValueError("Artifact file and directory paths conflict.")
         destination = self.root / output

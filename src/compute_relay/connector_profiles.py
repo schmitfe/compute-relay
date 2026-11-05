@@ -18,6 +18,8 @@ import secrets
 import stat
 import sys
 
+from .local_filesystem import absolute_path
+
 
 class ConnectorProfileError(ValueError):
     """An actionable diagnostic containing no connector-state contents."""
@@ -41,7 +43,7 @@ def _path(value):
         raise ConnectorProfileError("Use an accessible local directory path without control characters.")
     # absolute() normalizes a relative CLI path but deliberately does not follow
     # symlinks; directory validation below rejects them at every level.
-    return Path(os.path.abspath(os.path.expanduser(value)))
+    return absolute_path(os.path.abspath(os.path.expanduser(value)))
 
 
 def default_directory():
