@@ -31,7 +31,8 @@ assertions that only mirror implementation structure.
 macOS 15 Apple Silicon/Intel matrix and README version badge. Require every version to
 pass. `project.requires-python` sets the install floor, not proof for untested
 newer interpreters. CI uses the locked test extra, checks bundled migrations,
-runs pytest/HTTP/MCP checks and clean-wheel acceptance. Mac jobs additionally use
+runs pytest/HTTP/MCP checks and clean-wheel acceptance on PRs and main. Branch
+pushes use their PR checks rather than duplicating the matrix. Mac jobs additionally use
 system OpenSSH against a disposable loopback sshd to verify master loss, refusal
 of implicit login and permitted key-only renewal. No account SSH settings change.
 

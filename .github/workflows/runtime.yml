@@ -3,7 +3,7 @@ name: Local package and SQLite
 on:
   pull_request:
   push:
-    branches: [main, codex/beta-0.1]
+    branches: [main]
   workflow_dispatch:
   workflow_call:
 
