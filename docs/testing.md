@@ -1,103 +1,84 @@
-# Testing the local package
+# Testing
 
-Default checks use temporary directories and synthetic identities. They do
-not connect to an institutional cluster. Run from a source checkout with a
-CI-tested Python version (shown in the README badge) and
-[uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/):
+From a checkout, with [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```sh
 uv sync --locked --extra test --python 3.13
 uv run --locked --extra test python -m pytest -q
-uv run --locked --extra test python tools/check_contracts.py
-uv run --locked --extra test python -m unittest discover -s tests/contracts -v
 uv run --locked --extra test python tools/local_smoke.py
-uv run --locked --extra test python tools/local_smoke.py --mode budgeted
 uv run --locked --extra test python tools/local_smoke.py --mode budgeted --mcp-jobs 100
 uv run --locked --extra test python tools/package_smoke.py
 ```
 
-## Layers and evidence
+These checks use disposable state and synthetic credentials, never an
+institutional cluster. Fake workers do not execute uploaded workload code.
 
-| Layer | What it verifies |
+| Check | Evidence |
 | --- | --- |
-| Contracts | Schemas, examples, canonical manifests and documented bounds |
-| Unit and HTTP integration | Local owner authority, project scopes, review, CSRF, policy, job state and bounded output |
-| SQLite transactions | Durable reservations/holds, lifetime caps, settlement uniqueness, process races and restart recovery |
-| Worker and SSH fixtures | Fixed arguments, no fallback login, time/output limits, journal replay, uncertain submission and native identity checks |
-| Module suites | Enabled/disabled boundaries, storage estimates, scheduled environment publication and workflow materialization |
-| Investigation completion | Finite typed plans, grouped accounting, scope closeout, revision waits, safe manifest export and verified local receipts |
-| Native local smoke | A real loopback HTTP service with synthetic jobs and an idle/fake worker |
-| Installed distribution | Wheel and sdist completeness, clean-venv plain install, runtime imports, HTML templates, launcher start, Ctrl-C and same-state restart |
+| Pytest | Contracts, owner/key boundaries, module enablement, lifecycle/fault cases and real SQLite admission/settlement races. Includes fresh database creation; initial migrations are required. |
+| Local HTTP/MCP smoke | Reviewed and budgeted jobs through the real service; the 100-job stdio MCP burst checks stable-key replays, output hashes, exact accounting and concurrent portal responses. |
+| Package smoke | Wheel/sdist resources, plain clean install, dependencies, HTML, launcher shutdown and same-state restart; may need package-index access. `--skip-launch` omits lifecycle acceptance. |
 
-`tools/package_smoke.py` copies only public source/package inputs into a temporary
-build directory. It builds both distributions, verifies runtime resource coverage,
-installs the wheel with no extras into a clean environment, checks dependencies
-and starts the installed launcher with private disposable state and no
-connectors. It uses loopback HTTP and restarts the same state directory. It may
-need registry access for build/runtime packages. `--skip-launch` is available
-only for diagnosing packaging; that option does not establish launcher acceptance.
-
-The fake backend never executes uploaded code in the portal or connector.
-The bounded MCP burst starts the real stdio MCP server and four-thread Waitress
-portal, prepares up to 100 distinct jobs with stable-key replays, executes them
-and verifies every output digest and exact settled accounting. Concurrent health
-and authenticated portal probes must all succeed. It prints aggregate counts
-and latency rather than committing a benchmark report or fixture credentials.
-CI includes this burst in its existing runtime workflow.
-Passing synthetic tests does not establish actual Slurm behavior or operating-
-system isolation. SQLite uses immediate write transactions; admission and
-settlement correctness must not depend solely on a process-local mutex.
+For contracts alone, run `python tools/check_contracts.py` or
+`python -m unittest discover -s tests/contracts -v`; pytest already includes them.
+Prefer a small behavior test at the changed boundary. Share setup where it
+removes duplication, retain distinct authorization/fault cases, and avoid
+assertions that only mirror implementation structure.
 
 ## CI
 
-CI reads its Python matrix from `[tool.compute-relay.ci].python-versions` in
-`pyproject.toml`. The README Python badge reads that same list from `main`;
-the CI badge shows the combined runtime workflow status on `main`. To add or
-remove a tested Python version, edit that list and let the full matrix pass
-before merging. `project.requires-python` separately sets the installation
-compatibility floor; it does not claim every newer interpreter has been tested.
+`[tool.compute-relay.ci].python-versions` in `pyproject.toml` defines the Linux
+matrix and README version badge. Update that list and require every version to
+pass. `project.requires-python` sets the install floor, not proof for untested
+newer interpreters. CI uses the locked test extra, checks bundled migrations,
+runs pytest/HTTP/MCP checks and clean-wheel acceptance.
 
-The matrix runs on Linux with uv 0.13.6, a pinned setup action and a
-dependency cache keyed by the lock. The runtime workflow installs the test extra
-with `uv sync --locked --extra test` and the committed `uv.lock`; a stale lock
-fails the build. The runtime workflow checks SQLite and contracts, verifies
-bundled migrations, exercises synthetic workflows, and performs clean-wheel
-acceptance. Planning contracts are collected by the same pytest run. The
-disposable application images install
-locked runtime dependencies without test extras or an editable source install.
-
-The `Disposable Slurm acceptance` workflow runs after every merge/push to `main`
-and can also be started manually. It builds a synthetic SSH/Slurm/accounting
-cluster and runs personal-connector, recovery and investigation checks. See
-[container testing](container-testing.md). Its credentials and data are generated
-for the fixture and are removed afterward. It never accesses a real site or
-requires a VPN. A supported release must have a successful run for its exact
-commit, in addition to recorded acceptance for its supported real-site classes.
-
-The personal-connector check uses a four-thread Waitress controller and includes
-a real shortened session expiry, abrupt SSH-master death, an accepted terminal
-report whose reply is lost, connector restart and interrupted multichunk output
-collection. It requires unchanged native identities, one submission of the
-recovery job, verified bytes, exact accounting and zero residual reservation.
-Concurrent health, authenticated project-page and bounded status-wait probes
-fail on errors/timeouts; CI captures bounded controller thread stacks on failure.
-Focused tests separately exercise failed key authentication, owner revocation,
-lock draining, delayed accounting and stale-socket protection.
+The [disposable Slurm workflow](container-testing.md) runs on every push to
+`main` and manually. Its synthetic SSH/Slurm/accounting site tests core recovery
+and investigations without VPN credentials. Faults include SSH expiry/death,
+accepted-report reply loss, restart and interrupted collection. It checks stable
+native identities, one submission, verified outputs, exact accounting, zero
+reserved and responsive portal/status requests. Optional module guides contain
+additional native smoke commands; their presence is not a recorded pass.
 
 ## Real-cluster acceptance
 
-Real clusters are opt-in and outside normal CI. Use a reviewed test project,
-account/partition and tiny finite resource limits. Confirm the actual compute
-node can find the interpreter/modules, review the exact batch/script content,
-then check native accounting, output hashes and zero residual reservation.
-Queue presence or cancellation acknowledgement alone is not settlement proof.
-Test SSH MFA with human participation; never place institutional credentials in
-public CI or run untrusted pull-request code with them.
+Use an approved project, partition/account and tiny finite resource limits.
+Review the exact package and verify the interpreter/modules on a compute node,
+output hashes, actual allocated usage and zero residual reservation. Queue
+presence or cancellation acknowledgement alone is insufficient. Exercise the
+advertised authentication/accounting/filesystem classes, with human MFA where
+needed. Never put institutional credentials in public CI or run untrusted PR
+code against them. Synthetic success does not prove native/site behavior.
 
-The separate [investigation acceptance](investigations.md#verification) runs one
-reviewed job on the disposable Slurm fixture, closes unused packages/reviews,
-and exercises the installed export CLI, resume, hashes and shared accounting.
+## First beta release gates
 
-Fresh database creation is checked with core only and with the bundled modules.
-Historical alpha schema migrations are unsupported; same-version restart and
-crash recovery still preserve job and budget history.
+Plan `0.1.0b1`, then `0.1.0` final. The [roadmap](roadmap.md#planned-first-beta)
+defines scope; current Linux CPU evidence does not establish GPU or Mac support.
+
+| Target | Required acceptance |
+| --- | --- |
+| Core | Green exact-candidate Python, installed-wheel, MCP and native Slurm checks; accepted site classes. Resolve the P1 portal-stall work or explicitly reassess its release impact with captured evidence. |
+| GPU | A permitted real job verifies device/type access, outputs, reviewed allocation, exact CPU/GPU settlement and zero reserved. Cover typed/generic requests where both are advertised. |
+| Agent-created environments | Native automatic creation under owner permission, pinned-wheel import, reuse and immutable update. Recover publication after a hook failure/restart without rebuilding or charging twice. Only Python venv builders are included. |
+| DAGs | Native branching/joining and artifact edges preserve per-node review, dependencies, identities, hashes and accounting; revoked keys cannot advance nodes. |
+| Storage/investigations | Browse/create/enroll/check and byte/inode probes on intended filesystems; capacity stays advisory. Closeout/export/resume preserves scopes, hashes and the shared ledger. |
+| macOS | Handle case-insensitive private-name aliases and case/Unicode file/ZIP collisions on default APFS. Make process tests meaningful without `/proc`; verify default paths, no-follow writes, install/restart, MCP, browser launch, system OpenSSH, MFA, reconnect and shutdown. Name tested OS versions/architectures. |
+
+Record commit, platform/site class, checks and remaining limits in the concise
+runtime evidence. Keep credentials, raw logs and agent reports outside Git.
+
+After the gates pass:
+
+1. Declare supported beta versions/platforms, known limits and support policy in
+   `SECURITY.md` and release notes; verify private reporting. Validate separate
+   service/agent UID isolation before recommending it.
+2. Set `0.1.0b1` in `pyproject.toml`, `compute_relay.__version__` and the health
+   response; regenerate `uv.lock`. Update alpha wording and package metadata.
+   Retain fresh setup for incompatible updates and uncertain-job evidence.
+3. Verify wheel/sdist installation, launch/restart and green CI for that exact
+   release commit.
+4. With separate owner go-ahead, tag it and create a GitHub prerelease with
+   verified distributions. If using PyPI, establish package ownership/publishing
+   credentials first and verify the published install. This cleanup publishes
+   no release.

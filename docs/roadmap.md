@@ -1,37 +1,64 @@
 # Open work
 
-This is the single backlog of accepted work and deliberately deferred
-capabilities. P1/P2 items are accepted; P3 items need concrete user or site
-demand before they become commitments. Importance reflects user risk and
-release readiness, not convenience.
+One backlog: P1 blocks release readiness, P2 is accepted follow-up work, and P3
+needs concrete user/site demand. Shipped behavior belongs in the guides.
 
-| Priority | Work | Why it matters / completion gate |
-| --- | --- | --- |
-| **P1 — deployment evidence** | Record interruption/recovery acceptance on each supported authentication and storage class, including a real-site VPN outage and delayed native accounting where the site permits controlled tests. | Owner-controlled key renewal, expiry notices, targeted portal reconnect and early completion with separate collection are implemented. The [5 November acceptance](runtime.md#ssh-expiry-and-reconnecting-a-stopped-connector) verifies separate-session agmn2 MCP execution, 36 MiB of payloads, cleanup and owner-confirmed MFA reconnect after expiry. Disposable Slurm injects broken SSH, accepted-reply loss and partial-transfer recovery; focused tests cover failed authentication and provisional accounting. These do not prove every site's authentication, accounting or filesystem behavior. Follow [testing guidance](testing.md#real-cluster-acceptance). |
-| **P1 — local service responsiveness** | Diagnose a captured recurrence of the unresponsive portal, then add a regression test for the proven cause. | The original four-minute stall queued 24 requests and has not been reproduced. The launcher now requests one private all-thread dump after three failed health checks; manual capture also remains available. Synthetic HTTP/MCP bursts are acceptance evidence, not a root-cause fix. See [diagnostics](runtime.md#diagnosing-an-unresponsive-portal). Keep this open until the cause is established and concurrent API/portal recovery is verified. |
-| **P2 — portal usability acceptance** | Complete real novice and experienced-user walkthroughs of the simplified portal. | Cover keyboard-only and no-JavaScript use, setup and workspace handoff, a second cluster, restricted keys, bursts exceeding 100 jobs, cancellation, failed collection and verified results. Check that live updates preserve edits and selected views. Include real-site recovery in deployment acceptance. Keep independent cluster/project/key authority and explicit grants; admission controls and physical cleanup stay in their own items below. |
-| **P2 — storage integration** | Connect selected work, environment and result locations to new job staging/builds, and advertise protected storage roots from the worker before claiming storage reservations. Add site-specific quota reporting only where required. | Registered location roles and current free-space reports guide advisory planning; they do not yet redirect job or environment-build writes. Native user quotas remain unknown. Never attribute environment-build bytes to a different selected target. See [storage limits](extensions-storage.md). |
-| **P2 — module-based environment selection** | Let owners select a Conda module, discover its environments, and select multiple environments that agents may use. | Preserve module initialization, interpreter/prefix identity and cluster-bound revisions. Discovery on a login node is not compute-node verification. Keep permission to use an existing environment separate from permission to build one. |
-| **P2 — module-aware environment builds** | Select build methods and prerequisites from the approved module: Python venv with pip or uv, Conda creation, or Poetry. | Replace generic missing-bootstrap-Python errors with method-specific requirements. Preserve approval, resource limits, pinned dependency inputs, protected prefixes and compute-node verification. Currently only Python venv builds from approved system/module Python are implemented. |
-| **P2 — intermediate results** | Publish completed, immutable output chunks while the producing job is still running, through the existing authenticated worker and artifact API. | Require declared output paths, atomic publication, stable hashes, bounded polling/transfers and shared storage quotas; protect snapshots from cleanup and distinguish them from final outputs. Until implemented, completed chunk jobs can feed analysis while sibling jobs continue, and stdout/stderr already support live reads. |
-| **P2 — throughput and wait-time monitoring** | Add a small portal graph for job throughput and queue, execution and collection durations by cluster and project over a selected time window. | Use recorded timestamps/native accounting, show sample counts and unknown timings, keep aggregation bounded, and distinguish scheduler delay from broker/collection delay. Establish a baseline before adding a monitoring stack. |
-| **P2 — optional cost and placement module** | Add human-configured cluster/hardware cost rates and local comparison of suitable execution targets. | Compare predicted runtime, actual allocation units, queue delay and transfer costs within current permissions/resource limits. Show assumptions and estimate uncertainty; keep cost estimates separate from compute authorization and final accounting. |
-| **P2 — automatic retention and environment lifecycle** | Define opt-in age/pinning rules, finished-package metadata compaction and retirement of unused uploads and managed environments before automated deletion. | [Manual job/project cleanup](deployment.md#manual-file-cleanup) now reclaims eligible local result objects and queues journal-bound remote attempt cleanup, with confirmation and interruption recovery. Uploaded inputs, module provenance, managed environments and unindexed orphans remain protected. Preserve accounting and identities; include storage-target accounting and remote byte previews before automating reclamation or migration. Existing expired-transfer recovery still requires writer ownership. |
-| **P2 — admission load acceptance and tuning** | Tune project/installation burst, sustained-rate and outstanding-work defaults on representative site workloads, including bursts larger than the 100-job MCP fixture. | Durable shared buckets, 1,000/5,000 outstanding ceilings and capacity/retry diagnostics are implemented; completed history no longer consumes a retained-job count cap. Spending, lifetime execution policy and metadata bytes remain separate. The 500-draft regression, real SQLite concurrency and actual stdio-MCP fixture cover bounded admission; verify longer sustained mixed-project loads and site-specific scheduler fairness before raising defaults. See [implemented bounds](runtime.md#burst-outstanding-work-and-retained-data-limits). |
-| **P2 — collection and storage load acceptance** | Verify serialized publication, finite recovery and cleanup under sustained permitted site load, including independent writers and realistic multi-GiB outputs. | Terminal observations and available accounting now arrive before independently leased output collection. Collection can proceed with provisional accounting while retaining its reservation; later accounting polling remains serialized behind that attempt's current collection operation. The 100-job actual-MCP fixture and interrupted native multichunk fixture check identities, verified outputs, exact accounting and portal responsiveness. Sustained independent-writer contention can still exhaust finite retries; keep integrity/authority failures distinct from recoverable contention. |
-| **P3 — investigation guidance** | Add explainable local/cluster placement, enforceable investigation sub-budgets, richer rate-limited progress and further summary pagination only if users need them. | Placement and investigation allowances must share current authority and reservation rules. Existing waits, closeout and bounded summaries remain the supported behavior. See [workflow design](portable-compute-workflow.md). |
-| **P3 — only on demand** | Add other environment languages, native Slurm arrays, alternative schedulers, remote HTTP MCP/OAuth clients, generated OpenAPI/admin APIs, large-data transfer, packed environments, or direct/object-store artifact delivery. | These expand supported contracts and security surface. Implement only for a concrete user/site need, with separate authorization, accounting and acceptance criteria. Restore a backend selector only when a second implemented scheduler is supported; HTCondor or Kubernetes would first need a concrete use case, adapter and acceptance evidence. Keep the selector absent while Slurm is the only supported scheduler. Current limits are in [runtime](runtime.md), [backends](backends.md) and [module guides](extensions.md). |
+## P1 — release readiness
 
-## Optional audit follow-ups
-
-These are deliberately optional. The October 2026 audit fixes do not introduce
-a new framework, database engine or general compatibility layer.
-
-| Work | When to reconsider / completion criterion |
+| Work | Completion gate |
 | --- | --- |
-| Stronger local owner-session isolation | Before supporting untrusted local accounts/services. Validate browser cookie behavior with disposable accounts and choose an enforced account boundary. Private-desktop launch-token and cookie behavior is currently accepted; see [security assumptions](security.md#local-human-authority). |
-| Additional browser hardening | Add CSP or password-strength guidance when it provides a concrete benefit without breaking local forms/live updates. Preserve explicit owner-approved automatic-execution choices; discovery must not grant approval. |
-| Storage headroom and wait fairness | Recheck physical free-space headroom during long chunked uploads and measure per-key long-poll fairness if mixed-agent loads demonstrate contention. Keep storage integrity and durable admission bounds. |
-| Narrow maintenance improvements | Introduce typed boundary messages, explicit extension hooks, small service extractions or incremental lint/type checks when changing those paths. Avoid a repository-wide rewrite solely to satisfy an audit checklist. |
-| Supported-release upgrade policy | Design versioned migrations only when durable state upgrades become a supported requirement. Fresh setup remains the alpha policy; never discard uncertain job evidence during an update. |
-| Portability and lifecycle details | Revisit case-insensitive path filtering before supporting those filesystems, retire inert diagnostic credentials during cluster removal, and handle cancelled-draft retention through the existing lifecycle work. |
+| Site recovery | Record interruption/recovery on advertised authentication, accounting and storage classes, including VPN loss and delayed accounting where controlled tests are permitted. Follow [site acceptance](testing.md#real-cluster-acceptance). |
+| Environment publication recovery | A post-commit hook failure can leave a settled build `awaiting_finalization`. Retry its accepted durable report through normal operation using existing `sync_from_report`; preserve metadata/generation validation and prove no remote rebuild, duplicate environment or charge. |
+| Broader beta acceptance | Complete the [capability matrix](testing.md#first-beta-release-gates) for GPU jobs, agent-created venvs, DAGs, advisory storage and investigations. Existing smoke scripts alone are not pass evidence. |
+| macOS for 0.1 | Fix filesystem-name and process-test portability, add Mac CI and verify the desktop/SSH lifecycle. Required checks are in the [beta matrix](testing.md#first-beta-release-gates). |
+| Portal responsiveness | Capture and diagnose a recurrence of the unexplained four-minute stall, then test its cause and concurrent recovery. [Stack capture](runtime.md#diagnosing-an-unresponsive-portal) is available; successful synthetic bursts have not established a fix. |
+
+## P2 — accepted follow-up work
+
+| Work | Completion gate |
+| --- | --- |
+| Usability acceptance | Novice/experienced walkthroughs: setup, workspace handoff, second cluster, restricted keys, bursts, cancellation, failed collection and verified results. Include keyboard/no-JavaScript use and live updates that preserve edits/views. |
+| Storage integration | Route new staging/build writes to selected locations and advertise protected roots before claiming reservations. Keep capacity advisory and native quotas unknown until measured; never attribute bytes to another target. See [storage](extensions-storage.md). |
+| Module-based environment selection | Select a Conda module, discover environments and grant several cluster-bound revisions. Verify interpreter/prefix on compute nodes; permission to use an environment remains separate from permission to build. |
+| Module-aware builders | Derive venv/pip/uv, Conda or Poetry prerequisites from the approved module; replace generic bootstrap errors. Preserve pinned inputs, approval, limits, protected prefixes and compute-node verification. Only venv builds exist today. |
+| Intermediate results | Publish declared immutable chunks during execution with atomic publication, stable hashes, bounded transfers and shared quotas. Protect snapshots from cleanup. Until then, use chunk jobs with dependent analysis; live logs already work. |
+| Throughput/wait monitoring | A bounded portal graph by project/cluster for queue, execution and collection times, with sample counts and unknowns. Separate scheduler delay from relay delay before adding a monitoring stack. |
+| Optional cost/placement module | Compare suitable targets using owner-configured hardware rates, predicted runtime, allocation rounding, queue and transfer cost. Show uncertainty; estimates cannot grant compute authority. |
+| Retention/environment lifecycle | Opt-in age/pinning rules, metadata compaction and retirement of unused uploads/environments. Extend [manual cleanup](deployment.md#manual-file-cleanup) with remote byte previews and storage accounting; protect active/uncertain work, pending collection, referenced results and writer-owned transfers. |
+| Admission tuning | Test sustained mixed-project bursts beyond the MCP fixture and site fairness before raising defaults. Keep spending, outstanding work, rate and retained metadata separate; [current bounds](runtime.md#burst-outstanding-work-and-retained-data-limits) are implemented. |
+| Collection/storage load | Verify finite recovery and cleanup under independent writers and multi-GiB outputs. Preserve exact accounting, generation fencing and integrity checks; distinguish recoverable contention from authority/integrity failures. |
+
+## Planned first beta
+
+Target `0.1.0b1`, with `0.1.0` reserved for the final release: one human owner,
+Linux/macOS, CPython 3.12–3.14, single-node Slurm CPU/GPU jobs, existing
+environments, owner-authorized agent-created Python venvs, branching/joining
+DAGs, advisory storage and investigations. This is a target, not completed
+acceptance. Shared multi-user hosting and Conda/Poetry builders are excluded.
+Complete P1 and the [release checklist](testing.md#first-beta-release-gates).
+
+Incompatible beta updates retain [fresh setup](deployment.md#alpha-updates-and-fresh-setup):
+reconcile outstanding work and preserve results/evidence first. Same-version
+restart/crash recovery remains required. Separate service and agent UIDs need
+an isolation walkthrough before recommendation; see [owner-session boundaries](security.md#local-human-authority).
+
+## P3 — only on demand
+
+- Investigation placement/sub-budgets and richer progress, using the existing
+  authority and ledger. [Current behavior](investigations.md) remains bounded/advisory.
+- Other environment languages, Slurm arrays, alternative schedulers, remote
+  HTTP MCP/OAuth, generated OpenAPI/admin APIs, packed environments or direct/
+  object-store delivery. Each needs its own authorization/accounting acceptance.
+  Restore a backend selector only with a second supported scheduler.
+
+## Optional maintenance
+
+- Validate cookie/account isolation before supporting untrusted local services;
+  private-desktop launch-token behavior is currently accepted.
+- Add browser hardening, upload headroom checks or wait fairness only for a
+  demonstrated need; preserve current integrity and admission bounds.
+- Add typed boundaries, explicit hooks, small extractions or lint/type checks
+  when touching those paths; avoid a framework rewrite for an audit checklist.
+- Add upgrade migrations only when in-place upgrades become supported.
+- Retire inert diagnostic credentials on cluster removal and handle cancelled-
+  draft retention through the lifecycle work above.
