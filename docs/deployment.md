@@ -6,14 +6,13 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use a
 [tested Python](testing.md#ci):
 
 ```sh
-uv tool install --python 3.13 git+https://github.com/schmitfe/compute-relay.git
+uv tool install --python 3.13 'compute-relay==0.1.0b1'
 compute-relay
 ```
 
 If the command is missing, run `uv tool update-shell` and reopen the terminal.
-The distribution is not yet published. Pip installation from checkout/repository/
-wheel in a virtual environment also works; all runtime dependencies are included
-and uv is not required at runtime. Checkout runs use `uv sync --locked` and
+Pip installation of `compute-relay==0.1.0b1` in a virtual environment also works;
+all runtime dependencies are included and uv is not required at runtime. Checkout runs use `uv sync --locked` and
 `uv run --locked compute-relay`; `uv.lock` governs development/CI/fixtures.
 Docker is only for optional native acceptance. For updating a uv installation,
 see [tool management](https://docs.astral.sh/uv/guides/tools/). Stop the launcher
@@ -83,9 +82,9 @@ Restore while stopped, reconnect/reconcile before admitting work, and retain one
 authoritative ledger. A stale backup can omit later submitted jobs; starting
 competing copies cannot repair that evidence.
 
-## Alpha updates and fresh setup
+## Beta updates and fresh setup
 
-Incompatible alpha database/configuration upgrades are unsupported. Finish or
+Incompatible beta database/configuration upgrades are unsupported. Finish or
 cancel outstanding jobs and reconcile accounting/outputs using the old version.
 Stop services, retain needed results/backups, then initialize the updated package
 in a new private directory. Reconnect clusters and recreate projects/keys/client

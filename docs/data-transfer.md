@@ -167,7 +167,7 @@ arrive. Set `BROKER_PROJECT_STORAGE_LIMIT`/`BROKER_GLOBAL_STORAGE_LIMIT` for byt
 quotas and `BROKER_MAX_TRANSFER_BYTES` to narrow per-file capacity. Sessions expire
 24 hours after the last acknowledged chunk; maintenance reclaims them under the
 writer lock. Bounded buffering/hashing stays outside database write locks.
-Follow [deployment](deployment.md#alpha-updates-and-fresh-setup) when updating;
+Follow [deployment](deployment.md#beta-updates-and-fresh-setup) when updating;
 control/connectors must match and submitted attempts retain original identities.
 
 ## Verification

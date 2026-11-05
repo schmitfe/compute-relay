@@ -10,7 +10,7 @@ and [architecture](architecture.md) for the execution/authority model.
 `compute-relay` supervises the portal and its installation's saved connectors.
 Ctrl-C stops them without cancelling Slurm jobs; restart resumes saved work after
 any required SSH login. Budgets, jobs, artifacts and connector journals persist.
-Incompatible updates use [fresh setup](deployment.md#alpha-updates-and-fresh-setup),
+Incompatible updates use [fresh setup](deployment.md#beta-updates-and-fresh-setup),
 not historical state conversion. Reconcile work and preserve evidence first.
 
 ### SSH expiry and reconnecting a stopped connector

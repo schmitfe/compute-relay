@@ -1,16 +1,16 @@
 # Open work
 
-One backlog: P1 blocks release readiness, P2 is accepted follow-up work, and P3
+One backlog: P1 blocks the named release gate, P2 is accepted follow-up work, and P3
 needs concrete user/site demand. Shipped behavior belongs in the guides.
 
 ## P1 — release readiness
 
 | Work | Completion gate |
 | --- | --- |
-| Site recovery | Record interruption/recovery on advertised authentication, accounting and storage classes, including VPN loss and delayed accounting where controlled tests are permitted. Follow [site acceptance](testing.md#real-cluster-acceptance). |
+| Site recovery | Before advertising additional site classes, record interruption/recovery on their authentication, accounting and storage, including VPN loss and delayed accounting where controlled tests are permitted. Follow [site acceptance](testing.md#real-cluster-acceptance). |
 | Broader beta acceptance | Keep exact-candidate CI green and record accepted site classes against the [capability matrix](testing.md#first-beta-release-gates). Native CPU/GPU and module evidence is in [runtime](runtime.md#acceptance-evidence-and-remaining-reliability-work); fixture success does not certify every institutional site. |
-| macOS for 0.1 | Complete Apple Silicon release-candidate CI and a human desktop walkthrough including browser launch, terminal MFA, reconnect and shutdown. Filesystem aliases, process checks and system-OpenSSH lifecycle are automated. Intel Macs are outside the tested support matrix. |
-| Release publishing | Configure the PyPI trusted publisher and protected GitHub `pypi` environment, verify prerelease metadata and complete the [release checklist](testing.md#first-beta-release-gates). Publication is release-only after platform and disposable Slurm checks pass. |
+| macOS for 0.1 final | First-beta support is provisional after green Apple Silicon release CI. Before `0.1.0` final, complete a human desktop walkthrough including browser launch, terminal MFA, reconnect and shutdown. Filesystem aliases, process checks and system-OpenSSH lifecycle are automated. Intel Macs are outside the tested support matrix. |
+| Release publishing | The PyPI trusted publisher and protected GitHub `pypi` environment are configured. Verify prerelease metadata and complete the [release checklist](testing.md#first-beta-release-gates). Publication is release-only after platform and disposable Slurm checks pass. |
 
 ## P2 — accepted follow-up work
 
@@ -32,11 +32,13 @@ needs concrete user/site demand. Shipped behavior belongs in the guides.
 Target `0.1.0b1`, with `0.1.0` reserved for the final release: one human owner,
 Linux/macOS, CPython 3.12–3.14, single-node Slurm CPU/GPU jobs, existing
 environments, owner-authorized agent-created Python venvs, branching/joining
-DAGs, advisory storage and investigations. This is a target, not completed
-acceptance. Shared multi-user hosting and Conda/Poetry builders are excluded.
-Complete P1 and the [release checklist](testing.md#first-beta-release-gates).
+DAGs, advisory storage and investigations. Linux capability acceptance is recorded
+in [runtime](runtime.md#acceptance-evidence-and-remaining-reliability-work); macOS is
+provisional until its human desktop acceptance. Shared multi-user hosting and
+Conda/Poetry builders are excluded.
+Complete the applicable [release checklist](testing.md#first-beta-release-gates).
 
-Incompatible beta updates retain [fresh setup](deployment.md#alpha-updates-and-fresh-setup):
+Incompatible beta updates retain [fresh setup](deployment.md#beta-updates-and-fresh-setup):
 reconcile outstanding work and preserve results/evidence first. Same-version
 restart/crash recovery remains required. Separate service and agent UIDs need
 an isolation walkthrough before recommendation; see [owner-session boundaries](security.md#local-human-authority).

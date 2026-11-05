@@ -41,7 +41,7 @@ system OpenSSH against a disposable loopback sshd to verify master loss, refusal
 of implicit login and permitted key-only renewal. No account SSH settings change.
 
 The [disposable Slurm workflow](container-testing.md) runs on every push to
-`main`, `codex/beta-0.1`, manually and for releases. Its synthetic SSH/Slurm/accounting
+`main`, manually and for releases. Its synthetic SSH/Slurm/accounting
 site tests core recovery, environment builds, DAGs, storage and investigations
 without VPN credentials. Faults include SSH expiry/death,
 accepted-report reply loss, restart and interrupted collection. It checks stable
@@ -72,7 +72,7 @@ defines scope. Record evidence for each capability; passing one does not imply t
 | Agent-created environments | Native automatic creation under owner permission, pinned-wheel import, reuse and immutable update. Recover publication after a hook failure/restart without rebuilding or charging twice. Only Python venv builders are included. |
 | DAGs | Native branching/joining and artifact edges preserve per-node review, dependencies, identities, hashes and accounting; revoked keys cannot advance nodes. |
 | Storage/investigations | Browse/create/enroll/check and byte/inode probes on intended filesystems; capacity stays advisory. Closeout/export/resume preserves scopes, hashes and the shared ledger. |
-| macOS | Handle case-insensitive private-name aliases and case/Unicode file/ZIP collisions on default APFS. Make process tests meaningful without `/proc`; verify default paths, no-follow writes, install/restart, MCP, browser launch, system OpenSSH, MFA, reconnect and shutdown. Name tested OS versions/architectures. |
+| macOS | Handle case-insensitive private-name aliases and case/Unicode file/ZIP collisions on default APFS. Make process tests meaningful without `/proc`; verify default paths, no-follow writes, install/restart, MCP and system OpenSSH. macOS 15 Apple Silicon is provisional for the first beta; the human browser/terminal-MFA/reconnect/shutdown walkthrough is required for `0.1.0` final. Intel is outside tested support. |
 
 Record commit, platform/site class, checks and remaining limits in the concise
 runtime evidence. Keep credentials, raw logs and agent reports outside Git.
@@ -83,7 +83,7 @@ After the gates pass:
    `SECURITY.md` and release notes; verify private reporting. Validate separate
    service/agent UID isolation before recommending it.
 2. Set `0.1.0b1` in `pyproject.toml` and `compute_relay.__version__` (health uses it);
-   regenerate `uv.lock`. Update alpha wording, PyPI README rendering and package metadata.
+   regenerate `uv.lock`. Update release wording, PyPI README rendering and package metadata.
    Retain fresh setup for incompatible updates and uncertain-job evidence.
 3. Verify wheel/sdist installation, launch/restart and green CI for that exact
    release commit.
@@ -95,8 +95,8 @@ After the gates pass:
 
 Configure a [pending trusted publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
 in the owner's PyPI account: project `compute-relay`, GitHub owner `schmitfe`,
-repository `compute-relay`, workflow `release.yml`, environment `pypi`. The project
-is not published yet; a missing public entry does not reserve the name.
+repository `compute-relay`, workflow `release.yml`, environment `pypi`. A missing
+public entry does not reserve the name; the first successful upload creates it.
 
 Create GitHub environment `pypi`, restrict it to release tags and require owner
 approval. No PyPI password or API token belongs in repository secrets.

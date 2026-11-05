@@ -122,7 +122,7 @@ run result/commit before claiming native acceptance.
 ## Current acceptance scope
 
 The normal package uses SQLite without Docker; fixture MariaDB serves Slurm
-accounting only. Slurm CI runs on main, the beta branch, manual dispatch and as a
+accounting only. Slurm CI runs on main, manual dispatch and as a
 release gate, with synthetic credentials. It includes environment creation/update,
 branching/joining workflows, storage probes and investigations. The image provides
 Python's venv bootstrap; it does not simulate GPU hardware.
