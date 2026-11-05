@@ -66,6 +66,17 @@ jobs:
       - name: Verify native macOS OpenSSH master lifecycle
         if: runner.os == 'macOS'
         run: uv run --locked --extra test python tools/ssh_session_smoke.py
+      - name: Diagnose native concurrent journal creation
+        if: runner.os == 'macOS'
+        run: |
+          uv run --locked --extra test python - <<'PY'
+          import runpy, tempfile
+          from pathlib import Path
+          check = runpy.run_path('tests/ssh/test_transport.py')['test_one_shot_helper_has_a_durable_cross_process_submission_journal']
+          for _ in range(100):
+              with tempfile.TemporaryDirectory(prefix='cr-race-', dir='/tmp') as root:
+                  check(Path(root).resolve())
+          PY
       - name: Unit, SQLite and local integration checks
         # Darwin's default temporary prefix exhausts OpenSSH's socket path bound.
         run: uv run --locked --extra test python -m pytest -q --basetemp=/tmp/cr-tests
