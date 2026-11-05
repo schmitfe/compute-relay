@@ -61,21 +61,8 @@ def test_one_shot_helper_has_a_durable_cross_process_submission_journal(tmp_path
                  "attempt_id": "55555555-5555-4555-8555-555555555555", "manifest": prepared["manifest"],
                  "files": {path: base64.b64encode(data).decode() for path, data in files.items()}}
 
-    # Diagnostic wrapper is limited to this first-party synthetic fixture.
-    source = "__name__ = 'fixture'\n" + helper_source() + """
-try:
-    request = json.loads(sys.stdin.buffer.read())
-    result = execute(request['config'], request)
-except Exception:
-    import traceback
-    result = {'fixture_failure': traceback.format_exc()}
-print(json.dumps(result))
-"""
-
     def call(_):
-        result = json.loads(asyncio.run(transport()._run([sys.executable, "-I", "-c", source], json.dumps(operation).encode())))
-        assert 'fixture_failure' not in result, result
-        return result
+        return json.loads(asyncio.run(transport()._run([sys.executable, "-I", "-c", helper_source()], json.dumps(operation).encode())))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(call, range(2)))

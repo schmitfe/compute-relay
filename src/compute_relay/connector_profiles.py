@@ -19,6 +19,7 @@ import stat
 import sys
 
 from .local_filesystem import absolute_path
+from .remote.filesystem import open_file
 
 
 class ConnectorProfileError(ValueError):
@@ -85,7 +86,7 @@ def _directory(path, *, create):
 
 
 def _private_file(directory_fd, filename, flags):
-    fd = os.open(filename, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
+    fd = open_file(filename, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
     metadata = os.fstat(fd)
     if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
             or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077):

@@ -62,6 +62,16 @@ def open_directory(path, *, create=False, parent=None):
         raise
 
 
+def open_file(path, flags, mode=0o600, *, dir_fd=None):
+    # Nonexclusive O_CREAT can report ENOENT during concurrent APFS creation.
+    if flags & os.O_CREAT and not flags & os.O_EXCL:
+        try:
+            return os.open(path, flags | os.O_EXCL, mode, dir_fd=dir_fd)
+        except FileExistsError:
+            flags &= ~os.O_CREAT
+    return os.open(path, flags, mode, dir_fd=dir_fd)
+
+
 def open_regular(directory, path, flags=os.O_RDONLY, mode=0o600):
     parts = components(path)
     fd = os.dup(directory)
@@ -70,7 +80,7 @@ def open_regular(directory, path, flags=os.O_RDONLY, mode=0o600):
             next_fd = os.open(part, os.O_RDONLY | DIRECTORY | NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = next_fd
-        result = os.open(parts[-1], flags | NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=fd)
+        result = open_file(parts[-1], flags | NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=fd)
         st = os.fstat(result)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             os.close(result)

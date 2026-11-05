@@ -22,6 +22,7 @@ from django.utils import timezone
 from .errors import BrokerError
 from .models import Blob, Project, StoragePool, UploadGrant, UploadReservation
 from compute_relay.transfer import CHUNK_BYTES, fingerprint
+from compute_relay.remote.filesystem import open_file
 
 MAX_PENDING_UPLOADS = 8
 
@@ -122,7 +123,7 @@ def _writer_lock(project_id):
     settings.ARTIFACT_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
     locks = settings.ARTIFACT_ROOT / ".upload-locks"
     locks.mkdir(mode=0o700, exist_ok=True)
-    fd = os.open(locks / str(project_id), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = open_file(locks / str(project_id), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink != 1:
             raise BrokerError("STORAGE_UNAVAILABLE", "Upload ownership lock is unavailable.", 503)
@@ -325,7 +326,7 @@ def begin_transfer(project, digest, size, binding, *, uploaded=False):
             return {"complete": True, "sha256": digest, "size_bytes": size, "offset": size}
         if current:
             partial = settings.ARTIFACT_ROOT / str(project.id) / ("upload-" + str(current.id))
-            fd = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            fd = open_file(partial, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
             try:
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > size:

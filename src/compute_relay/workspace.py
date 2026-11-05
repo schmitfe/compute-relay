@@ -14,6 +14,7 @@ from jsonschema import ValidationError
 
 from compute_relay.domain.validation import relative_path, strict_json, validate
 from compute_relay.local_config import broker_url, validate_key
+from compute_relay.remote.filesystem import open_file
 from compute_relay.local_filesystem import PRIVATE_NAMES, absolute_path, check_path, ensure_directory, parent_descriptor, read_regular, portable_name
 from compute_relay.worker.client import ControlError, JsonClient
 from compute_relay.transfer import CHUNK_BYTES, INLINE_BYTES, MAX_FILE_BYTES, MAX_BUNDLE_BYTES, fingerprint
@@ -369,7 +370,7 @@ class WorkspaceClient:
                     raise ValueError("Existing result failed integrity verification.")
             return
         temporary = ".relay-part-" + entry["id"]
-        fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+        fd = open_file(temporary, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
         with os.fdopen(fd, "r+b") as stream:
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > entry["size_bytes"]:

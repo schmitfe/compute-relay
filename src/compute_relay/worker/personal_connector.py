@@ -13,6 +13,7 @@ import time
 from uuid import UUID
 
 from compute_relay.diagnostics import operation as diagnostic_operation
+from compute_relay.remote.filesystem import open_file
 from .client import ControlError, JsonClient, strict_json
 from .connector_status import ConnectorStatus, display_label
 from .enrollment import profile_metadata
@@ -300,7 +301,7 @@ def connected(args):
     import fcntl
     directory_fd = open_session_directory(directory, create=True)
     try:
-        fd = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
+        fd = open_file("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
     finally:
         os.close(directory_fd)
     try:
