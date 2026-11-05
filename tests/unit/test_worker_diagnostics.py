@@ -38,6 +38,9 @@ def test_worker_logs_failure_phase_and_preserves_recovery(configured, caplog, mo
     c = configured
     c.lease.update(operation=operation, native_identity={"job_id": "17", "attempt_id": c.lease["attempt_id"]},
         connection_revision_sha256=c.lease["prepared"]["manifest"]["connection_revision_sha256"])
+    if method in {"read_logs", "output_manifest"}:
+        c.lease.update(collection_only=True, observation={"state": "completed", "terminal": True,
+            "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}})
     async def fail(*args, **kwargs):
         raise OSError("PRIVATE_TOKEN /private/path remote stderr\nforged-log")
     monkeypatch.setattr(c.backend, method, fail, raising=False)
@@ -95,6 +98,8 @@ def test_parallel_attempt_failures_keep_their_own_context(configured, caplog, mo
         for _ in range(4)]
     for lease in leases:
         lease["native_identity"] = {"job_id": "17", "attempt_id": lease["attempt_id"]}
+        lease.update(collection_only=True, observation={"state": "completed", "terminal": True,
+            "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}})
     async def fail(*args, **kwargs):
         await asyncio.sleep(0)
         raise OSError("PRIVATE_TOKEN")

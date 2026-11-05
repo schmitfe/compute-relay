@@ -50,10 +50,11 @@ def wait_job(agent, job_id, attempt_id, timeout):
         attempt = next((item for item in job["attempts"] if item["id"] == attempt_id), None)
         require(attempt is not None, "Expected disposable attempt disappeared")
         require(attempt["state"] not in {"failed", "cancelled", "expired"}, "Disposable job failed before acceptance")
-        if attempt["state"] == "succeeded" and attempt["accounting_state"] == "settled":
+        if (attempt["state"] == "succeeded" and attempt["accounting_state"] == "settled"
+                and attempt["collection_state"] == "complete"):
             return attempt
         time.sleep(1)
-    raise SmokeFailure("Disposable job did not complete final accounting before the deadline")
+    raise SmokeFailure("Disposable job did not finish accounting and output collection before the deadline")
 
 
 def wait_build(agent, build_id, timeout):

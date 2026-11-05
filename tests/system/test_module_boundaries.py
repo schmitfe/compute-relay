@@ -187,8 +187,9 @@ def control_probe():
         Attempt.objects.update(next_poll_at=timezone.now())
         asyncio.run(worker.poll_once())
         attempt = Attempt.objects.get(id=execution["attempt_id"])
-        if attempt.accounting_state == "settled":
+        if attempt.accounting_state == "settled" and attempt.collection_state == "complete":
             break
+    assert attempt.collection_state == "complete" and not attempt.collection_pending
     detail = tool("get_job", {"job_id": prepared["id"]})
     assert "attempts" not in detail and Job.objects.count() == 1
     assert UUID(detail["latest_attempt"]["id"]) == attempt.id

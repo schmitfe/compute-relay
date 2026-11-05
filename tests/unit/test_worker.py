@@ -132,37 +132,40 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             await self.worker.execute(self.lease)
         self.assertEqual(self.control.calls, [])
 
+    async def observe_then_collect(self):
+        self.lease.update(operation="observe", id=str(uuid4()), generation=self.lease["generation"] + 1,
+            native_identity={"job_id": "17", "attempt_id": self.lease["attempt_id"]})
+        await self.worker.execute(self.lease)
+        core = copy.deepcopy(self.control.calls[-1][2])
+        self.assertTrue(core["observation"]["accounting"]["final"])
+        self.assertNotIn("collection_state", core)
+        self.assertNotIn("log_chunks", core)
+        self.lease.update(id=str(uuid4()), generation=self.lease["generation"] + 1,
+            collection_only=True, observation=core["observation"])
+        await self.worker.execute(self.lease)
+        return self.control.calls[-1][2]
+
     async def test_terminal_report_includes_bounded_outputs_and_accounting(self):
         await self.worker.execute(self.lease)
-        self.lease["operation"] = "observe"
-        self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
-        await self.worker.execute(self.lease)
-        report = self.control.calls[-1][2]
+        report = await self.observe_then_collect()
         self.assertEqual(report["outcome"], "observed")
         self.assertTrue(report["observation"]["accounting"]["final"])
         self.assertEqual(base64.b64decode(report["log_chunks"]["stdout"]["content_base64"]), b"synthetic result")
 
     async def test_unauthorized_artifact_is_not_reported(self):
-        self.lease["operation"] = "observe"
-        self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
         self.backend.output_manifest = AsyncMock(return_value={"files": [{"path": "secrets", "size_bytes": 2}]})
-        await self.worker.execute(self.lease)
-        report = self.control.calls[-1][2]
+        report = await self.observe_then_collect()
         self.assertTrue(report["observation"]["accounting"]["final"])
         self.assertNotIn("artifacts", report)
         self.assertEqual(report["error_code"], "OUTPUT_COLLECTION_FAILED")
         self.assertNotIn("secrets", str(report))
 
     async def test_unavailable_outputs_do_not_suppress_final_accounting(self):
-        self.lease["operation"] = "observe"
-        self.lease["native_identity"] = {"job_id": "17", "attempt_id": self.lease["attempt_id"]}
-
         async def failed_collection(*args, **kwargs):
             raise OSError("sensitive path or remote diagnostic")
 
         self.backend.output_manifest = failed_collection
-        await self.worker.execute(self.lease)
-        report = self.control.calls[-1][2]
+        report = await self.observe_then_collect()
         self.assertEqual(report["outcome"], "observed")
         self.assertEqual(report["observation"]["accounting"]["cpu_core_seconds"], 2)
         self.assertEqual(report["error_code"], "OUTPUT_COLLECTION_FAILED")

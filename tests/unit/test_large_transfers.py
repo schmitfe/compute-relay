@@ -421,6 +421,9 @@ def test_worker_streams_live_output_and_large_artifacts_through_broker(broker, t
     invoke()
     attempt.refresh_from_db()
     assert attempt.state == "succeeded" and attempt.accounting_state == "settled"
+    assert attempt.collection_pending and not Artifact.objects.filter(attempt=attempt).exists()
+    invoke()
+    attempt.refresh_from_db()
     assert attempt.collection_state == "complete" and "realization 2/2" in attempt.stdout
     artifact = Artifact.objects.get(attempt=attempt, path="results/metrics.bin")
     assert artifact.blob.size_bytes == len(data) and artifact.blob.sha256 == sha256(data)
@@ -508,6 +511,10 @@ def test_multigib_roundtrip_is_bounded_across_workspace_broker_and_worker(broker
     Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
     asyncio.run(worker.execute(services.lease_work(broker.worker)["lease"]))
     attempt.refresh_from_db()
+    assert attempt.collection_pending and attempt.accounting_state == "settled"
+    Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
+    asyncio.run(worker.execute(services.lease_work(broker.worker)["lease"]))
+    attempt.refresh_from_db()
     assert attempt.collection_state == "complete"
     receipt = workspace_client.fetch(str(attempt.id), "download")
     assert receipt["size_bytes"] == size and receipt["integrity"] == "verified"
@@ -577,6 +584,10 @@ def test_fake_worker_collection_quota_failures_settle_once_and_stop_after_three_
         Journal(tmp_path / "journal"), extensions=[], owner_id=uuid4())
     asyncio.run(worker.execute(first))
     settings.PROJECT_STORAGE_LIMIT = 1
+    Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
+    asyncio.run(worker.execute(services.lease_work(broker.worker)["lease"]))
+    attempt.refresh_from_db()
+    assert attempt.accounting_state == "settled" and attempt.collection_pending and attempt.collection_failures == 0
     for number in range(3):
         Attempt.objects.filter(id=attempt.id).update(next_poll_at=timezone.now())
         lease = services.lease_work(broker.worker)["lease"]

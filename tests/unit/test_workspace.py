@@ -19,7 +19,7 @@ import pytest
 
 from compute_relay.control.auth import token_hash
 from compute_relay.control.errors import BrokerError
-from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Job, Project
+from compute_relay.control.models import Artifact, Attempt, ExecutionRequest, Job, Project, ResultAccess
 from compute_relay.control.storage import store_blob, store_uploaded_blob
 from compute_relay import workspace as workspace_module
 from compute_relay.workspace import WorkspaceClient, MAX_SOURCE_BYTES, main
@@ -376,6 +376,59 @@ def test_real_http_cli_stages_prepares_idempotently_and_fetches_without_executin
     result = cli("fetch", "--attempt-id", str(attempt.id), "--output", "results/first")
     assert result["integrity"] == "verified"
     assert (root / "results/first/answer.txt").read_bytes() == b"synthetic-result\n"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("has_output", [False, True])
+def test_finish_waits_for_pending_collection_before_acknowledging(broker, context_live_server, tmp_path, has_output):
+    from compute_relay.control import services
+    from compute_relay.workspace_completion import finish
+    from test_support.unit_test_control import dispatched, publish_output, submit_receipt
+
+    broker.credential.token_hash = token_hash(TOKEN)
+    broker.credential.save(update_fields=["token_hash"])
+    budgeted(broker)
+    job = prepared_job(broker, outputs=["answer.txt"] if has_output else [])
+    attempt, lease = dispatched(broker, job)
+    native, lease = submit_receipt(broker, attempt, lease)
+    if has_output:
+        publish_output(lease, "answer.txt", b"retained result\n")
+    observation = {"state": "completed", "terminal": True,
+        "accounting": {"final": True, "cpu_core_seconds": 2, "gpu_device_seconds": 0}}
+    services.report(broker.worker, attempt.id, {"lease_id": lease["id"], "generation": lease["generation"],
+        "outcome": "observed", "native_identity": native, "observation": observation})
+    helper = WorkspaceClient(workspace(tmp_path / "science", context_live_server.url))
+    result = finish(helper, job_id=str(job.id), output="results/run", acknowledge=True)
+    assert not result["summary"]["operationally_reconciled"]
+    assert not ResultAccess.objects.filter(attempt=attempt, acknowledged_at__isnull=False).exists()
+
+    collection = services.lease_work(broker.worker)["lease"]
+    assert collection["collection_only"]
+    services.report(broker.worker, attempt.id, {"lease_id": collection["id"], "generation": collection["generation"],
+        "outcome": "observed", "native_identity": native, "observation": observation, "collection_state": "complete"})
+    result = finish(helper, job_id=str(job.id), output="results/run", resume=True, acknowledge=True)
+    assert result["summary"]["operationally_reconciled"]
+    assert ResultAccess.objects.get(credential=broker.credential, attempt=attempt).acknowledged_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_finish_can_acknowledge_cancelled_attempt_without_native_collection(broker, context_live_server, tmp_path):
+    from compute_relay.control import services
+    from compute_relay.workspace_completion import finish
+
+    broker.credential.token_hash = token_hash(TOKEN)
+    broker.credential.save(update_fields=["token_hash"])
+    budgeted(broker)
+    job = prepared_job(broker)
+    attempt = execution(broker, job).attempt
+    services.cancel_attempt(attempt)
+    attempt.refresh_from_db()
+    assert attempt.native_identity is None and attempt.accounting_state == "released"
+    assert attempt.collection_state == "pending" and not attempt.collection_pending
+    helper = WorkspaceClient(workspace(tmp_path / "science", context_live_server.url))
+    result = finish(helper, job_id=str(job.id), output="results/cancelled", acknowledge=True)
+    assert result["summary"]["operationally_reconciled"]
+    assert ResultAccess.objects.get(credential=broker.credential, attempt=attempt).acknowledged_at is not None
 
 
 def test_content_lookup_checks_scope_project_size_and_retained_metadata(broker):

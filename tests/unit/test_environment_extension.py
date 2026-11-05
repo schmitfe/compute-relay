@@ -274,6 +274,16 @@ def test_async_worker_environment_receipt_publishes_via_durable_core_report(cont
         owner_id=context.owner.id, backend_factory=lambda configuration: backend, extensions=["environments"])
     asyncio.run(worker.execute(lease))
     payload = control.calls[-1][2]
+    assert "extension_data" not in payload and helper_calls == []
+    with django_capture_on_commit_callbacks(execute=True):
+        core.report(context.worker, attempt.id, payload)
+    attempt.refresh_from_db();build.refresh_from_db()
+    assert attempt.accounting_state == "settled" and attempt.collection_pending
+    assert build.state == "awaiting_finalization"
+    lease = core.lease_work(context.worker)["lease"]
+    assert lease["collection_only"]
+    asyncio.run(worker.execute(lease))
+    payload = control.calls[-1][2]
     assert payload["extension_data"]["environments"]["generation"] == lease["generation"]
     assert helper_calls[0][0] == REMOTE_SOURCE
     assert helper_calls[0][1]["native_identity"] == attempt.native_identity

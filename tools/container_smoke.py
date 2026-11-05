@@ -235,7 +235,8 @@ def run(base_url, demo_file, timeout):
         state = attempt["state"].lower()
         if state in {"failed", "cancelled", "timeout", "rejected", "quarantined"}:
             raise SmokeFailure(f"Execution reached unexpected state {state}")
-        if state in {"completed", "succeeded"} and attempt.get("accounting_state") == "settled":
+        if (state in {"completed", "succeeded"} and attempt.get("accounting_state") == "settled"
+                and attempt.get("collection_state") == "complete"):
             final = attempt
             break
         time.sleep(1)
