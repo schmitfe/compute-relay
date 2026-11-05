@@ -49,10 +49,3 @@ def parse_discovery(response: dict, connection: dict) -> dict:
         "commands": {key: {"returncode": value.get("returncode"), "stderr": value.get("stderr", "")[:1024]}
                      for key, value in response.items() if isinstance(value, dict) and key != "software"},
     }
-
-
-async def discover(connection: dict, transport=None) -> dict:
-    """Convenience entry point for an operator CLI; performs no submissions."""
-    from .slurm import SlurmBackend
-
-    return await SlurmBackend(connection, transport=transport).discover()

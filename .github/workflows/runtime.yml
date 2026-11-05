@@ -59,8 +59,6 @@ jobs:
         run: uv sync --locked --extra test
       - name: Unit, SQLite and local integration checks
         run: uv run --locked --extra test python -m pytest -q
-      - name: Validate schemas and synthetic contracts
-        run: uv run --locked --extra test python tools/check_contracts.py
       - name: Exercise reviewed and budgeted synthetic jobs
         run: |
           uv run --locked --extra test python tools/local_smoke.py

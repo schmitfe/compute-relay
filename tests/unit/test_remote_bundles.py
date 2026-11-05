@@ -162,22 +162,6 @@ def test_submitted_job_remains_manageable_across_execution_bundle_upgrade(site, 
     assert site[4].read_text().splitlines().count("sbatch") == 1
 
 
-def test_uncertain_old_submission_reconciles_without_resubmission_after_upgrade(site, monkeypatch):
-    site[3].write_text(json.dumps({"lose_reply": True}))
-    original = bundles._component
-    transport = LocalFixedTransport()
-    backend = SlurmBackend(site[0], transport=transport)
-    attempt = str(uuid4())
-    with monkeypatch.context() as old:
-        old.setattr(bundles, "_component", lambda name: original(name) + ("# previous helper\n" if name == "jobs.py" else ""))
-        package, files = prepared(site)
-        assert asyncio.run(backend.submit(attempt, package["manifest"], files))["outcome"] == "submission_uncertain"
-    assert asyncio.run(backend.reconcile(attempt, package["manifest"]))["outcome"] == "submitted"
-    assert asyncio.run(backend.reconcile(attempt, package["manifest"]))["outcome"] == "submitted"
-    assert transport.operations == ["submit", "reconcile", "reconcile"]
-    assert site[4].read_text().splitlines().count("sbatch") == 1
-
-
 def test_native_async_management_uses_current_bundle_after_upgrade_and_uncertain_reply(site, monkeypatch):
     async def scenario():
         original = bundles._component
@@ -190,7 +174,11 @@ def test_native_async_management_uses_current_bundle_after_upgrade_and_uncertain
             package, files = prepared(site)
             assert (await backend.submit(attempt, package["manifest"], files))["outcome"] == "submission_uncertain"
         manifest = package["manifest"]
-        native = (await backend.reconcile(attempt, manifest))["native_identity"]
+        recovered = await backend.reconcile(attempt, manifest)
+        assert recovered["outcome"] == "submitted"
+        native = recovered["native_identity"]
+        assert await backend.reconcile(attempt, manifest) == recovered
+        assert transport.operations == ["submit", "reconcile", "reconcile"]
         assert (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["state"] == "running"
         assert (await backend.cancel(native, manifest=manifest))["outcome"] == "cancel_requested"
         assert (await backend.observe([{"native_identity": native, "manifest": manifest}]))[native["attempt_id"]]["accounting"]["final"] is True

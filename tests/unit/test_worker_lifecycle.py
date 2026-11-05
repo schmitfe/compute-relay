@@ -218,7 +218,7 @@ def test_saved_accounting_survives_interrupted_collection_and_new_generation(lif
     assert c.backend.calls == ["observe", "output_manifest", "output_manifest"]
 
 
-def test_legacy_observed_journal_publishes_core_before_collecting(lifecycle):
+def test_saved_observed_journal_publishes_core_before_collecting(lifecycle):
     c = lifecycle
     management(c, "observe")
     final_observation(c)

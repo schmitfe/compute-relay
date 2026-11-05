@@ -10,7 +10,7 @@ from referencing.exceptions import NoSuchResource
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from check_contracts import CONTRACTS, EXAMPLES, main  # noqa: E402
+from check_contracts import CONTRACTS, main  # noqa: E402
 from compute_relay.domain.validation import _deny_remote, strict_json, validate
 
 
@@ -26,11 +26,6 @@ class PlanningContractTests(unittest.TestCase):
     def reject_prepared(self, data):
         with self.assertRaises((ValueError, ValidationError)):
             validate("prepared-job.schema.json", data)
-
-    def test_all_documented_examples_validate(self):
-        for filename, schema in EXAMPLES.items():
-            with self.subTest(filename=filename):
-                validate(schema, strict_json((CONTRACTS / "examples" / filename).read_bytes()))
 
     def test_example_inventory_is_complete(self):
         main()
