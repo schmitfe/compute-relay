@@ -5,9 +5,23 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: Validate all supported Python versions on Linux and macOS
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      release_candidate:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   versions:
@@ -16,29 +30,35 @@ jobs:
     timeout-minutes: 2
     outputs:
       python: ${{ steps.versions.outputs.python }}
+      runners: ${{ steps.versions.outputs.runners }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: versions
         name: Read the tested versions from pyproject.toml
+        env:
+          RELEASE_CANDIDATE: ${{ inputs.release_candidate || false }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, pathlib, re, tomllib
+          import json, os, pathlib, re, tomllib
           versions = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["tool"]["compute-relay"]["ci"]["python-versions"]
           assert versions and all(re.fullmatch(r"3\.\d+", version) for version in versions), "Expected Python 3 minor versions"
-          print("python=" + json.dumps(versions))
+          full = os.environ["RELEASE_CANDIDATE"] == "true"
+          print("python=" + json.dumps(versions if full else [min(versions, key=lambda v: tuple(map(int, v.split('.'))))]))
+          print("runners=" + json.dumps(["ubuntu-24.04", "macos-15"] if full else ["ubuntu-24.04"]))
           PY
 
   python:
-    name: Python ${{ matrix.python-version }}
+    name: Python ${{ matrix.python-version }} / ${{ matrix.runner }}
     needs: versions
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         python-version: ${{ fromJSON(needs.versions.outputs.python) }}
+        runner: ${{ fromJSON(needs.versions.outputs.runners) }}
     env:
       BROKER_PROFILE: local
       UV_PYTHON: ${{ matrix.python-version }}
@@ -57,8 +77,23 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Install the locked package and test tools
         run: uv sync --locked --extra test
+      - name: Verify native macOS OpenSSH master lifecycle
+        if: runner.os == 'macOS'
+        run: uv run --locked --extra test python tools/ssh_session_smoke.py
+      - name: Verify native concurrent journal creation
+        if: runner.os == 'macOS'
+        run: |
+          uv run --locked --extra test python - <<'PY'
+          import runpy, tempfile
+          from pathlib import Path
+          check = runpy.run_path('tests/ssh/test_transport.py')['test_one_shot_helper_has_a_durable_cross_process_submission_journal']
+          for _ in range(100):
+              with tempfile.TemporaryDirectory(prefix='cr-race-', dir='/tmp') as root:
+                  check(Path(root).resolve())
+          PY
       - name: Unit, SQLite and local integration checks
-        run: uv run --locked --extra test python -m pytest -q
+        # Darwin's default temporary prefix exhausts OpenSSH's socket path bound.
+        run: uv run --locked --extra test python -m pytest -q --basetemp=/tmp/cr-tests
       - name: Exercise reviewed and budgeted synthetic jobs
         run: |
           uv run --locked --extra test python tools/local_smoke.py

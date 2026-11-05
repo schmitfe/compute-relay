@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in three-node artifact workflow on the disposable Docker Slurm fixture."""
+"""Opt-in branch/join artifact DAG on the disposable Docker Slurm fixture."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def verify_artifact(content, descriptor, expected):
 
 
 def verify_edge(node, job, artifact, producer_attempt, destination):
-    require(node.get("inputs") == [{"artifact_id": artifact["id"], "sha256": artifact["sha256"],
-        "producer_attempt_id": producer_attempt, "path": destination}], "Workflow edge lost exact artifact/attempt provenance")
+    require(node.get("inputs", []).count({"artifact_id": artifact["id"], "sha256": artifact["sha256"],
+        "producer_attempt_id": producer_attempt, "path": destination}) == 1, "Workflow edge lost exact artifact/attempt provenance")
     files = [item for item in job["manifest"]["request"]["files"] if item["path"] == destination]
     require(len(files) == 1 and files[0]["sha256"] == artifact["sha256"] and files[0]["size_bytes"] == artifact["size_bytes"],
             "Consumer package does not bind the exact producer artifact")
@@ -104,7 +104,7 @@ def run(base_url, demo_file, timeout):
     expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     human.request("POST", "/projects/new/", {"name": "Disposable artifact workflow " + suffix, "mode": "approval_required",
         "cpu_hours": "2", "gpu_hours": "0", "max_cpus": "1", "max_gpus": "0", "memory_mib": "128",
-        "wall_minutes": "1", "charge_minutes": "2", "max_active_jobs": "2", "max_total_jobs": "3", "expires_at": expiry,
+        "wall_minutes": "1", "charge_minutes": "2", "max_active_jobs": "2", "max_total_jobs": "4", "expires_at": expiry,
         "connections": [demo["connection_id"]], "environments": [demo["environment_id"]], "allowed_gpu_types": []}, form=True, binary=True)
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/", urllib.parse.urlsplit(human.last_url).path)
     require(match is not None, "Workflow project creation failed")
@@ -112,7 +112,7 @@ def run(base_url, demo_file, timeout):
     page = human.request("POST", f"/projects/{project_id}/keys/new/", {"name": "Disposable workflow agent", "expires_at": expiry,
         "scopes": ["workflows:write", "objects:write", "jobs:write", "jobs:read", "jobs:execute", "jobs:cancel", "artifacts:read"],
         "cluster_access": "inherit", "allowed_connections": [], "execution_mode": "approval_required", "submission_id": str(uuid4())}, form=True, binary=True)
-    secret, _ = revealed_key(human, page)
+    secret, key_id = revealed_key(human, page)
     agent = Client(base_url, token=secret)
     require("workflows" in agent.request("GET", "/api/v1/capabilities").get("enabled_extensions", []),
             "Workflows are not enabled on this control service")
@@ -120,14 +120,18 @@ def run(base_url, demo_file, timeout):
     require(any(item["id"] == demo["connection_id"] and item["backend"] == "slurm" for item in inventory),
             "Disposable native workflow connection is unavailable")
     rows = [
-        {"key": "produce", "output": "numbers.json", "expected": b"[1,2,3]\n", "source":
+        {"key": "produce", "output": "numbers.json", "expected": b"[1,2,3]\n", "inputs": [], "source":
             b"from pathlib import Path\nPath('numbers.json').write_bytes(b'[1,2,3]\\n')\n"},
-        {"key": "double", "output": "doubled.json", "expected": b"[2,4,6]\n", "input": "inputs/numbers.json", "producer": "produce", "source":
-            b"import json\nfrom pathlib import Path\nvalues=json.loads(Path('inputs/numbers.json').read_bytes())\nPath('doubled.json').write_text(json.dumps([2*x for x in values],separators=(',',':'))+'\\n')\n"},
-        {"key": "sum", "output": "result.json", "expected": b'{"sum":12}\n', "input": "inputs/doubled.json", "producer": "double", "source":
-            b"import json\nfrom pathlib import Path\nvalues=json.loads(Path('inputs/doubled.json').read_bytes())\nPath('result.json').write_text(json.dumps({'sum':sum(values)},separators=(',',':'))+'\\n')\n"},
+        *[{"key": key, "output": key + ".json", "expected": expected,
+            "inputs": [{"producer": "produce", "path": "inputs/numbers.json"}], "source":
+            ("import json\nfrom pathlib import Path\nvalues=json.loads(Path('inputs/numbers.json').read_bytes())\n"
+             f"Path('{key}.json').write_text(json.dumps([{factor}*x for x in values],separators=(',',':'))+'\\n')\n").encode()}
+            for key, factor, expected in (("double", 2, b"[2,4,6]\n"), ("triple", 3, b"[3,6,9]\n"))],
+        {"key": "sum", "output": "result.json", "expected": b'{"sum":30}\n', "inputs": [
+            {"producer": "double", "path": "inputs/doubled.json"}, {"producer": "triple", "path": "inputs/tripled.json"}], "source":
+            b"import json\nfrom pathlib import Path\nvalues=json.loads(Path('inputs/doubled.json').read_bytes())+json.loads(Path('inputs/tripled.json').read_bytes())\nPath('result.json').write_text(json.dumps({'sum':sum(values)},separators=(',',':'))+'\\n')\n"},
     ]
-    graph = {"name": "artifact-chain-" + suffix, "nodes": []}
+    graph = {"name": "artifact-diamond-" + suffix, "nodes": []}
     by_key = {row["key"]: row for row in rows}
     for row in rows:
         descriptor = agent.request("POST", f"/api/v1/projects/{project_id}/objects", {
@@ -139,8 +143,8 @@ def run(base_url, demo_file, timeout):
             "resources": {"nodes": 1, "cpus": 1, "gpus": 0, "memory_mib": 128, "time_limit_seconds": 60},
             "slurm": {"partition": "debug", "account": "broker"}, "files": [descriptor], "outputs": [row["output"]]}
         node = {"key": row["key"], "request": request}
-        if row.get("producer"):
-            node["inputs"] = [{"node": row["producer"], "output": by_key[row["producer"]]["output"], "path": row["input"]}]
+        node["inputs"] = [{"node": edge["producer"], "output": by_key[edge["producer"]]["output"], "path": edge["path"]}
+            for edge in row["inputs"]]
         graph["nodes"].append(node)
     revision = agent.request("POST", f"/api/v1/projects/{project_id}/workflow-revisions", graph)
     started = agent.request("POST", f"/api/v1/workflow-revisions/{revision['id']}/runs", {})
@@ -150,13 +154,17 @@ def run(base_url, demo_file, timeout):
         status, node = wait_ready(agent, run_id, row["key"], timeout)
         identities[row["key"]] = (node["job_id"], node["execution_request_id"])
         repeated = stable_advance(agent, run_id, identities)
-        require(all(not node_map(repeated)[later["key"]]["job_id"] for later in rows[position + 1:]),
-                "A dependent workflow node materialized before its producer's successful final accounting")
+        require(all(not node_map(repeated)[later["key"]]["job_id"] for later in rows[position + 1:]
+            if any(edge["producer"] not in results for edge in later["inputs"])),
+            "A dependent node materialized before every prerequisite finished")
+        if row["key"] == "double":
+            require(node_map(repeated)["triple"]["state"] == "awaiting_approval", "Both branches were not independently reviewable")
         job = agent.request("GET", f"/api/v1/jobs/{node['job_id']}")
         require(job["manifest"].get("extension_name") == "workflows", "Workflow node lost its immutable extension binding")
-        if row.get("producer"):
-            producer = results[row["producer"]]
-            verify_edge(node, job, producer["artifact"], producer["attempt"]["id"], row["input"])
+        require(len(node["inputs"]) == len(row["inputs"]), "Workflow lost or added artifact edges")
+        for edge in row["inputs"]:
+            producer = results[edge["producer"]]
+            verify_edge(node, job, producer["artifact"], producer["attempt"]["id"], edge["path"])
         attempt = approve_and_wait(agent, human, node, job, timeout)
         artifacts = agent.request("GET", f"/api/v1/attempts/{attempt['id']}/artifacts")["artifacts"]
         artifact = next((item for item in artifacts if item["path"] == row["output"]), None)
@@ -165,16 +173,18 @@ def run(base_url, demo_file, timeout):
         verify_artifact(content, artifact, row["expected"])
         results[row["key"]] = {"attempt": attempt, "artifact": artifact}
     final = stable_advance(agent, run_id, identities)
-    require(final["state"] == "succeeded" and len(final["nodes"]) == 3, "Workflow did not finish exactly three successful nodes")
+    require(final["state"] == "succeeded" and len(final["nodes"]) == 4, "Workflow did not finish exactly four successful nodes")
     for row in rows:
         job = agent.request("GET", f"/api/v1/jobs/{identities[row['key']][0]}")
         require(len(job["execution_requests"]) == 1 and len(job["attempts"]) == 1, "Finished workflow gained duplicate execution")
     allowance = agent.request("GET", f"/api/v1/projects/{project_id}/allowance")
-    require(allowance["jobs"]["admitted"] == 3 and allowance["jobs"]["remaining"] == 0
+    require(allowance["jobs"]["admitted"] == 4 and allowance["jobs"]["remaining"] == 0
             and allowance["reserved"] == {"cpu_core_seconds": 0, "gpu_device_seconds": 0}
             and allowance["spent"]["cpu_core_seconds"] > 0, "Workflow did not share ordinary final accounting and submission caps")
+    human.request("POST", f"/projects/{project_id}/keys/{key_id}/revoke/", {}, form=True, binary=True)
+    agent.request("POST", f"/api/v1/workflow-runs/{run_id}/advance", {}, expected=(401,), binary=True)
     print(json.dumps({"ok": True, "simulated": False, "project_id": project_id, "workflow_run_id": run_id,
-        "node_count": 3, "per_node_reviews": 3, "admitted_jobs": allowance["jobs"]["admitted"],
+        "node_count": 4, "per_node_reviews": 4, "branch_join": True, "revocation_checked": True, "admitted_jobs": allowance["jobs"]["admitted"],
         "artifact_sha256": {key: result["artifact"]["sha256"] for key, result in results.items()},
         "spent": allowance["spent"], "reserved": allowance["reserved"], "duplicate_advance_checked": True}))
 

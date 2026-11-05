@@ -122,7 +122,10 @@ run result/commit before claiming native acceptance.
 ## Current acceptance scope
 
 The normal package uses SQLite without Docker; fixture MariaDB serves Slurm
-accounting only. Slurm CI runs on main/manual dispatch with synthetic credentials.
+accounting only. Slurm CI runs on main, the beta branch, manual dispatch and as a
+release gate, with synthetic credentials. It includes environment creation/update,
+branching/joining workflows, storage probes and investigations. The image provides
+Python's venv bootstrap; it does not simulate GPU hardware.
 Run default tests and `tools/package_smoke.py` separately.
 
 The personal-connector overlay checks 60-second owner-permitted renewal, eight
@@ -135,5 +138,5 @@ summary includes deliberate waits.
 Fault injection exists only in a child launcher restricted to
 `brokerjob@slurm-fixture`, never an application endpoint. On failure CI captures
 `SIGUSR1` thread stacks without locals before bounded logs/state cleanup. These
-checks neither explain the uncaptured portal stall nor certify institutional
-VPN/MFA. Module-specific fixture commands live in their respective guides.
+checks do not certify institutional VPN/MFA. The unreproduced portal stall is
+deferred until recurrence. Module-specific commands live in their guides.

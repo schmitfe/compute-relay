@@ -18,6 +18,9 @@ import secrets
 import stat
 import sys
 
+from .local_filesystem import absolute_path
+from .remote.filesystem import open_file
+
 
 class ConnectorProfileError(ValueError):
     """An actionable diagnostic containing no connector-state contents."""
@@ -41,7 +44,7 @@ def _path(value):
         raise ConnectorProfileError("Use an accessible local directory path without control characters.")
     # absolute() normalizes a relative CLI path but deliberately does not follow
     # symlinks; directory validation below rejects them at every level.
-    return Path(os.path.abspath(os.path.expanduser(value)))
+    return absolute_path(os.path.abspath(os.path.expanduser(value)))
 
 
 def default_directory():
@@ -83,7 +86,7 @@ def _directory(path, *, create):
 
 
 def _private_file(directory_fd, filename, flags):
-    fd = os.open(filename, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
+    fd = open_file(filename, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
     metadata = os.fstat(fd)
     if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
             or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077):

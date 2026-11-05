@@ -10,7 +10,7 @@ import shutil
 import stat
 import zipfile
 
-from .local_filesystem import PRIVATE_NAMES, absolute_path, check_path, ensure_directory, parent_descriptor
+from .local_filesystem import PRIVATE_NAMES, absolute_path, check_path, ensure_directory, parent_descriptor, portable_name
 from .transfer import CHUNK_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES
 
 
@@ -44,7 +44,7 @@ def _relative(name):
     if (not isinstance(name, str) or not name or len(name) > 1024
             or "\\" in name or ":" in name or any(ord(char) < 32 or ord(char) == 127 for char in name)
             or name.startswith("/") or len(name.split("/")) > 17
-            or any(part in {"", ".", ".."} | PRIVATE_NAMES for part in name.split("/"))):
+            or any(portable_name(part) in {"", ".", ".."} | PRIVATE_NAMES for part in name.split("/"))):
         raise ValueError("Choose canonical relative paths outside private configuration directories.")
     return name
 
@@ -101,7 +101,7 @@ def pack_zip(directory, paths, output, *, max_files=MAX_FILES, max_bytes=MAX_BUN
     if not isinstance(paths, (list, tuple)) or not 1 <= len(paths) <= max_files:
         raise ValueError("Select between one and the maximum number of explicit files.")
     names = sorted(_relative(name) for name in paths)
-    if len(set(names)) != len(names) or output in names:
+    if len({portable_name(name) for name in names}) != len(names) or portable_name(output) in {portable_name(name) for name in names}:
         raise ValueError("Archive inputs must be unique and exclude the output path.")
     total = 0
     with _output(destination) as stream:
@@ -143,6 +143,7 @@ def unpack_zip(directory, archive, output, *, max_files=MAX_FILES, max_bytes=MAX
                 names, regular = set(), set()
                 for entry in entries:
                     name = _relative(entry.orig_filename[:-1] if entry.is_dir() else entry.orig_filename)
+                    name = portable_name(name)
                     kind = stat.S_IFMT(entry.external_attr >> 16)
                     if (name in names or entry.flag_bits & 1
                             or kind not in (0, stat.S_IFDIR if entry.is_dir() else stat.S_IFREG)

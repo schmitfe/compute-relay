@@ -783,9 +783,14 @@ def _report_replay(worker, attempt_id, data, payload_hash):
 def _save_report_receipt(attempt, data, payload_hash, response, extension_data=None):
     WorkerReport.objects.create(lease_id=data["lease_id"], attempt=attempt, generation=attempt.generation,
         payload_sha256=payload_hash, response=response, extension_data=extension_data or {})
-    retained = list(WorkerReport.objects.filter(attempt=attempt).order_by("-generation", "lease_id")
-        .values_list("lease_id", flat=True)[:MAX_REPORT_RECEIPTS_PER_ATTEMPT])
-    WorkerReport.objects.filter(attempt=attempt).exclude(lease_id__in=retained).delete()
+    reports = WorkerReport.objects.filter(attempt=attempt).order_by("-generation", "lease_id")
+    # Preserve finalization evidence while later accounting polls rotate receipts.
+    metadata = reports.exclude(extension_data={}).values_list("lease_id", flat=True).first()
+    retained = list(reports.exclude(lease_id=metadata).values_list("lease_id", flat=True)
+        [:MAX_REPORT_RECEIPTS_PER_ATTEMPT - bool(metadata)])
+    if metadata:
+        retained.append(metadata)
+    reports.exclude(lease_id__in=retained).delete()
 
 
 def report(worker, attempt_id, data):

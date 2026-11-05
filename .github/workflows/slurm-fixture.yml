@@ -2,8 +2,9 @@ name: Disposable Slurm acceptance
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/beta-0.1]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -52,6 +53,31 @@ jobs:
         run: docker compose up -d --wait control slurm worker
       - name: Verify reviewed execution, grouped closeout and installed manifest export
         run: docker compose exec -T control python /opt/investigation_smoke.py --demo-file /run/demo/demo.json --confirm-disposable-fixture
+      - name: Remove fixture state
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  modules:
+    name: Slurm / ${{ matrix.module }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [environments, workflows, storage]
+    env:
+      COMPOSE_FILE: deploy/compose.test.yml:deploy/compose.${{ matrix.module }}-test.yml
+      COMPOSE_PROJECT_NAME: cb-${{ matrix.module }}-ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the disposable module fixture
+        run: docker compose --profile test build control slurm worker smoke
+      - name: Start disposable services
+        run: docker compose up -d --wait control slurm worker
+      - name: Verify native execution and module results
+        run: docker compose --profile test run --rm --no-deps smoke
       - name: Remove fixture state
         if: always()
         run: docker compose down --volumes --remove-orphans

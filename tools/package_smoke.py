@@ -137,6 +137,7 @@ def installed_launcher(python, root, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-launch", action="store_true", help="Only build/install/import; launcher acceptance remains pending")
+    parser.add_argument("--dist-dir", type=Path, help="Retain verified wheel and source archive for release publishing")
     args = parser.parse_args()
     clean_env = {key: value for key, value in os.environ.items() if not key.startswith("BROKER_") and
         key not in {"PYTHONPATH", "DJANGO_SETTINGS_MODULE", "VIRTUAL_ENV"}}
@@ -171,6 +172,10 @@ def main():
         executable = python.parent / ("compute-relay.exe" if os.name == "nt" else "compute-relay")
         run([executable, "--help"], cwd=root, env=clean_env)
         result = "not requested (--skip-launch)" if args.skip_launch else installed_launcher(python, root, clean_env)
+        if args.dist_dir:
+            args.dist_dir.mkdir(parents=True, exist_ok=False)
+            for archive in distribution.iterdir():
+                shutil.copy2(archive, args.dist_dir)
         print(json.dumps({"wheel": "passed", "sdist": "passed", "runtime_files": count,
             "clean_install": "passed", "dependency_check": "passed", "launcher": result}, sort_keys=True))
 

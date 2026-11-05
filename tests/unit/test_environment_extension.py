@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import sysconfig
+from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -420,6 +421,71 @@ def test_durable_worker_metadata_can_recover_publication_without_remote_io(conte
     context.services.sync_from_report(report)
     build.refresh_from_db()
     assert build.state == "ready" and build.receipt["generation"] == attempt.generation
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("delayed_accounting", [False, True])
+def test_poll_recovers_failed_publication_from_durable_report(context, monkeypatch, delayed_accounting):
+    build, attempt = executed(context)
+    metadata = finalization(build, attempt)
+    native = attempt.native_identity
+    worker = Client(HTTP_AUTHORIZATION="Bearer environment-worker")
+
+    def post(path, body):
+        response = worker.post(path, json.dumps(body), content_type="application/json")
+        assert response.status_code == 200, response.content
+        return response.json()
+
+    def poll():
+        return post("/internal/v1/lease", {})["lease"]
+
+    def report(lease, **body):
+        return post(f"/internal/v1/attempts/{attempt.id}/report", {
+            "lease_id": lease["id"], "generation": lease["generation"], **body})
+
+    lease = poll()
+    post(f"/internal/v1/attempts/{attempt.id}/dispatch", {
+        "lease_id": lease["id"], "generation": lease["generation"],
+        "manifest_sha256": build.job.manifest_sha256,
+        "connection_revision_sha256": context.connection.revision_sha256})
+    assert report(lease, outcome="submitted", native_identity=native)["accepted"]
+    clock = timezone.now() + timedelta(seconds=60)
+    monkeypatch.setattr(timezone, "now", lambda: clock)
+    observation = {"state": "completed", "terminal": True, "accounting": {
+        "cpu_core_seconds": 2, "gpu_device_seconds": 0, "final": not delayed_accounting}}
+    assert report(poll(), outcome="observed", native_identity=native, observation=observation)["accepted"]
+    lease = poll()
+    assert lease["collection_only"]
+    def interrupted(*_args):
+        raise RuntimeError("publication interrupted")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(context.services, "after_report", interrupted)
+        assert report(lease, outcome="observed", native_identity=native, observation=observation,
+            collection_state="complete", extension_data={"environments": {
+                "environment_finalization": metadata, "generation": lease["generation"]}})["accepted"]
+    build.refresh_from_db()
+    assert build.environment_id is None
+    if delayed_accounting:
+        # Retaining the accepted finalization must not depend on how long sacct takes.
+        for _ in range(core.MAX_REPORT_RECEIPTS_PER_ATTEMPT + 2):
+            clock += timedelta(seconds=60)
+            assert report(poll(), outcome="observed", native_identity=native, observation=observation)["accepted"]
+        clock += timedelta(seconds=60)
+        lease = poll()
+        observation["accounting"]["final"] = True
+        assert report(lease, outcome="observed", native_identity=native, observation=observation)["accepted"]
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: pytest.fail("publication ran remote I/O"))
+    for _ in range(2):
+        clock += timedelta(seconds=60)
+        assert poll() is None
+        build.refresh_from_db()
+        assert build.state == "ready" and build.environment.configuration["prefix"] == metadata["prefix"]
+    attempt.refresh_from_db();context.grant.refresh_from_db()
+    assert Environment.objects.count() == 2 and Attempt.objects.count() == 1
+    assert (attempt.accounting_state, attempt.collection_state) == ("settled", "complete")
+    assert context.grant.spent_cpu == 2 and context.grant.reserved_cpu == 0
+    assert WorkerReport.objects.filter(attempt=attempt).count() <= core.MAX_REPORT_RECEIPTS_PER_ATTEMPT
 
 
 def test_worker_finalizes_only_metadata_and_fake_results_never_look_verified():

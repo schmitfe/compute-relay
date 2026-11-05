@@ -4,17 +4,28 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import stat
+import sys
+import unicodedata
 
 
 MAX_FILE_BYTES = 1024 * 1024
-PRIVATE_NAMES = {".compute-relay", ".compute-relay-receipt.json", ".git", ".codex", ".claude", ".ssh", ".aws", "_broker"}
+PRIVATE_NAMES = {".compute-relay", ".compute-relay-receipt.json", ".compute-relay-fetch.json", ".git", ".codex", ".claude", ".ssh", ".aws", "_broker"}
+
+
+def portable_name(value):
+    """Detect names that alias on default macOS filesystems before any writes."""
+    return unicodedata.normalize("NFD", value).casefold()
 
 
 def absolute_path(value):
     path = Path(value).expanduser()
     if ".." in path.parts or any(ord(char) < 32 for char in str(path)):
         raise ValueError("Choose a path without parent traversal or control characters.")
-    return path.absolute()
+    path = path.absolute()
+    # macOS exposes these root-owned system directories through fixed aliases.
+    if sys.platform == "darwin" and len(path.parts) > 1 and path.parts[1] in {"tmp", "var", "etc"}:
+        path = Path("/private", *path.parts[1:])
+    return path
 
 
 def check_path(path, *, directory=False, private=False):

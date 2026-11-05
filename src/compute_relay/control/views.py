@@ -18,6 +18,7 @@ from django.views.decorators.csrf import csrf_exempt, csrf_protect, ensure_csrf_
 from django.views.decorators.debug import sensitive_post_parameters
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 
+from compute_relay import __version__
 from compute_relay.domain.validation import strict_json, relative_path
 from . import services
 from .auth import human_permission, project_credential, worker_identity, require_connection
@@ -89,7 +90,7 @@ def idem(request, credential, operation, document, action):
 
 @boundary("GET")
 def health(request):
-    result = {"status": "ok", "profile": settings.PROFILE, "version": "0.1.0.dev0"}
+    result = {"status": "ok", "profile": settings.PROFILE, "version": __version__}
     if settings.BROKER_LOCAL_RUNTIME == "1":
         for key in ("installation_id", "instance_id"):
             value = getattr(settings, "BROKER_" + key.upper(), None)

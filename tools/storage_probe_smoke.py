@@ -178,7 +178,8 @@ def run(base_url, demo_file, timeout):
                 break
             time.sleep(1)
         require(observation is not None, "Protected worker did not return fresh fixture metadata before the deadline")
-        require("/home/brokerjob/jobs" not in json.dumps(snapshot), "Agent storage inventory disclosed an absolute root")
+        require(selected.get("root") == "/home/brokerjob/jobs" and selected.get("project_id") == project_id,
+                "Agent storage inventory did not expose the exact owner-authorized project location")
         plan = agent.request("POST", inventory_path + "/plan", {"schema_version": "1.0", "connection_id": demo["connection_id"],
             "estimates": [{"role": "results", "target_id": target_id, "peak_bytes": 1048576, "peak_inodes": 10,
                            "retained_bytes": 1048576, "retained_inodes": 10}]})

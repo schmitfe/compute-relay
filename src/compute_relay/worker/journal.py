@@ -15,6 +15,7 @@ from uuid import UUID
 
 from .client import strict_json
 from compute_relay.diagnostics import failure
+from compute_relay.remote.filesystem import open_file
 
 
 class Journal:
@@ -41,7 +42,7 @@ class Journal:
     @contextmanager
     def locked(self, attempt_id):
         path = self._path(attempt_id).with_suffix(".lock")
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = open_file(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             yield
@@ -52,7 +53,7 @@ class Journal:
     async def async_locked(self, attempt_id, *, timeout=5):
         """Honor the same process fence without blocking the event loop on flock."""
         path = self._path(attempt_id).with_suffix(".lock")
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = open_file(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             async with asyncio.timeout(timeout):
                 while True:

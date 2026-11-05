@@ -89,7 +89,7 @@ def test_browse_defaults_to_home_and_returns_only_real_child_directories(fake_ho
     assert response == {"ok": True, "path": str(fake_home), "parent": str(fake_home.parent), "home": str(fake_home),
         "entries": [{"name": '<a title="quote">', "path": str(fake_home / '<a title="quote">')},
                     {"name": "zeta", "path": str(fake_home / "zeta")}], "writable": True, "truncated": False, "scanned_entries": 4}
-    assert "private" not in json.dumps(response)
+    assert "private contents are never read" not in json.dumps(response)
 
 
 def test_browse_explicit_symlink_location_returns_canonical_path(fake_home, tmp_path):
@@ -154,6 +154,7 @@ def test_browse_does_not_pull_an_extra_entry_beyond_its_scan_budget(fake_home, m
     assert result["truncated"] and result["scanned_entries"] == pulled == 1
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="APFS rejects undecodable filenames at creation; Linux Slurm exercises this case")
 def test_browse_skips_non_utf8_names_instead_of_emitting_lone_surrogates(fake_home):
     os.mkdir(os.fsencode(fake_home) + b"/invalid-\xff")
     result = setup.handle_request({"operation": "browse"})

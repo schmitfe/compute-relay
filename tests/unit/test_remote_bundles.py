@@ -8,6 +8,7 @@ import copy
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -244,3 +245,34 @@ def test_helper_bundle_is_streamed_before_request(tmp_path):
     assert len(argv[-1]) < 512 and "\n" not in argv[-1] and "\\" not in argv[-1]
     result = subprocess.run(shlex.split(argv[-1]), input=payload, capture_output=True, check=True)
     assert json.loads(result.stdout) == {"request": {"input": "\\quoted"}, "unicode": "ä"}
+
+
+def test_shared_file_creation_survives_native_create_race_without_truncation(tmp_path, monkeypatch):
+    from compute_relay.remote.filesystem import open_regular
+    original = os.open
+
+    def native_open(path, flags, *args, **kwargs):
+        if path == 'lock' and flags & os.O_CREAT and not flags & os.O_EXCL:
+            raise FileNotFoundError('Observed concurrent create failure on macOS')
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', native_open)
+    directory = original(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        first = open_regular(directory, 'lock', os.O_RDWR | os.O_CREAT)
+        os.write(first, b'durable identity')
+        second = open_regular(directory, 'lock', os.O_RDWR | os.O_CREAT)
+        try:
+            assert os.read(second, 100) == b'durable identity'
+            assert os.fstat(first).st_ino == os.fstat(second).st_ino
+        finally:
+            os.close(first)
+            os.close(second)
+        with pytest.raises(FileExistsError):
+            open_regular(directory, 'lock', os.O_RDWR | os.O_CREAT | os.O_EXCL)
+        (tmp_path / 'alias').symlink_to(tmp_path / 'lock')
+        with pytest.raises(OSError):
+            open_regular(directory, 'alias', os.O_RDWR | os.O_CREAT)
+        assert (tmp_path / 'lock').read_bytes() == b'durable identity'
+    finally:
+        os.close(directory)

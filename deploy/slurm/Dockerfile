@@ -7,7 +7,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && apt-get update \
     && apt-get install --yes --no-install-recommends \
        slurm-wlm slurmdbd slurm-wlm-mysql-plugin munge \
-       mariadb-server openssh-server python3 procps util-linux ca-certificates libpmix2 environment-modules \
+       mariadb-server openssh-server python3 python3-venv procps util-linux ca-certificates libpmix2 environment-modules \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/munge/munge.key /etc/ssh/ssh_host_* \
     && useradd --create-home --shell /bin/bash --uid 20001 brokerjob \

@@ -98,10 +98,12 @@ def test_corrupt_object_name_is_rejected_before_cleanup(management, digest):
 @pytest.mark.parametrize("changes", [
     {"state": "running"}, {"state": "submission_uncertain"}, {"accounting_state": "settlement_pending"},
     {"collection_pending": True}, {"collection_state": "failed"}, {"collection_state": "retry_pending"},
-    {"lease_expires_at": timezone.now() + timedelta(minutes=1)},
+    {"lease_expires_at": timedelta(minutes=1)},
 ])
 def test_unfinished_or_uncertain_work_is_never_a_cleanup_candidate(management, changes):
     job, attempt, blob, artifact = output(management)
+    if "lease_expires_at" in changes:
+        changes = {"lease_expires_at": timezone.now() + changes["lease_expires_at"]}
     Attempt.objects.filter(id=attempt.id).update(**changes)
     assert cleanup.preview(management.project, job)["rows"] == []
     assert blob_path(blob).exists() and Artifact.objects.filter(id=artifact.id).exists()

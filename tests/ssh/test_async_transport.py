@@ -1,10 +1,9 @@
 """First-party local subprocess fixtures; no network, keys or real Slurm jobs."""
 
 import asyncio
-import errno
 import json
 import os
-from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -24,58 +23,49 @@ def assert_process_stopped(pid, *, timeout=2):
     # Reaping the direct child does not wait for its descendants to finish dying.
     deadline = time.monotonic() + timeout
     while True:
-        try:
-            status = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-        except (FileNotFoundError, ProcessLookupError):
+        result = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=1, env={"PATH": "/usr/bin:/bin", "LANG": "C"})
+        if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
             return
-        state = status.split()[2]
-        if state == "Z":
+        result.check_returncode()
+        state = result.stdout.strip()
+        if not state or state.startswith("Z"):
             return
         assert time.monotonic() < deadline, f"Process {pid} is still alive (state {state})"
         time.sleep(0.01)
 
 
-@pytest.mark.parametrize("error", [FileNotFoundError(errno.ENOENT, "reaped"), ProcessLookupError(errno.ESRCH, "reaped")])
-def test_process_stop_check_accepts_reaping_during_the_single_read(monkeypatch, error):
-    reads = []
-    def read(path, **kwargs):
-        reads.append(path)
-        raise error
-    monkeypatch.setattr(Path, "read_text", read)
-    assert_process_stopped(123)
-    assert reads == [Path("/proc/123/stat")]
-
-
-@pytest.mark.parametrize("state", ["Z", "R", "S", "D"])
-def test_process_stop_check_accepts_zombie_but_rejects_running_process(monkeypatch, state):
-    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: f"123 (python) {state} 1 2 3")
-    if state == "Z":
+@pytest.mark.parametrize("state", ["", "Z", "Z+", "R", "S", "D"])
+def test_process_stop_check_accepts_missing_or_zombie_but_rejects_live_process(monkeypatch, state):
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs:
+        subprocess.CompletedProcess([], int(not state), state, ""))
+    if not state or state.startswith("Z"):
         assert_process_stopped(123)
     else:
         with pytest.raises(AssertionError):
             assert_process_stopped(123, timeout=0)
 
 
-@pytest.mark.parametrize("final_state", ["Z", FileNotFoundError(), ProcessLookupError()])
-def test_process_stop_check_waits_for_pending_kill(monkeypatch, final_state):
-    states = iter(["R", final_state])
-    def read(*_args, **_kwargs):
-        state = next(states)
-        if isinstance(state, OSError):
-            raise state
-        return f"123 (python) {state} 1 2 3"
-    monkeypatch.setattr(Path, "read_text", read)
+def test_process_stop_check_waits_for_pending_kill(monkeypatch):
+    states = iter(["R", "Z"])
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs:
+        subprocess.CompletedProcess([], 0, next(states), ""))
     assert_process_stopped(123)
 
 
-@pytest.mark.parametrize("error", [PermissionError(errno.EACCES, "denied"), OSError(errno.EIO, "failed")])
-def test_process_stop_check_does_not_hide_unrelated_read_errors(monkeypatch, error):
-    def read(*_args, **_kwargs):
-        raise error
-    monkeypatch.setattr(Path, "read_text", read)
-    with pytest.raises(type(error)) as raised:
+def test_process_stop_check_does_not_hide_ps_errors(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs:
+        subprocess.CompletedProcess([], 1, "", "permission denied"))
+    with pytest.raises(subprocess.CalledProcessError):
         assert_process_stopped(123)
-    assert raised.value is error
+
+
+def test_process_stop_check_rejects_actual_live_process_and_accepts_reaped_child():
+    with pytest.raises(AssertionError):
+        assert_process_stopped(os.getpid(), timeout=0)
+    child = subprocess.Popen([sys.executable, "-I", "-c", "pass"])
+    child.wait(timeout=5)
+    assert_process_stopped(child.pid)
 
 
 def test_async_streaming_is_bidirectional_and_does_not_block_the_event_loop():
@@ -209,4 +199,27 @@ def test_async_helper_validation_does_not_spawn_for_oversized_or_invalid_operati
         item.connection["python_path"] = "python3"
         with pytest.raises(TransportError, match="interpreter"):
             await item.call_helper("fixed source", {})
+    asyncio.run(scenario())
+
+
+def test_group_signal_permission_race_still_reaps_owned_child(monkeypatch):
+    async def scenario():
+        spawned = []
+        create = asyncio.create_subprocess_exec
+
+        async def capture(*args, **kwargs):
+            process = await create(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        def denied(*_args):
+            raise PermissionError('Group disappeared during cleanup')
+
+        monkeypatch.setattr(asyncio, 'create_subprocess_exec', capture)
+        monkeypatch.setattr(os, 'killpg', denied)
+        with pytest.raises(TransportError, match='timed out'):
+            await transport(timeout=1)._run([sys.executable, '-I', '-c', 'import time; time.sleep(30)'], b'')
+        assert spawned[0].returncode is not None
+        with pytest.raises(ChildProcessError):
+            os.waitpid(spawned[0].pid, os.WNOHANG)
     asyncio.run(scenario())

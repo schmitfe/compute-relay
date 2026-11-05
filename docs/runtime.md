@@ -201,10 +201,25 @@ acceptance verified early completion, four outputs (36 MiB), exact accounting,
 portal responsiveness, cleanup and owner-confirmed MFA reconnect. Earlier manual
 expiry recovery collected 2.44 GB without resubmission; it predates renewal.
 
-[Automated checks](testing.md) add native transport/recovery faults and synthetic
-MCP load. Historical experiments stay in Git history. GPU/Mac acceptance,
-sustained independent-writer/multi-GiB load, real-site outage classes and the
-original portal stall remain [open work](roadmap.md).
+Further beta acceptance on 5 November used branch `codex/beta-0.1`:
+
+- Claude Code prepared and retrieved two real agmn2 Monte Carlo jobs through MCP,
+  then verified both output hashes with the SDK: four CPU-seconds charged against
+  a 900 CPU-second cap, zero reserved and no extra submissions.
+- Typed `a6000` and generic `gpu:1` allocations each executed a CUDA kernel and
+  returned verified results on an A40. The site intentionally groups this hardware
+  under `a6000`; resource labels are not physical-model guarantees. Including one
+  failed initial probe, three jobs settled six CPU-seconds/three GPU-seconds, zero reserved.
+- Disposable native Slurm passed owner-authorized pinned-wheel venv creation,
+  reuse and immutable update (four jobs), a reviewed diamond DAG joining two
+  artifact branches (four jobs), and advisory byte/inode probes with no compute
+  admission. These module runs are fixture evidence, not agmn2 site certification.
+
+[Automated checks](testing.md) cover publication-hook recovery, native transport
+faults and synthetic MCP load. Historical experiments stay in Git history.
+Sustained independent-writer/multi-GiB load and additional real-site outage classes
+remain [open work](roadmap.md). The original portal stall has not recurred or been
+reproduced; investigation is deferred until recurrence.
 
 ## Bundled modules
 
