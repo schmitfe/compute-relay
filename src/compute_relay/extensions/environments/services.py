@@ -65,7 +65,7 @@ def _current_build_policy(build):
 
 
 def update_policy(project, user, configuration):
-    human_permission(user, project, "project_admin")
+    human_permission(user, project)
     validate_policy(configuration)
     bases = set(configuration["allowed_base_environment_ids"])
     if set(str(e.id) for e in project.environments.filter(id__in=bases, connection_id__isnull=False)) != bases:
@@ -383,7 +383,7 @@ def sync_from_report(worker_report):
 
 def promote(build, user):
     project = build.spec.project
-    human_permission(user, project, "project_admin")
+    human_permission(user, project)
     if build.state != "ready" or not build.environment_id:
         raise BrokerError("ENVIRONMENT_NOT_READY", "Only a verified real build can be permitted for jobs.", 409)
     return _permit(build, user.id)

@@ -186,7 +186,7 @@ def cleanup(project, actor, token, job=None):
 def portal(request, project_id=None, job_id=None):
     job = get_object_or_404(Job.objects.select_related("project"), id=job_id) if job_id else None
     project = job.project if job else get_object_or_404(Project, id=project_id)
-    human_permission(request.user, project, "project_admin")
+    human_permission(request.user, project)
     from . import remote_cleanup
     if request.method == "POST":
         if request.POST.get("confirm") != "delete":

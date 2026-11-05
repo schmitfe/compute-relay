@@ -47,7 +47,7 @@ def human_view(function):
 
 def managed_project(request, project_id):
     project = get_object_or_404(Project, id=project_id)
-    human_permission(request.user, project, "project_admin")
+    human_permission(request.user, project)
     return project
 
 
@@ -73,9 +73,7 @@ def _one_time_record(project, actor, operation, nonce, payload, credential_id):
 
 
 def issue_key(project, user, data):
-    human_permission(user, project, "viewer")
-    for scope in data["scopes"]:
-        human_permission(user, project, "viewer" if scope in {"jobs:read", "artifacts:read"} else "submitter")
+    human_permission(user, project)
     payload = _key_payload(data)
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
@@ -91,7 +89,7 @@ def issue_key(project, user, data):
 
 
 def rotate_key(project, credential, user, nonce):
-    human_permission(user, project, "viewer")
+    human_permission(user, project)
     with transaction.atomic():
         Project.objects.select_for_update().get(id=project.id)
         old = ProjectCredential.objects.select_for_update().get(id=credential.id, project=project)
@@ -131,7 +129,7 @@ def save_project(user, data, project=None):
             project = Project.objects.create(name=data["name"], owner=user, paused=data["paused"])
             grant = None
         else:
-            human_permission(user, project, "project_admin")
+            human_permission(user, project)
             project = Project.objects.select_for_update().get(id=project.id)
             grant = Grant.objects.select_for_update().get(project=project)
             if data["cpu_seconds"] < grant.spent_cpu + grant.reserved_cpu or data["gpu_seconds"] < grant.spent_gpu + grant.reserved_gpu:
@@ -206,7 +204,7 @@ def project_detail(request, project_id):
 @human_view
 def key_new(request, project_id):
     project = get_object_or_404(Project, id=project_id)
-    human_permission(request.user, project, "viewer")
+    human_permission(request.user, project)
     form = KeyForm(request.POST if request.method == "POST" else None, project=project)
     if request.method == "POST" and form.is_valid():
         credential, secret = issue_key(project, request.user, form.cleaned_data)
@@ -220,7 +218,7 @@ def key_rotate(request, project_id, key_id):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     project = get_object_or_404(Project, id=project_id)
-    human_permission(request.user, project, "viewer")
+    human_permission(request.user, project)
     credential = get_object_or_404(ProjectCredential, id=key_id, project=project)
     credential, secret = rotate_key(project, credential, request.user, request.POST.get("submission_id"))
     return render(request, "broker/key_created.html", {"credential": credential, "secret": secret, "project": project, "rotated": True,

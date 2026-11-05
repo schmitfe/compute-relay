@@ -30,18 +30,17 @@ def project_credential(request, scope=None):
     if scope is not None and scope not in credential.scopes:
         raise BrokerError("SCOPE_DENIED", "Credential does not permit this operation.", 403)
     # Identity discovery needs current ownership, not a job scope.
-    require_credential_actor(credential, scope if scope is not None else "jobs:read")
+    require_credential_actor(credential)
     return credential
 
 
-def require_credential_actor(credential, scope="jobs:execute"):
+def require_credential_actor(credential):
     user = User.objects.filter(id=credential.issued_by_id, is_active=True).first()
     if user is None:
         raise BrokerError("AUTH_REQUIRED", "The issuing user is disabled or this key has no verified owner.", 403)
     if not current_user_active(user):
         raise BrokerError("AUTH_REQUIRED", "The issuing user is not the active local owner.", 403)
-    role = "viewer" if scope in {"jobs:read", "artifacts:read"} else "submitter"
-    human_permission(user, credential.project, role)
+    human_permission(user, credential.project)
     return user
 
 
@@ -72,7 +71,8 @@ def require_connection(credential, connection_id):
         raise BrokerError("CONNECTION_DENIED", "This key cannot access the cluster.", 403)
 
 
-def human_permission(user, project, role):
+def human_permission(user, project):
+    """Only the active local owner can manage or inspect their project."""
     if not user.is_authenticated or not user.is_active:
         raise BrokerError("AUTH_REQUIRED", "Sign in with a human account.", 401)
     if not current_user_active(user):

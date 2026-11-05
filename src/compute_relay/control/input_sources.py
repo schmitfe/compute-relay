@@ -17,7 +17,7 @@ def current_credential(credential):
         expires_at__gt=timezone.now()).first()
     if current is None:
         raise BrokerError("AUTH_REQUIRED", "Credential is invalid, revoked or expired.", 403)
-    require_credential_actor(current, "jobs:read")
+    require_credential_actor(current)
     return current
 
 

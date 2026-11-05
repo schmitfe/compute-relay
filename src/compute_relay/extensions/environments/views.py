@@ -135,7 +135,7 @@ def policy_api(request, project_id):
     if not request.user.is_authenticated:
         raise BrokerError("HUMAN_REQUIRED", "A human administrator session is required.", 403)
     project = Project.objects.get(id=project_id)
-    human_permission(request.user, project, "project_admin")
+    human_permission(request.user, project)
     policy = services.update_policy(project, request.user, body(request))
     return {"revision": policy.revision, "configuration": policy.configuration}
 
@@ -146,7 +146,7 @@ def portal(request, project_id):
         return redirect("/login/")
     project = Project.objects.get(id=project_id)
     try:
-        human_permission(request.user, project, "viewer")
+        human_permission(request.user, project)
     except BrokerError:
         return HttpResponse("Project access is required.", status=403)
     if request.method != "GET":
@@ -165,7 +165,7 @@ def policy_portal(request, project_id):
         return redirect("/login/")
     project = Project.objects.get(id=project_id)
     try:
-        human_permission(request.user, project, "project_admin")
+        human_permission(request.user, project)
     except BrokerError:
         return HttpResponse("Project administration is required.", status=403)
     if request.method not in {"GET", "POST"}:

@@ -18,10 +18,6 @@ from .models import Connection, ExecutionRequest, Grant, Job, Project
 from .resource_api import job_approval_requirements, resource_validation
 
 
-def _projects(user, role):
-    return Project.objects.filter(owner=user)
-
-
 def _render(request, name, context):
     return render_to_string("broker/" + name + ".html", context, request=request)
 
@@ -38,15 +34,16 @@ def _jobs(request, projects, page_path):
 
 
 def _dashboard(request):
+    projects = Project.objects.filter(owner=request.user)
     return {"fragments": {
-        "live-job-list": _jobs(request, _projects(request.user, "viewer"), "/"),
-        "live-review-notifications": _pending(request, _projects(request.user, "approver")),
+        "live-job-list": _jobs(request, projects, "/"),
+        "live-review-notifications": _pending(request, projects),
     }}
 
 
 def _project(request, object_id):
     project = Project.objects.get(id=object_id)
-    human_permission(request.user, project, "project_admin")
+    human_permission(request.user, project)
     return {"fragments": {
         "live-job-list": _jobs(request, [project], f"/projects/{project.id}/"),
         "live-review-notifications": _pending(request, [project]),
@@ -56,7 +53,7 @@ def _project(request, object_id):
 
 def _review(request, object_id):
     job = Job.objects.with_summary().get(id=object_id)
-    human_permission(request.user, job.project, "approver")
+    human_permission(request.user, job.project)
     # Do not retrieve package files, source scripts or object-store content just
     # to update status. History queries are bounded independently of its size.
     policy = Grant.objects.get(project_id=job.project_id).policy

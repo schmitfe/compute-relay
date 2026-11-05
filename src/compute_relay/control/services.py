@@ -379,7 +379,7 @@ def request_execution(job, credential):
 
 @transaction.atomic
 def decide(job, user, document):
-    human_permission(user, job.project, "approver")
+    human_permission(user, job.project)
     Project.objects.select_for_update().get(id=job.project_id)
     grant = Grant.objects.select_for_update().get(project_id=job.project_id)
     execution = ExecutionRequest.objects.select_for_update().filter(id=document["execution_request_id"], job=job).first()

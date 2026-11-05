@@ -265,7 +265,7 @@ def decisions(request, job_id):
     if not request.user.is_authenticated:
         raise BrokerError("HUMAN_REQUIRED", "A human review session is required.", 403)
     job = Job.objects.get(id=job_id)
-    human_permission(request.user, job.project, "approver")
+    human_permission(request.user, job.project)
     document = body(request)
     if not isinstance(document.get("comment", ""), str):
         raise BrokerError("INVALID_REQUEST", "Comment must be text.")
@@ -483,7 +483,7 @@ def review(request, job_id):
         return redirect("/login/")
     try:
         job = Job.objects.get(id=job_id)
-        human_permission(request.user, job.project, "approver")
+        human_permission(request.user, job.project)
         error = ""
         if request.method == "POST":
             action = request.POST.get("decision")
@@ -528,7 +528,7 @@ def human_attempt_action(request, job_id, attempt_id, action):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     job = get_object_or_404(Job, id=job_id)
-    human_permission(request.user, job.project, "approver")
+    human_permission(request.user, job.project)
     attempt = get_object_or_404(Attempt.objects.select_related("connection"), id=attempt_id, job=job)
     if action not in {"cancel", "collect"}:
         raise BrokerError("INVALID_REQUEST", "Choose cancellation or output recovery.")
@@ -552,7 +552,7 @@ def human_artifact(request, job_id, artifact_id):
     from django.http import FileResponse
     from .storage import open_verified_blob
     job = get_object_or_404(Job, id=job_id)
-    human_permission(request.user, job.project, "viewer")
+    human_permission(request.user, job.project)
     artifact = get_object_or_404(Artifact.objects.select_related("blob"), id=artifact_id, attempt__job=job,
         path__in=job.request.get("outputs", []))
     return FileResponse(open_verified_blob(artifact.blob), as_attachment=True,

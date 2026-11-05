@@ -60,7 +60,7 @@ def finish(request, investigation_id):
 @human_view
 def portal(request, project_id):
     project = get_object_or_404(Project, id=project_id)
-    human_permission(request.user, project, "viewer")
+    human_permission(request.user, project)
     return render(request, "broker_investigations/list.html", {"project": project,
         "investigations": Investigation.objects.filter(project=project).order_by("-created_at")[:100]})
 
@@ -68,6 +68,6 @@ def portal(request, project_id):
 @human_view
 def review(request, investigation_id):
     group = get_object_or_404(Investigation.objects.select_related("project"), id=investigation_id)
-    human_permission(request.user, group.project, "viewer")
+    human_permission(request.user, group.project)
     return render(request, "broker_investigations/detail.html", {"project": group.project, "investigation": group,
         "members": group.members.select_related("job").order_by("created_at", "job_id")})

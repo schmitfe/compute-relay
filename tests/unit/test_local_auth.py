@@ -57,7 +57,7 @@ def test_owner_cannot_read_foreign_project_even_if_superuser(owner):
     owner.is_superuser = True
     owner.save(update_fields=["is_superuser"])
     with pytest.raises(BrokerError) as denied:
-        human_permission(owner, project, "viewer")
+        human_permission(owner, project)
     assert denied.value.code == "SCOPE_DENIED"
 
 

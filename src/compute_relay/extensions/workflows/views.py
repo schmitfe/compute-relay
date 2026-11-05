@@ -63,7 +63,7 @@ def cancel(request, run_id):
 @human_view
 def portal(request, project_id):
     project = get_object_or_404(Project, id=project_id)
-    human_permission(request.user, project, "viewer")
+    human_permission(request.user, project)
     runs = WorkflowRun.objects.filter(revision__project=project).select_related("revision").order_by("-created_at")[:50]
     return render(request, "broker_workflows/list.html", {"project": project, "runs": runs})
 
@@ -71,6 +71,6 @@ def portal(request, project_id):
 @human_view
 def review(request, run_id):
     run = get_object_or_404(WorkflowRun.objects.select_related("revision__project"), id=run_id)
-    human_permission(request.user, run.revision.project, "viewer")
+    human_permission(request.user, run.revision.project)
     services._refresh(run)
     return render(request, "broker_workflows/run.html", {"run": run, "project": run.revision.project, "summary": services.serialize_run(run)})

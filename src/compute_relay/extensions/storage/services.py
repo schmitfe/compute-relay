@@ -62,7 +62,7 @@ def confirmed_directory_root(registration):
 def _project_connection(user, project, connection):
     if project is None or not getattr(project, "id", None):
         raise BrokerError("STORAGE_PROJECT_REQUIRED", "Select a project for this storage location.")
-    human_permission(user, project, "project_admin")
+    human_permission(user, project)
     if (not connection.enabled or connection.archived
             or not project.connections.filter(id=connection.id, enabled=True, archived=False).exists()):
         raise BrokerError("STORAGE_TARGET_DENIED", "Choose an enabled cluster assigned to this project.", 403)
