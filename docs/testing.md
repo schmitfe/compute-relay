@@ -27,12 +27,15 @@ assertions that only mirror implementation structure.
 
 ## CI
 
-`[tool.compute-relay.ci].python-versions` in `pyproject.toml` defines the Linux,
-macOS 15 Apple Silicon/Intel matrix and README version badge. Require every version to
-pass. `project.requires-python` sets the install floor, not proof for untested
-newer interpreters. CI uses the locked test extra, checks bundled migrations,
-runs pytest/HTTP/MCP checks and clean-wheel acceptance on PRs and main. Branch
-pushes use their PR checks rather than duplicating the matrix. Mac jobs additionally use
+Ordinary PR/main checks run one Linux job on the lowest supported Python version.
+Branch pushes use their PR check rather than duplicating it. For a release
+candidate, manually run **Local package and SQLite** on its branch with
+`release_candidate` enabled. Releases always enable this full matrix:
+`[tool.compute-relay.ci].python-versions` in `pyproject.toml`, across Linux and
+macOS 15 Apple Silicon/Intel. Every matrix job must pass before publication.
+That version list also supplies the README badge; `project.requires-python` sets
+the install floor, not proof for untested interpreters. All jobs use the locked
+test extra, pytest, HTTP/MCP, migrations and clean-wheel acceptance. Mac jobs use
 system OpenSSH against a disposable loopback sshd to verify master loss, refusal
 of implicit login and permitted key-only renewal. No account SSH settings change.
 

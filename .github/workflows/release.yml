@@ -14,6 +14,8 @@ concurrency:
 jobs:
   runtime:
     uses: ./.github/workflows/runtime.yml
+    with:
+      release_candidate: true
   slurm:
     uses: ./.github/workflows/slurm-fixture.yml
 
