@@ -200,3 +200,26 @@ def test_async_helper_validation_does_not_spawn_for_oversized_or_invalid_operati
         with pytest.raises(TransportError, match="interpreter"):
             await item.call_helper("fixed source", {})
     asyncio.run(scenario())
+
+
+def test_group_signal_permission_race_still_reaps_owned_child(monkeypatch):
+    async def scenario():
+        spawned = []
+        create = asyncio.create_subprocess_exec
+
+        async def capture(*args, **kwargs):
+            process = await create(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        def denied(*_args):
+            raise PermissionError('Group disappeared during cleanup')
+
+        monkeypatch.setattr(asyncio, 'create_subprocess_exec', capture)
+        monkeypatch.setattr(os, 'killpg', denied)
+        with pytest.raises(TransportError, match='timed out'):
+            await transport(timeout=1)._run([sys.executable, '-I', '-c', 'import time; time.sleep(30)'], b'')
+        assert spawned[0].returncode is not None
+        with pytest.raises(ChildProcessError):
+            os.waitpid(spawned[0].pid, os.WNOHANG)
+    asyncio.run(scenario())

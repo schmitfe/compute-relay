@@ -185,6 +185,13 @@ async def _stop(process, tasks):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # A group-signal failure must still retire our owned direct child.
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
     if process.stdin:
         process.stdin.close()
     for task in tasks:
