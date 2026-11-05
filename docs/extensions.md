@@ -1,75 +1,88 @@
 # Optional extensions
 
-The core broker submits ordinary reviewed/budgeted jobs and keeps their accounting.
-Optional functionality lives in separate Python/Django apps under
-`compute_relay.extensions`. The normal local launcher enables the bundled storage, environments and workflows
-modules. Their project policies and explicit scopes still govern every operation.
-Lower-level developer entrypoints can select modules with `BROKER_EXTENSIONS`; an
-empty value retains the core-only path for boundary tests.
+Storage planning, environment builds, workflows and investigation records are
+separate Django apps under `compute_relay.extensions`. They add policies and
+metadata to ordinary core jobs, never another execution or spending path.
+The core's environment recipes and per-job objects/artifacts remain available
+without these apps.
 
-An operator can enable installed modules with, for example,
-`BROKER_EXTENSIONS=storage,environments,workflows`. Stop the control process, enable
-the selected apps, run Django migrations with the same settings/data directory,
-then restart. A feature's presence in source is not evidence of runtime readiness;
-consult its own documentation and acceptance tests. Unknown/duplicate module names
-fail configuration rather than importing arbitrary code.
+## Enablement and retention
 
-Each module owns its models, migration history, validators, services, URLconf, forms,
-templates and tests. These are modules within one repository, allowing atomic
-reviews; they can later move into separately installed distributions behind the
-same lifecycle contract. Installation and enablement belong to the trusted operator.
-Neither a project key nor project settings can install or enable an extension.
+The normal launcher enables storage, environments and workflows. Developer
+control/worker entrypoints treat absent or empty `BROKER_EXTENSIONS` as core only.
+To change a custom deployment, stop control, select installed module names, run
+migrations with the same settings/data directory and restart. Workers separately
+advertise their protected extension list. Unknown or duplicate names fail;
+project credentials cannot enable apps or supply import paths.
 
-The core integration surface consists of a prepared job's `extension_name`, worker
-capabilities, bounded lease/report metadata, and these optional service hooks:
+Normal MCP discovers enabled tools through authenticated capabilities; an explicit
+client selection can only narrow them. Programmatic facades stay core-only unless
+configured. Enablement grants no scope or project permission, and trusted module
+code is not OS-sandboxed.
+
+Disabling prevents new module admissions/dispatch, retaining tables and history.
+Keep its code and data while existing jobs need observation, cancellation,
+accounting or finalization. Re-enable/uninstall only with its reconciliation and
+retention plan; never release uncertain reservations by removing a module.
+
+Read module-specific setup and limits in [storage](extensions-storage.md),
+[environments](environment-builds.md), [workflows](workflows.md) or
+[investigations](investigations.md).
+
+## Lifecycle hooks
+
+The fixed registry binds prepared `extension_name`, worker capabilities and
+bounded metadata to these service hooks:
 
 | Hook | Contract |
 | --- | --- |
-| `validate_execution_request(job, credential)` | Check extension-specific request identity before creating a pending review |
-| `validate_admission(job, credential)` | Recheck extension-specific policy/scope inside the core admission transaction |
-| `after_admission(attempt)` | Bind extension state to the durable ordinary attempt in the same transaction |
-| `validate_dispatch(job, credential, attempt=...)` | Recheck current extension policy before a new scheduler submission |
-| `worker_lease_context(attempt)` | Return at most 64 KiB of JSON metadata; cannot replace core lease fields |
-| `after_report(attempt, extension_data)` | Idempotent post-commit processing; failures cannot undo compute settlement |
-| `before_lease(worker)` | Perform bounded durable extension dispatch without preventing core observation |
-| `lease_work(worker)` | Return no work or `{id, generation, configuration, context}` for bounded maintenance; core binds extension and operation names |
-| `bind_job(job, credential, context)` / `after_revision(job, previous, credential)` | Atomic metadata association from a fixed enabled registry; cannot select an execution adapter |
-| `filter_jobs(query, credential, identifier)` | Authorized project-local filtering by metadata context |
-| `validate_related_execution(job, credential)` | Check related metadata before a new execution request under the core project lock |
+| `validate_execution_request(job, credential)` | Validate identity before pending review |
+| `validate_admission(job, credential)` | Recheck policy/scope in the admission transaction |
+| `after_admission(attempt)` | Bind module state in that same transaction |
+| `validate_dispatch(job, credential, attempt=...)` | Recheck before first submission |
+| `worker_lease_context(attempt)` | At most 64 KiB JSON; never replace core lease fields |
+| `after_report(attempt, extension_data)` | Idempotent post-commit work; cannot undo settlement |
+| `before_lease(worker)` | Bounded dispatch without starving core management |
+| `lease_work(worker)` | Bounded maintenance with identity, generation and fixed operation |
+| `bind_job(job, credential, context)` / `after_revision(job, previous, credential)` | Atomic authorized metadata association |
+| `filter_jobs(query, credential, identifier)` | Project-scoped metadata filtering |
+| `validate_related_execution(job, credential)` | Related-work checks under the project lock |
 
-Workers independently opt in using their private `extensions` list or the
-`BROKER_EXTENSIONS` process setting. They advertise supported modules to control.
-New extension jobs require both control enablement and the assigned worker's
-capability, in addition to normal scopes/project limits. On terminal observations,
-an enabled module's `worker.after_observation` can run its fixed metadata adapter;
-it must not execute payloads or install packages in the credentialed process.
-Report metadata is durably retained in `WorkerReport.extension_data` for module
-recovery. Hook failures are recorded without emitting raw exception contents.
+Workers run only configured `execute`/`after_observation` implementations. Module
+maintenance has its own authenticated report route, current generation and replay
+checks; payloads are at most 64 KiB. Finalization reads metadata, never executes
+workload interpreters/installers in the credentialed worker. Core
+`WorkerReport.extension_data` retains metadata for safe replay after hook failures.
 
-For maintenance leases, `worker.execute(worker_instance, lease)` runs only when
-the extension is explicitly configured on that worker. Each extension owns its
-worker-authenticated report route and lease replay/expiry checks. Maintenance
-payloads are limited to 64 KiB, cannot replace ordinary attempt fields, and must
-be scheduled with bounded frequency so normal accounting remains responsive.
+## Review checklist
 
-Bundled additions are [storage planning](extensions-storage.md),
-[environment builds](environment-builds.md), [artifact workflows](workflows.md),
-and explicitly enabled [investigation records](investigations.md).
-They are independent apps. Neither storage planning nor workflows implicitly
-enables environment creation, remote migration, or software downloads.
+- Keep models, migrations, routes, templates, MCP registration and tests in the
+  module. Core startup must not import module models; worker imports must not
+  require Django, controller models or the database.
+- Check project ownership, scopes, key/cluster restrictions and referenced
+  artifacts on every operation. Freeze finite inputs/context into prepared jobs;
+  reject stale policy/revisions at admission and dispatch.
+- Execute through core jobs so approval, compute, active/lifetime limits and
+  fan-out share one ledger. Maintenance cannot become unmetered workload execution.
+- Keep external I/O outside metadata locks; use durable claims, generations and
+  idempotent recovery across crashes. Test independent-process SQLite races.
+- Commit accounting before post-report hooks. Replay safely; failures cannot
+  strand funds or undo core settlement. Do not emit raw exception contents.
+- Bound and rotate scans so reviews, revoked keys and unavailable modules cannot
+  starve core work. Status reads must never admit jobs.
+- Test core-only, controller-only, worker-only and client-only configurations,
+  unsupported dependencies, disable/re-enable, cancellation and terminal failures.
+  Document prerequisites, retention, capabilities and unverified assumptions.
 
-Disabling a module prevents new admissions and undispatched extension jobs. Already
-submitted jobs continue through the core observation, cancellation and accounting
-paths. Keep its tables, runtime implementation and version available until its
-dependent jobs/builds/transfers have completed; removing source is a separate
-operator migration. Re-enabling a module may require its documented reconciliation
-procedure before publishing extension results.
+## Boundary check
 
-`GET /api/v1/capabilities` reports enabled modules to an authenticated project key.
-Normal stdio startup queries this authenticated endpoint and registers only
-known bundled modules enabled there. It fails on a rejected, unavailable or
-malformed capability response instead of silently hiding tools. Project scopes
-and policy remain authoritative. Reconnect MCP after changing enabled modules. Test settings enable bundled
-apps that actually exist in the checkout; lower-level direct settings retain explicit module selection.
-This does not create an OS sandbox for trusted plugin code: review and install it
-with the same care as the worker itself.
+```sh
+python -m pytest tests/system/test_module_boundaries.py -q
+```
+
+These separate-process checks reject optional imports during core-only startup,
+verify absent module tables/routes, and exercise authenticated synthetic jobs.
+Worker imports also reject Django/controller dependencies. Test settings enabling
+all modules must not alter production defaults. These checks establish dependency
+boundaries; deployed HTTP/stdio, SSH, native Slurm and secret isolation require
+their separate acceptance tests.

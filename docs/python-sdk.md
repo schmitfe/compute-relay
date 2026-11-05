@@ -1,13 +1,8 @@
 # Python orchestration in a science workspace
 
-An agent with local Python execution can stage files, prepare and request jobs,
-wait for status changes and fetch verified results in one script. This avoids
-returning every intermediate response through the model. The script still makes
-ordinary HTTP requests; scheduler queueing, human review and collection take the
-same time. No token saving or throughput improvement is assumed without measuring
-the actual agent workflow.
-
-The public imports reuse the existing implementation used by the MCP adapter:
+Run bounded staging/preparation/status/export loops locally using the same
+project credential and operations as MCP. Normal HTTP, scheduler and human-review
+waits still apply; the broker exposes no Python execution endpoint.
 
 ```python
 from compute_relay.sdk import ControlError, ProjectFacade, WorkspaceClient, finish
@@ -17,53 +12,49 @@ project = ProjectFacade.from_credential(workspace.client)
 context = project.get_project_context()
 ```
 
-Initialize the workspace with `compute-relay init-mcp` first. The SDK reads its
-private `.compute-relay/connection.json` and `.compute-relay/project.key`, verifies
-the workspace binding and derives project identity from the authenticated broker
-context. It does not require a project UUID or credentials embedded in scripts.
-Run scripts with the installed interpreter recorded in `.compute-relay/USAGE.md`;
-the science project's own Python environment need not contain compute-relay.
+[Initialize the workspace](local-client-setup.md) first and use the installed
+interpreter from `.compute-relay/USAGE.md`. The SDK validates its private workspace
+binding/key and obtains project identity from authenticated context; embed no
+credentials or project UUID in scripts.
 
-The generated guide contains a complete bounded preparation, execution, wait and
-verified-export example. Existing guides are deliberately never overwritten:
-review and preserve any custom edits, remove only `.compute-relay/USAGE.md`, then
-rerun initialization with `--reuse-key` and the original broker URL and client
-selection. This retains the existing credential. Do not remove the private
-directory, connection metadata or key to refresh the guide.
+Context supplies scopes, targets, allowance and recovery. Preparation needs
+`jobs:write`, execution `jobs:execute`, upload `objects:write`, downloads
+`artifacts:read`. Scopes never override policy. Target `effective_limits` exposes
+`per_job_limits`, `allocation_floors`, `feasible`, `blocking_reasons` and `unknowns`.
+Independent configured maxima need not coexist on a node and are not idle capacity.
+Check allowance too: funds, expiry and active/lifetime slots can block admission.
 
-## Reuse the existing operations
+## Operations
 
-| Operation | Supported call |
+| Operation | Call |
 | --- | --- |
-| Upload only explicit source paths | `workspace.stage(["main.py", "src/util.py"])` |
-| Prepare the saved bundle and a request without `files` or `project_id` | `workspace.prepare(bundle_id, "job.json", idempotency_key=None)` |
-| Request the first execution of that immutable job | `project.request_execution(job_id)` |
-| Read compact status, or wait for a revision change | `project.get_job(job_id, after_revision=revision, wait_seconds=20)` |
-| Read allowance before planning a burst | `project.get_project_allowance()` |
-| Recover jobs after reconnecting | `project.list_project_jobs(state="unfinished")` |
-| Retry output collection without rerunning compute | `project.retry_job_outputs(attempt_id)` |
-| Fetch into a fresh directory, or resume matching partial files | `workspace.fetch(attempt_id, "results/RUN", resume=True)` |
-| Export provenance and verify retained outputs | `finish(workspace, job_id=job_id, output="results/RUN", resume=True)` |
+| Stage explicit files | `workspace.stage(["main.py", "src/util.py"])` |
+| Prepare a request without `files`/`project_id` | `workspace.prepare(bundle_id, "job.json", idempotency_key=None)` |
+| Request first execution | `project.request_execution(job_id)` |
+| Read/wait for status | `project.get_job(job_id, after_revision=revision, wait_seconds=20)` |
+| Refresh allowance | `project.get_project_allowance()` |
+| Recover existing work | `project.list_project_jobs(state="unfinished")` |
+| Retry collection, never compute | `project.retry_job_outputs(attempt_id)` |
+| Fetch/resume verified results | `workspace.fetch(attempt_id, "results/RUN", resume=True)` |
+| Export provenance/results | `finish(workspace, job_id=job_id, output="results/RUN", resume=True)` |
 
-An unchanged `workspace.prepare` derives a stable key from the request and source
-hashes. The default execution key reuses that immutable job's first execution
-request. After an interrupted response, recover the existing job; a fresh
-execution key explicitly requests another execution. Stable identity remains
-necessary when a script is restarted.
+Preparation derives a stable key from unchanged inputs; default execution reuses
+that job's first request. A fresh explicit execution key deliberately requests
+another run. Recover existing identities after interrupted replies. Give loops a
+finite job count/deadline and back off on `WAIT_BUSY` rather than long-waiting on
+every job. [Completion](investigations.md) defines waits and export consistency.
 
-Give each script a finite job count and waiting deadline. Positive waits require
-the previous snapshot's revision and are limited to 20 seconds. Only two server
-wait slots exist: back off on `ControlError.broker_code == "WAIT_BUSY"`, rather
-than opening a long wait for every job in a large batch. For an enabled
-investigation, `project.get_investigation(id, after_revision=revision,
-wait_seconds=20)` can wait on grouped progress. Poll remaining jobs without waits
-or use a modest interval. The existing optional workflow module can represent a
-bounded DAG with server-enforced dependencies through MCP; the SDK does not add a
-second workflow engine or optional-module wrappers.
+Lookup reuses only project-authorized objects. It checks retained type/size/links,
+not fresh hashes; same-size corruption may fail later preparation/download checks.
+HTTP failures expose `ControlError.code == "CONTROL_HTTP_ERROR"`, `status`, and
+recognized `broker_code`/fixed guidance. `RESOURCE_LIMIT` adds validated numeric
+`details["violations"]` (resource, requested/effective, limit, excess, source/unit).
+Unknown/malformed errors stay generic; arbitrary remote prose is discarded.
+Refresh targets/allowance and revise rejected resources before retrying.
 
-## Reuse ZIP packing and extraction
+## ZIP helpers
 
-The SDK exposes the local file helpers without requiring an initialized workspace:
+No initialized workspace is needed for these local operations:
 
 ```python
 from compute_relay.sdk import pack_zip, unpack_zip, write_archive_helper
@@ -74,36 +65,16 @@ unpack_zip("/absolute/path/to/science", "results/RUN/result.zip", "results/extra
            max_files=1000, max_bytes=1024**3)
 ```
 
-Stage the exported helper and archive with the reviewed entrypoint to use the
-same ZIP commands inside a compute job without installing Compute Relay there.
-Each output must be fresh, with existing parent directories. Packing takes
-explicit files, and extraction validates paths, types, CRCs and bounded expanded
-sizes. See [archive commands and limits](data-transfer.md#zip-helpers-for-local-files-and-compute-jobs).
+Stage the helper/archive with the reviewed entrypoint for compute-node use.
+[Archive boundaries](data-transfer.md#zip-helpers-for-local-files-and-compute-jobs)
+define fresh destinations, path validation and size checks.
 
 ## Authority and completion
 
-The script runs on the agent's workspace device. No Python execution endpoint is
-added to the broker, MCP server or cluster connector. HTTP endpoints continue to
-enforce project/key scopes, review, resource limits and spending admission. Client
-approval of a local script is distinct from broker approval of compute; a script
-cannot approve its own execution request. Respect the local agent client's
-execution permissions as well.
-
-Return a concise receipt for human review, rejected requests or failed output
-collection. On local timeout or process exit, admitted jobs remain durable and
-continue independently; stopping a wait does not cancel them. Use the ordinary
-cancellation APIs only when cancellation is intended. Do not acknowledge results
-until they have been assessed: `finish` defaults to `acknowledge=False`, and byte
-integrity alone does not prove scientific validity. Keep credential contents,
-source bytes and large intermediate responses out of chat.
-
-If compact status returns `next_action.action == "reconnect_connector"`, stop
-local waiting and return for human attention. The saved job/native identities
-remain authoritative; reconnecting is not a reason to request another execution.
-
-This pattern follows the separation between tool protocol and agent orchestration
-in the [MCP tools specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
-Anthropic describes the context-saving benefits of loops and filtering in a local
-execution environment in [Code execution with MCP](https://www.anthropic.com/research/code-execution-with-mcp).
-Those benefits depend on the client and workload; they are not a guarantee that
-MCP itself requires a model round trip for every request.
+Respect client permission to run a local script separately from broker compute
+approval. Return for human review, failed collection or
+`next_action.action == "reconnect_connector"`; never request replacement compute
+to escape a blocker. Local timeout/exit stops waiting, not accepted Slurm jobs.
+`finish` defaults to `acknowledge=False`: assess results before acknowledgement;
+verified bytes alone do not validate science. Return output locations, usage,
+remaining reservations and unresolved states without exposing secrets/file bytes.

@@ -1,34 +1,38 @@
-# Container development and disposable Slurm testing
+# Disposable Slurm testing
 
-The container stacks exercise the application on a workstation without contacting an institutional cluster. `deploy/compose.fake.yml` runs the broker and worker with the fake backend; `deploy/compose.test.yml` adds a real, disposable CPU Slurm cluster over SSH. These are development/acceptance fixtures, not a production deployment or proof of host-level credential isolation.
-
-The base Compose fixtures use JSON syntax, which is valid YAML; additional test
-overlays use YAML. Docker Compose must validate and execute the combined
-configuration on a host with a working container engine. No container engine is
-installed by these scripts or tests.
+Developer fixtures: `deploy/compose.fake.yml` simulates jobs;
+`deploy/compose.test.yml` adds CPU Slurm over SSH. Use synthetic credentials only.
 
 ## Layout and identity boundaries
 
-| Component | Image and identity | Storage/authority |
-| --- | --- | --- |
-| Control | `deploy/Dockerfile`, `control` target, UID/GID 10001 | Own SQLite/artifact volume; owner/project demo metadata; worker enrollment metadata. No SSH-key volume. |
-| Worker | Same Dockerfile, `worker` target, UID/GID 10001 | Read-only worker config/token; separate durable journal; fixture-only SSH identity. No control database or human credential mount. |
-| Smoke client | Same Dockerfile, `smoke` target, UID/GID 10001 | Read-only synthetic demo metadata; invokes job APIs and human review endpoints. No SSH identity or database mount. |
-| Slurm fixture | `deploy/slurm/Dockerfile`, root for scheduler/SSH initialization | MariaDB, Munge, SlurmDBD, controller, compute daemon, and SSH server in one disposable container. Separate `brokerjob` remote UID runs batch jobs. |
+| Service | Authority |
+| --- | --- |
+| Control | UID/GID 10001, SQLite/artifacts and owner/demo metadata; no SSH key |
+| Worker | UID/GID 10001, read-only worker config/token, private journal/fixture SSH key; no control DB |
+| Smoke | UID/GID 10001, synthetic demo credentials for HTTP review/tests; no SSH/DB mount |
+| Slurm | Root starts MariaDB/Munge/Slurm/SSH; `brokerjob` runs jobs |
 
-The stack publishes only `127.0.0.1:8765` for the control UI/API by default. Set `BROKER_TEST_PORT` to select another loopback port; internal API ports stay unchanged. SSH, database, Munge, and scheduler ports are internal. The internal Compose network has no default outbound Internet path; builds can download declared Python/Debian dependencies. No service mounts a host Docker socket, a home directory, an existing SSH agent, or institutional keys.
+Only control publishes a host port, default `127.0.0.1:8765`; override with
+`BROKER_TEST_PORT`. Other ports stay internal. Runtime networking has no default
+Internet route; builds may fetch declared dependencies. No host Docker socket,
+home, SSH agent or institutional key is mounted. Build contexts are allowlisted.
+Fresh SSH/Munge/DB secrets and a fixture-generated pinned host key are synthetic;
+only worker credentials enter its config volume, owner credentials stay separate.
 
-The fixture creates fresh SSH/Munge/database secrets at runtime. The worker-only key volume contains an SSH key and the fixture's directly generated host-key entry. This is fixture provisioning, not trust-on-first-use against a real server. Dockerfile-specific ignore files allowlist the build inputs instead of sending the whole workspace to the builder. The control bootstrap copies only `worker.json` and `worker-token` to the worker-config volume; owner credentials stay in the separate demo-metadata volume. The worker obtains leases/grants and reports through the control API, rather than connecting to its database.
-
-Application services use a read-only root filesystem, private `0700` named data/journal volumes and bounded temporary filesystems, dropped Linux capabilities, and no-new-privileges. The Slurm fixture is intentionally less restrictive to run ordinary distro daemons; it does not request privileged mode or host cgroup mounts. It uses `task/none`, `proctrack/linuxproc`, and an explicit legacy cgroup plugin selection for startup, avoiding Slurm22's automatic cgroup/v2 systemd probe inside the container. No task/proctrack cgroup enforcement is configured. It schedules trusted tiny test jobs and does not demonstrate hostile workload containment or GPU isolation.
-
-An agent that controls the host Docker daemon can inspect these fixture secrets. The same-account local package and these fixtures do not supply an operating-system secret boundary; see [security](security.md). Ordinary development bootstrap is explicitly synthetic and must not enroll real credentials.
+App services use read-only roots, private `0700` data/journals, bounded temporary
+filesystems, dropped capabilities and no-new-privileges. Slurm's ordinary daemons
+need a less restricted fixture, without privileged mode/host cgroups. `task/none`,
+`proctrack/linuxproc` and legacy cgroup startup provide no job cgroup or GPU
+isolation. Docker administrators can inspect credentials. This is a trusted tiny
+workload fixture, not a production security boundary.
 
 ## Build and run
 
-Prerequisites: a working Docker Engine/Compose v2 installation and sufficient local resources for a small database plus Slurm daemons (allow approximately 2 CPU and 2 GiB for the fixture, plus application/build headroom). Start from a clean working copy; Docker uses the application source at build time, with no editable source bind mounts.
+Use Docker Engine/Compose v2, approximately 2 CPUs/2 GiB plus build headroom,
+and a clean checkout. Source is built into images, not mounted editable.
 
-The current login session must have daemon access. After adding a user to the Docker group, refresh the login/app session or use a deliberately scoped fresh-group command; do not make the Docker socket world-writable. To avoid a local port conflict, set the same override for the entire workflow:
+The current session needs Docker access; refresh login after changing group
+membership, never make its socket world-writable. Keep one port for the whole run:
 
 ```sh
 export BROKER_TEST_PORT=8767
@@ -42,7 +46,8 @@ docker compose -f deploy/compose.fake.yml up -d --wait control worker
 docker compose -f deploy/compose.fake.yml --profile test run --rm smoke
 ```
 
-Inspect state through [the local dashboard](http://127.0.0.1:8765). Synthetic bootstrap credentials are stored in the control service's `/run/demo/demo.json`; avoid copying them into issue reports or logs. The smoke client reads them directly from its fixture-only mount and does not print them.
+Open the configured loopback port. Synthetic `/run/demo/demo.json` credentials
+are read by smoke clients; do not copy them into reports/logs.
 
 Stop the fake stack before using the real fixture because both bind the same loopback port:
 
@@ -58,7 +63,10 @@ docker compose -f deploy/compose.test.yml up -d --wait slurm control worker
 docker compose -f deploy/compose.test.yml --profile test run --rm smoke
 ```
 
-The fixture cluster is `broker-test`, host `slurm-fixture`, partition `debug`, account `broker`, remote user `brokerjob`, and work root `/home/brokerjob/jobs`. It advertises two CPU cores, 1,024 MiB memory, no GPUs, and a maximum ten-minute partition limit. `JobRequeue=0`, `OverTimeLimit=0`, and `KillWait=5` make its test configuration explicit. Bootstrap uses small whole-minute jobs. Broker reservations use reviewed effective allocation times requested walltime; these fixture settings are not evidence about another site's scheduling behavior.
+Fixture identity: cluster `broker-test`, host `slurm-fixture`, partition `debug`,
+account `broker`, user `brokerjob`, root `/home/brokerjob/jobs`. Capacity is two
+CPUs, 1,024 MiB, zero GPUs, ten-minute limit. `JobRequeue=0`, `OverTimeLimit=0`,
+`KillWait=5` are fixture settings, not evidence about a real site.
 
 Use the fixture's actual scheduler/accounting tools for diagnostics:
 
@@ -69,7 +77,8 @@ docker compose -f deploy/compose.test.yml exec slurm sacct --starttime today --f
 docker compose -f deploy/compose.test.yml logs --tail 100 slurm control worker
 ```
 
-Daemon supervision fails the fixture if a critical child exits. Health checks require the controller, an available node, accounting cluster registration, and generated worker SSH material. A healthy fixture does not prove a batch job ran; the smoke workflow must complete and verify its output/accounting.
+Critical daemon exits fail the fixture. Health requires controller/node/accounting/
+SSH readiness; actual job success still needs smoke output/accounting checks.
 
 Remove only this disposable stack's resources when finished:
 
@@ -77,7 +86,9 @@ Remove only this disposable stack's resources when finished:
 docker compose -f deploy/compose.test.yml down --volumes
 ```
 
-`--volumes` deliberately deletes synthetic job history, tokens, keys, and worker journals. Do not reuse these test project names/volumes for real work. Scheduler/MariaDB state is disposable inside its container; restarting/recreating the fixture with outstanding jobs is a fault test requiring broker reconciliation, not a persistent production cluster. Recreate the entire test stack for a clean run.
+`--volumes` deletes synthetic history/keys/journals. Never reuse fixture names or
+volumes for real work. Recreating Slurm with outstanding jobs is a reconciliation
+fault test; recreate the whole disposable stack for a clean run.
 
 ## Native helper-upgrade acceptance
 
@@ -101,54 +112,28 @@ docker compose -p compute-relay-upgrade-test \
   down --volumes
 ```
 
-`tools/helper_upgrade_smoke.py` prepares and submits two bounded stdlib jobs with
-a reviewed comment-only difference in the installed execution bundle, then
-uses the current bundle to reconcile, cancel, observe and inspect outputs through
-the resumable transfer interface. One accepted
-submission reply is deliberately lost. The check requires final native
-accounting, stable recovered identity, refusal to submit an old package under
-the new execution hash, and exactly two submission calls. It never retrieves or
-executes helper source from a saved manifest or journal. Each job requests one
-CPU and one minute; the tool cancels the jobs and attempts cancellation again
-during cleanup.
-
-This tool calls the native adapter directly. It does not claim HTTP approval,
-project-budget admission or broker-ledger settlement; the ordinary and personal
-connector smoke flows provide that separate evidence. The overlay's presence
-and passing unit tests do not establish that a native Docker run passed against
-the final integrated source. Keep the actual run result with its commit or CI
-record before making that claim.
+`tools/helper_upgrade_smoke.py` submits exactly two one-CPU/one-minute jobs under
+reviewed helper hashes, loses one accepted reply, then reconciles/cancels/collects
+through current code. It requires stable identities, final accounting and refusal
+to submit an old package; stored helper source is never executed. It exercises
+the adapter directly, not HTTP approval or broker settlement. Keep the actual
+run result/commit before claiming native acceptance.
 
 ## Current acceptance scope
 
-This is an optional developer fixture. The normal package uses SQLite and runs
-without Docker. Slurm CI runs on pushes to `main` and on manual dispatch. It
-exercises pairing, reviewed submission, outputs, accounting and cleanup using
-only synthetic credentials.
-The fixture's MariaDB belongs to Slurm accounting; it is not a separate broker
-database requirement.
+The normal package uses SQLite without Docker; fixture MariaDB serves Slurm
+accounting only. Slurm CI runs on main/manual dispatch with synthetic credentials.
+Run default tests and `tools/package_smoke.py` separately.
 
-Run the default test suite and `tools/package_smoke.py`; run this fixture
-explicitly when native Slurm acceptance is required.
+The personal-connector overlay checks 60-second owner-permitted renewal, eight
+parallel submissions, master death, accepted-report reply loss, restart and
+interrupted multichunk collection. It verifies unchanged identities, hashes,
+settlement, revocation and same-state resume while HTTP/status waits run through
+four Waitress threads. Ordinary probes timeout after three seconds; the latency
+summary includes deliberate waits.
 
-The SQLite tests additionally cover input provenance, upload-crash recovery,
-logical metadata limits/maintenance, management priority, lease renewal and
-durable report replay. These controlled faults complement the native fixture;
-they do not require filling a real disk or interrupting a real cluster.
-
-The personal connector overlay also checks natural expiry of a 60-second SSH
-session with owner-permitted renewal, eight parallel native submissions, abrupt
-master loss, an accepted early terminal report followed by a process crash,
-restart from its journal, and interruption after at least one MiB of output was
-acknowledged. It verifies output hashes, exact settlement without resubmission,
-and owner revocation followed by explicit same-state resume. Ordinary HTTP and
-one-second status waits run concurrently with collection under four Waitress
-request threads. Ordinary probes have a three-second timeout. The combined
-latency summary includes the deliberate bounded waits.
-
-Fault injection is confined to a fixture child launcher that refuses targets
-other than `brokerjob@slurm-fixture`; the application has no fault-injection
-endpoint or setting. On CI failure, `SIGUSR1` requests a controller thread dump
-before bounded logs and disposable state are removed. Stack dumps contain no
-frame locals. Passing these checks does not explain the older uncaptured portal
-stall or prove institutional VPN/MFA behavior.
+Fault injection exists only in a child launcher restricted to
+`brokerjob@slurm-fixture`, never an application endpoint. On failure CI captures
+`SIGUSR1` thread stacks without locals before bounded logs/state cleanup. These
+checks neither explain the uncaptured portal stall nor certify institutional
+VPN/MFA. Module-specific fixture commands live in their respective guides.

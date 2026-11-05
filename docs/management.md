@@ -1,204 +1,118 @@
-# Local portal and cluster configuration
+# Portal guide
 
-Start the application with `compute-relay`. It opens the loopback portal for the
-local owner and runs saved connectors in the same foreground application.
-Passwordless access or the saved local password establishes the human session;
-a project bearer key cannot access configuration or approval forms. Browser
-changes require CSRF protection. See [security](security.md) for the same-account
-boundary.
+`compute-relay` opens the local owner portal. Configuration and approval require
+a human browser session and CSRF protection; project keys cannot use those forms.
+See [security](security.md) for the local-account boundary.
 
 ## Add a cluster
 
-1. In **Clusters → Add cluster**, save a name, Slurm login hostname, remote
-   username. Slurm is selected internally. Advanced SSH settings hold a custom
-   port, local key/known-hosts paths, requested session lifetime in minutes and
-   optional directory hint. Choose the working directory after login if unknown. Saving the setup does not submit a job or create remote files.
-2. Select **Start connector**. The local launcher handles the request and asks
-   for SSH key selection, host-key confirmation, passphrase or MFA in its
-   terminal. The browser does not collect the key or authentication answers.
-   Two clusters' prompts are serialized.
-3. Wait for login and read-only discovery. Open **Configure cluster** to review
-   the resource ceilings, allowed accounts/QoS, work directory, software discovery
-   and cluster approval policy. Directory selection itself creates no files;
-   **New folder** is a separate explicit action.
-4. Save the configuration and wait for the connector's acknowledgement.
-   Discovery alone does not authorize spending or confirm the configuration.
-   Create the cluster's immutable execution recipes and grant the appropriate
-   cluster/recipes to a project.
+1. **Clusters → Add cluster**: enter a name, Slurm login hostname and remote user.
+   Advanced settings hold port, local key/known-hosts hints, SSH lifetime and
+   optional work directory. Saving does not contact SSH or create remote files.
+2. **Start connector**: select the key and answer host-key/passphrase/MFA prompts
+   in the launcher's terminal. Multiple clusters' prompts are serialized.
+3. After discovery, **Configure cluster**: confirm work directory, resource
+   ceilings, scheduler permissions and execution policy. **New folder** is a
+   separate explicit action; selecting a directory creates nothing.
+4. Save and wait for the worker acknowledgement before granting the cluster and
+   its environment recipes to a project.
 
-No manual worker registration, worker-token copy or protected profile editing is
-needed. Connector state belongs to this installation and is reused on restart.
-**Run discovery** requests another read-only observation; refreshing the saved
-page does not contact the scheduler. See [cluster configuration](cluster-configuration.md)
-and [personal connectors](personal-connectors.md) for details.
+No manual worker/token registration is needed. **Run discovery** requests fresh
+observations; opening pages does not. [Cluster configuration](cluster-configuration.md)
+explains resource evidence; [personal connectors](personal-connectors.md) covers
+standalone setup and reconnecting.
 
-Configuration changes are fenced by saved revisions and cannot replace a
-connection with unsettled executions. Disabling or removing a cluster retains
-job history, artifacts and accounting. Normal removal waits for final accounting
-and output collection. If a connector is no longer usable, the removal page
-shows the unfinished execution count and retained budget holds, with a separate
-**Remove anyway** action. Acknowledge its consequences before confirming.
+## Remove a cluster configuration
 
-Removing anyway archives the configuration and records the override and pending
-counts in the audit trail. It leaves execution states, artifacts, accounting and
-budget reservations unchanged. It does not stop remote jobs or establish their
-final usage; verify or cancel those jobs in Slurm independently. A personal
-connector used only by that configuration loses service access. Shared
-connectors remain available and can still settle previously submitted jobs.
-Historical job pages label unresolved work on a removed cluster as the last
-recorded status, rather than suggesting it is a current scheduler observation.
-Retained reservations and unresolved attempts can still consume allowance and
-active-job capacity; removing a configuration does not reset either limit.
+Owner confirmation archives configuration and blocks new submissions/discovery,
+retaining jobs, outputs, accounting and remote files. Normal removal waits for
+accounting and collection. **Remove anyway** requires acknowledgement of unfinished
+counts and budget holds; it records an audit override without cancelling jobs,
+settling unknown usage, freeing funds or resetting limits.
 
-Removal does not delete HPC files or software environments. A stopped or expired
-connector needs another local login before it can dispatch or collect results.
+Verify/cancel remaining jobs in Slurm independently. Dedicated personal connectors
+are revoked; shared connectors may continue settling existing jobs. Unresolved
+historical pages show their last recorded state, which may be stale. Configuration
+edits/re-pairing also wait for outstanding execution/recovery to finish.
 
 ## Projects and job policy
 
-Create a project and select its execution policy, CPU-core/GPU-device allowance,
-resource envelope, expiry, simultaneous-job limit, lifetime submission limit,
-clusters and environments. Empty cluster/environment grants deny execution.
-The form groups execution policy, total allowance, maximum resources and access.
-Select a cluster and its exact environments together in one save; empty grants
-remain denied. Hours become integer seconds in the ledger. Editing totals preserves spent and
-reserved compute and cannot reduce the allowance below existing commitments.
+Set review/automatic/mixed policy, compute allowance, per-job resources, expiry,
+active and lifetime limits, clusters and exact environment recipes. Empty access
+grants deny execution. Hours become integer ledger seconds; editing totals
+preserves spent/reserved usage and cannot reduce below existing commitments.
 
-Preparing a package does not reserve compute. Requesting execution does: pending
-human reviews hold the prepared maximum resource-seconds, and admitted attempts
-retain their reservations. Approval transfers a pending hold without reserving
-again. Rejection or **Cancel request and release hold** releases a pending hold.
-After dispatch may have started, cancellation retains the claim until definitive
-scheduler accounting permits settlement. Pending reviews do not consume active
-or lifetime attempt slots and do not expire silently.
+Preparation holds no compute. Requesting execution reserves the prepared maximum,
+including pending reviews; approval transfers that hold without counting twice.
+Rejection/cancellation before dispatch releases it. After possible submission,
+keep it until definitive accounting. Pending reviews consume no active/lifetime
+attempt slot. Each admitted attempt consumes one lifetime slot permanently,
+including failures/cancellations; idempotent replay/reconciliation does not.
+Default lifetime limit is 1,000; zero blocks admission and exhaustion returns
+`TOTAL_JOB_LIMIT` (409).
 
-Project, key and cluster confirmation settings are independent. Automatic project
-policy admits a job only when the key and cluster also permit it. Cluster
-**Allow automatic execution** starts disabled and becomes effective only after
-the worker acknowledges the reviewed configuration. Changing policy does not
-execute older pending requests automatically.
+Project, key and cluster confirmation are independent. Cluster **Allow automatic
+execution** defaults off and changes only after the worker acknowledges the
+owner's saved revision. Policy changes never execute old pending requests.
+Actual allocated usage may exceed the reservation and becomes debt rather than
+being truncated; resource/allowance settings are not physical scheduler caps.
 
-Each admitted attempt consumes one lifetime submission slot permanently,
-including failure and cancellation. A new execution or explicit retry needs a
-new slot. Preparation, rejected reviews, idempotent replay and reconciliation of
-the same attempt do not. Every key shares the count. The cap is checked during
-admission and human approval; exhaustion returns `TOTAL_JOB_LIMIT` (409).
-A zero limit blocks the first admission. The default total is 1,000.
-
-The allowance API includes `jobs: {limit, admitted, remaining, active,
-active_limit}`. Budget and submission counts remain separate controls. Actual
-allocated runtime can exceed a request under site scheduling policy; the broker
-records observed usage/debt rather than pretending the request was a physical
-ceiling. Resource/accounting bounds must be reviewed before unattended spending.
+GPU checkboxes grant explicit types. None denies GPUs; a partial set requires
+an allowed `resources.gpu_type`. Selecting all discovered types may allow
+scheduler-chosen hardware only on current fully covered partitions, advertised
+as `untyped_gpu_partitions`. Discovery changes never broaden a partial grant;
+refresh and save intentionally. Site policy may still demand an explicit type.
 
 ## Review and status
 
-Agent job names are 1–80 characters using letters, digits, underscores, dots and
-hyphens. The same name is used for display and Slurm. The project page lists its
-jobs, submitting keys, latest execution state and balances. Dashboard and project
-lists have 50-row pages and All, Unresolved and Awaiting review filters. Unresolved
-includes pending review, running/uncertain attempts, unfinished accounting and
-failed or pending output collection. Live updates preserve the selected view. An immutable package
-can have a completed or rejected execution; preparation alone does not mean it
-is waiting to run.
+Job names use 1–80 letters/digits/underscores/dots/hyphens. Dashboard/project
+lists have 50-row pages with All, Unresolved and Awaiting review filters.
+Unresolved includes pending reviews, execution, uncertain accounting and unfinished
+collection. Live refresh preserves filters, edits and decision comments; it never
+admits work. Prepared content is not evidence that execution was requested.
 
-The review page shows the exact source, batch file and environment wrapper.
-Approve the current execution request or reject it with a comment. Source or
-resource changes require a new revision and decision. Collected errors, native
-exit status and bounded logs help diagnose completed attempts. Logs and scripts
-are displayed as untrusted text. A failed decision keeps its comment for the matching
-request. Section links reach exact files, decisions and result actions; old
-resolved attempts and raw scheduler facts/logs can be expanded as needed.
+Review exact sources, batch script and environment wrapper. Approve the matching
+request or reject with a comment; changed content/resources need a new revision.
+Scripts/logs are untrusted text. Native facts and bounded logs help diagnose
+failures; historical decisions remain available.
 
-**Preview file cleanup**, on project and job pages, offers separate local-file
-and remote-directory confirmations. It protects active work and shared inputs;
-save and verify any results you need before permanent deletion. Remote cleanup
-waits for the existing connector and retains submission journals and accounting.
-Managed environments stay protected. See [manual cleanup](deployment.md#manual-file-cleanup)
-for batch limits and interruption recovery.
+- **Request cancellation** retains uncertain accounting and works at metadata
+  capacity. It does not itself confirm native cancellation.
+- **Retry output collection** reuses a finished attempt without rerunning compute.
+  Disabled new access permits recovery; archived configuration/revoked workers
+  cannot. Downloads verify bytes, not scientific validity or acknowledgement.
+- **Preview file cleanup** requires separate local/remote confirmations. Save and
+  verify wanted results first; [cleanup rules](deployment.md#manual-file-cleanup)
+  describe protected data and interrupted deletion.
 
-**Request cancellation** uses the same attempt and retains uncertain accounting;
-it remains available when metadata/receipt capacity is full. **Retry output
-collection** recovers the declared outputs of a finished native job without
-running compute again. Disabling new access to the cluster does not block this
-recovery; an archived configuration or revoked worker still does. Declared
-results have owner-authorized, verified attachment downloads with hashes and
-sizes. Downloads do not acknowledge all results or validate their science. Use
-the initialized workspace's helper guide for repeatable verified export.
+Allowance, active/lifetime executions, outstanding work, local storage and logical
+metadata are separate capacities. Completing accounting/collection frees an
+outstanding slot; retained history/files keep their charges. Raising compute or
+lifetime limits does not enlarge storage. Current bounds are in [runtime](runtime.md).
 
-The allowance display uses CPU core-hours and GPU device-hours, with exact
-seconds available. Local storage, logical metadata, outstanding work and burst
-headroom are separate from lifetime executions. Completed jobs release their
-outstanding slots after accounting and collection close out, while retained
-metadata and files keep their own charges. Raising the lifetime limit does not
-enlarge those capacities. Manual file cleanup is available above; automatic
-retention remains on the roadmap.
-
-Visible dashboard/project/cluster/review status sections refresh from saved
-broker data. Editing a comment or setting is preserved. Discovery and cluster
-checks remain explicit actions; read-only status refreshes never submit work.
+Theme choices are **System**, **Light** and **Dark**. System is default; browser
+preferences persist where storage is available. Without JavaScript the system
+palette applies; without storage a choice works for the current page.
 
 ## One-time project keys
 
-Create a separate named key for each client. Choose scopes, expiry, cluster
-restrictions and confirmation mode:
+Create a named key per client, selecting scopes, expiry, cluster restrictions and
+**Follow project policy** or **Always require confirmation**. Issuance/rotation
+reveals the secret once; only a hash and independent metadata/ID are retained.
+Reload cannot retrieve it. Keys share project allowance/lifetime limits; revocation
+stops new access/undispatched work while preserving attribution and accounting.
 
-| Mode | Behavior |
-| --- | --- |
-| Follow project policy | Uses the project's review/automatic policy |
-| Always require confirmation | Every new execution waits for human review |
-
-Issuance and rotation reveal the complete secret once in a non-cacheable
-response. The database retains a hash, metadata and independent key ID. Sessions,
-audit events and replay metadata do not retain plaintext. Reloading cannot
-retrieve it; rotate or create another key if it is lost. All keys share the
-project ledger and lifetime limit. Revocation retains historical attribution and
-stops new operations/undispatched work while native accounting continues.
-
-The one-time key page provides the current broker address and a secret-free
-initialization command. Paste the key only into its hidden terminal prompt; do
-not put it in chat or command arguments. For a rotated key in an initialized
-workspace, replace only the private `.compute-relay/project.key` contents using
-a local editor, keep owner-only read permissions and restart the agent session.
-
-From the science workspace, use `compute-relay init-mcp --client both
---with-workflow` and paste the key at the hidden prompt. The MCP client receives
-no SSH credential. See [client setup](local-client-setup.md).
+The key page supplies a secret-free client setup command. Paste the key only into
+the hidden prompt, never chat or arguments. [Initialize the science workspace](local-client-setup.md)
+there. After rotation, replace only its private `.compute-relay/project.key`,
+retain owner-only permissions and restart the client session.
 
 ## Software discovery and recipes
 
-Personal connectors use automatic provisional metadata discovery. It extracts
-literal paths from protected system configuration and scans bounded module
-filename metadata, including root-declared software-group-managed trees.
-**Also run module avail during discovery** separately authorizes the fixed module
-availability probe. Both results retain their provenance, bounds and omissions;
-neither proves a selected environment works on compute nodes. See
-[module discovery](module-discovery.md).
-
-Known Python, venv, Conda and Poetry candidates are observations, not installed
-or executed by discovery. Dedicated configured searches do not scan an entire
-home directory. Missing catalog entries mean undiscovered, not necessarily
-unavailable.
-
-In a cluster's **Environments** page, save an immutable cluster-bound recipe.
-Choose module names from the searchable catalog or enter exact names in order. Use **Inspect selection** with a running personal connector to populate Python and existing Conda/Poetry/venv dropdowns. Conda and virtual-environment recipes can retain module loads; manual paths remain available. See [Cluster environments](environment-builds.md) for discovery, trust boundaries and agent build requests.
-Projects must grant that exact recipe; identical paths on another cluster do not
-substitute for its connection binding.
-
-| Kind | Reviewed job behavior |
-| --- | --- |
-| Existing Python/Bash | Run the selected existing interpreter |
-| Modules/Lmod | Use the cluster-provided module command, load selected modules, then run the chosen interpreter |
-| Virtual environment | Set its prefix/PATH and run its interpreter without activation hooks |
-| Conda | Run the selected executable/prefix inside the compute job |
-| Poetry virtual environment | Run the existing venv interpreter; do not run Poetry project hooks in the connector |
-
-Module jobs use a login batch shell and restore the submission directory after
-site startup. An explicit initializer is optional advanced configuration, used
-as a fallback only if the command is absent. A missing module command produces
-`MODULE_COMMAND_UNAVAILABLE` rather than running in the wrong environment.
-Recipe edits create a new immutable version; historical packages do not change.
-
-The bundled [environment-build module](environment-builds.md) provides scheduled,
-charged reusable builds under explicit project policy. [Storage planning](extensions-storage.md)
-and [workflows](workflows.md) likewise require their own scopes/policy even though
-normal installation includes them.
+Discovery observes existing software; it installs nothing and does not attest
+compute-node compatibility. Owners may separately authorize module availability
+commands; the [catalog guide](module-discovery.md) explains that trust boundary.
+Register and inspect immutable recipes through [cluster environments](environment-builds.md#cluster-recipes-and-inspection),
+then grant the exact cluster-bound revision. Recipe changes never rewrite old
+packages. Managed builds, storage planning and workflows have their own policies;
+being bundled grants no extra authority.

@@ -1,175 +1,106 @@
-# Bounded investigations and completion
+# Investigations and completion
 
-The compute skill starts with a concrete deliverable, a minimum experiment set,
-required validation, a finite resource/execution allowance, a diagnostic limit
-and an evidence-based stopping rule. All agents and retries share that plan.
-Unused project funds do not justify another experiment. Failed required
-validation with no remaining allowance yields an inconclusive report. These are agent guidance, not enforced investigation sub-budgets or proof of
-scientific validity. Question-first probes and stopping rules adapt the
-[Diagnosing Bugs](https://github.com/mattpocock/skills/blob/main/skills/engineering/diagnosing-bugs/SKILL.md)
-and [Prototype](https://github.com/mattpocock/skills/blob/main/skills/engineering/prototype/SKILL.md)
-skills. Shared delegation and preserved plans follow the
-[Anthropic research-system discussion](https://www.anthropic.com/research/multi-agent-research-system);
-planned versus exploratory analysis follows
-[Center for Open Science guidance](https://www.cos.io/initiatives/prereg).
-Model/session limits such as [SDK turn limits](https://openai.github.io/openai-agents-python/running_agents/)
-and [session budgets](https://platform.claude.com/docs/en/managed-agents/budgets)
-are separate from Compute Relay's allocated resource accounting.
+An investigation records a deliverable, required experiments/validation, finite
+allowance and stopping rule. These guide agents; the project grant remains the
+transactional spending authority. Unused funds do not justify more experiments,
+and scientific closeout does not imply operational reconciliation.
 
 ## Optional investigation records
 
-The `investigations` module stores plans and groups ordinary jobs. It is disabled
-by default, including on existing installations. Enable it explicitly alongside
-the modules already selected, for example with the local launcher's
-`--extensions storage,environments,workflows,investigations`. The launcher applies
-the module's new migration on startup using the same private data directory.
-For direct process deployments, stop control, add `investigations` to
-`BROKER_EXTENSIONS`, run `python -m django migrate` with the existing deployment
-settings/data directory, then restart. Retain the old selections. Reconnect the
-MCP client so it discovers the additional tools.
+`investigations` is off by default and adds metadata, not remote execution.
+Enable it alongside existing modules, for example
+`--extensions storage,environments,workflows,investigations`, then reconnect MCP.
+Direct deployments add it to `BROKER_EXTENSIONS`, migrate with existing settings
+and restart. [Extension retention](extensions.md#enablement-and-retention) applies;
+its closed-scope check is unavailable while disabled.
 
-Read operations require `jobs:read`. Creation, grouping and closeout require the
-new explicit `investigations:write` scope; cancelling unused packages additionally
-requires `jobs:cancel`. Existing project keys gain no scope automatically. The
-module performs no remote operations and needs no new worker execution capability:
-its members remain ordinary jobs or jobs owned by another enabled extension.
-Disabling this metadata module retains its tables and ordinary core accounting;
-its grouping reads and closed-scope admission check are unavailable until it is
-re-enabled. It must remain enabled to enforce closed investigation scope.
+Read needs `jobs:read`; creation/grouping/closeout needs `investigations:write`;
+optional cancellation also needs `jobs:cancel`. Existing keys gain no new scope.
 
-Use `create_investigation(name, plan)` to record the plan, then
-`prepare_job(..., investigation_id=..., role="core")`. Roles are `core`,
-`validation`, and `exploration`. Existing jobs can be attached with
-`add_investigation_jobs`; revisions inherit the same group and role. A job has
-one stable membership. A group holds at most 128 packages, and attachment accepts
-at most 32 explicit job IDs per call. Grouped creation is atomic: a denied group
-cannot leave an orphan job. An investigation snapshots the creating key's
-currently accessible project clusters; creation requires at least one. Its cluster scope cannot be widened by later
-project changes or by a broader sibling key. Reading, listing, attaching jobs and
-closing require current access to every cluster in that scope, including for an
-empty investigation. New jobs, explicit attachments and revisions must remain
-within the saved scope, including the producer clusters of referenced input
-artifacts. An explicit upload is an independent copy. Keys with equivalent authority can collaborate or rotate
-without transferring ownership. Current project/key restrictions and cluster
-revocations still apply, and each member's input provenance remains subject to
-the current key's authorization.
+1. `create_investigation(name, plan)` records the plan.
+2. `prepare_job(..., investigation_id=..., role="core")` groups new packages.
+   Roles are `core`, `validation`, `exploration`; revisions inherit membership.
+   `add_investigation_jobs` attaches existing jobs, at most 32 per call.
+3. `get_investigation` summarizes blockers, abandoned packages, roles, charges and
+   reservations. List/filter with `list_investigations` or
+   `list_project_jobs(..., investigation_id=...)`.
+4. `finish_investigation` records `sufficient`, `inconclusive` or `user_stopped`
+   and a report, blocking new execution while enabled. `cancel_unstarted` dismisses
+   never-requested packages/pending reviews; admitted attempts need normal
+   cancellation/reconciliation. Closing never invents final accounting.
 
-`plan` requires `question`, `deliverable`, `core_experiments`,
-`required_validation`, `stopping_rule`, `budget`, and `diagnostic_limit`.
-The typed MCP schema exposes lengths and bounds. `budget` contains nonnegative
-integer `cpu_core_seconds` and `gpu_device_seconds`, plus `max_executions` from
-1 to 10000. A diagnostic limit of 0 through 32 counts exploration attempts and
-pending reviews. Count environment probes and new execution attempts in the same
-local plan even when their creating tool does not attach them automatically.
-An idempotent transport retry does not add a new execution.
+Each group holds at most 128 packages. Creation snapshots the key's accessible
+cluster scope, requiring at least one cluster; later project changes/sibling keys
+cannot widen it. Reads and changes need current access to every saved cluster,
+even for empty groups. Jobs/revisions and producer artifacts must fit that scope;
+explicit uploads create independent copies. Membership is stable, grouped creation
+atomic, and equivalent-authority keys can collaborate/rotate. Current input
+provenance and revocations still apply.
 
-These plan limits are **agent guidance**, not a second admission ledger or hard
-investigation cap. The summary flags limits reached using settled charges,
-outstanding reservations, attempts and pending approvals. The existing project
-grant still enforces compute admission transactionally. A structured plan does
-not schedule its listed experiments or establish scientific validity.
-
-`list_investigations` filters open, closed or all records.
-`list_project_jobs(..., investigation_id=...)` retains the ordinary attention/
-state filters and pagination. `get_investigation` returns member roles, abandoned
-packages, per-job blockers, aggregate settled usage and outstanding reservations.
-`finish_investigation` records `sufficient`, `inconclusive` or `user_stopped` and
-a closing report. It blocks new execution requests while enabled. Its explicit
-`cancel_unstarted` option cancels never-requested drafts/prepared packages and
-pending reviews. Already admitted attempts need normal attempt cancellation and
-reconciliation; uncertain reservations remain visible. Closing the report does
-not wait for speculative extensions or pretend that accounting is final.
+Plans require `question`, `deliverable`, `core_experiments`, `required_validation`,
+`stopping_rule`, `budget` and `diagnostic_limit`. Budgets use nonnegative integer
+CPU/GPU seconds and `max_executions` 1–10,000; diagnostics count 0–32 exploration
+attempts/pending reviews. Count pilots, probes and retries in the local plan even
+when tools do not attach them. Idempotent transport replay adds no execution.
+Summaries flag limits using usage/reservations/attempts/reviews; they are not
+hard investigation sub-budgets or automatic experiment schedulers.
 
 ## Completion and local evidence
 
-Core `get_job_completion` works without the module. It returns package hashes,
-input descriptors, environment/resource identity, execution requests, paginated
-attempts, retained artifact descriptors, collection state, ledger charges,
-reservations and per-key acknowledgement. It sends no artifact contents.
+Core `get_job_completion` needs no module. It returns provenance, hashes, execution
+requests/attempts, artifact descriptors, collection/accounting and per-key access
+state, never artifact contents.
 
-The HTTP completion endpoint pages attempts with `cursor` and execution requests
-with `execution_cursor`, each with `limit` from 1 to 20. Follow `next_cursor` and
-`next_execution_cursor` independently. The summary counts, accounting and revision
-cover the whole job, including entries outside either page. Blocker details are
-limited to 20; `blocker_count` and `blockers_truncated` describe the complete set.
-Ordinary job status defaults to the latest 20 attempts and requests so its latest
-execution remains current. HTTP callers can select older pages with the same
-cursors; `previous_attempt_cursor`, `previous_execution_cursor`,
-`next_attempt_cursor` and `next_execution_cursor` describe navigation.
+HTTP completion pages attempts with `cursor` and requests with `execution_cursor`,
+independently, at `limit` 1–20. Follow both next cursors; summary/revision covers
+all pages. Blockers expose at most 20 details with `blocker_count` and
+`blockers_truncated`. Ordinary status defaults to latest 20 attempts/requests,
+with previous/next cursors for older pages. Reads use consistent SQLite snapshots
+without a writer lock; revision checks scan compact metadata/report hashes, not
+off-page logs/artifacts. Human review keeps its full history.
 
-These reads hold a consistent SQLite read snapshot, without reserving the writer
-slot used by admission and reports. Revision checks still scan compact metadata
-rows and existing report hashes across the job; they do not load or re-hash
-historical logs or serialize off-page diagnostics/artifact inventories. The explicit
-human review page retains its full approval and diagnostic history.
+`get_job.execution_progress` distinguishes:
 
-`get_job` includes a compact completion summary and `execution_progress`:
-
-| Observation | Meaning |
+| Field | Meaning |
 | --- | --- |
-| `client_permission_review: not_observed_by_broker` | Client approval success or timeout must be learned from the client |
-| `execution_request_exists` | A broker request is recorded; this alone does not mean submitted |
-| `dispatch_started` | Submission intent is durable; receipt may still be unknown |
-| `compute_submitted: true` | A native scheduler receipt is recorded |
-| `compute_submitted: null` | Dispatch is uncertain; reconcile the original attempt |
-| `compute_submitted: false` | No confirmed or currently uncertain submission is recorded |
+| `client_permission_review: not_observed_by_broker` | Client approval/timeout must be learned from the client |
+| `execution_request_exists` | A request exists, not necessarily a submission |
+| `dispatch_started` | Durable submission intent |
+| `compute_submitted: true / null / false` | Native receipt / uncertain submission / neither recorded |
 
-`operationally_reconciled` covers execution, collection and accounting blockers.
-Local download verification, acknowledgement and scientific acceptance stay
-separate. A request for bytes cannot prove that the client retained and verified
-them. Acknowledgement does not certify a scientific claim. Resource-seconds are
-accounting figures, not monetary costs.
+`operationally_reconciled` covers execution, collection and accounting. Verified
+local delivery, acknowledgement and scientific validity remain independent.
+A byte request proves neither retention nor verification; acknowledgement is not
+scientific certification. Resource-seconds are not monetary cost.
 
-Read the workspace's `.compute-relay/USAGE.md` for the exact installed interpreter.
-The new helper operation consolidates metadata export and result delivery:
+Use the installed interpreter in `.compute-relay/USAGE.md`:
 
 ```sh
 python -m compute_relay.cli files finish --directory /path/to/workspace \
   --investigation-id INVESTIGATION_UUID --output results/INVESTIGATION --acknowledge
 ```
 
-Use `--job-id JOB_UUID` for an individual job; no investigation module is needed.
-`--no-download` exports metadata with local delivery explicitly unverified.
-`--resume` reuses only a matching broker/project/subject export, rechecks hashes,
-and refreshes states. Outputs are private regular files under the explicit
-workspace destination. `run-manifest.json` includes provenance, job revisions,
-local receipts, pending exports, costs in resource-seconds, reservations and
-separate operational/local/scientific states. It is capped at 32 MiB of metadata.
-Publication is atomic. The helper never starts compute, retries execution,
-changes grants, closes investigation scope or certifies the science.
+`--job-id JOB_UUID` exports one job without investigations. `--no-download` marks
+delivery unverified; `--resume` requires matching broker/project/subject and
+rechecks hashes/states. Private outputs and atomic `run-manifest.json` record
+provenance, receipts, pending exports, usage and separate completion states, at
+most 32 MiB metadata. This never starts compute, retries execution, changes grants,
+closes scope or certifies science.
 
-Each job's pages share a revision checked again after pagination; an unstable
-snapshot is retried once, then fails explicitly. Group exports record per-job
-revisions, not a global transactional snapshot. Jobs added or changed before
-the final group read appear in `pending_job_exports` and prevent a complete
-claim. The manifest is evidence as observed, not a lock on future broker changes.
+Per-job pagination rechecks revision, retries an unstable snapshot once, then
+fails. Group exports hold per-job revisions, not a global transaction; changes
+at final read populate `pending_job_exports` and prevent a complete claim.
 
 ## Bounded waiting and shared guidance
 
-`get_job` and `get_investigation` return an opaque SHA-256 `revision` and
-`changed`. Supply `after_revision` and integer `wait_seconds` from 0 through 20
-for a bounded wait. A positive wait requires a revision. Each poll rechecks
-authority. Sleeping holds no database transaction, and two wait slots leave
-the remaining HTTP threads available; excess waits return `WAIT_BUSY` (429).
-An unchanged timeout returns `changed: false`. Persist the returned revision.
-
-MCP advertises `compute-relay://guide/workflow`, `/placement`, `/completion`
-and `/job_request`. `get_compute_guide(topic=...)` provides the same content
-for tool-only clients. Tool descriptions focus on their own operation. Resource
-fields expose primitive types, constraints, units and CPU/GPU examples without
-the conditional intersection that some clients render as `unknown & unknown`.
-Canonical validation still enforces GPU type/count consistency before mutation.
-Generic GPU requests are allowed only on the connection's advertised
-`untyped_gpu_partitions`; the broker rechecks project permission at admission
-and dispatch.
-Host `memory_mib` requests RAM; GPU VRAM depends on the selected hardware.
+`get_job`/`get_investigation` return `revision` and `changed`. Pass the opaque
+revision as `after_revision` and integer `wait_seconds` 0–20; positive waits need
+a revision. Sleeping holds no DB transaction and rechecks authority. There are two
+wait slots; excess returns `WAIT_BUSY` (429), unchanged timeout `changed: false`.
+MCP resources and `get_compute_guide` expose workflow, placement, completion and
+job-request guidance on demand.
 
 ## Verification
-
-The unit/HTTP suites cover grouping authority and atomicity, inherited revisions,
-uncertain dispatch, closeout, waits, missing outputs, paginated snapshot changes,
-hash verification, safe resume, and acknowledgement without execution. Core-only
-boundary tests prove the module can be absent. Run native fixture acceptance with:
 
 ```sh
 docker compose -p relay-investigation-test -f deploy/compose.test.yml \
@@ -181,7 +112,9 @@ docker compose -p relay-investigation-test -f deploy/compose.test.yml \
   -f deploy/compose.investigations-test.yml down --volumes
 ```
 
-This uses one explicitly reviewed CPU job on the disposable SSH/Slurm fixture,
-cancels an unused package and pending review, runs the installed export CLI and
-resume, verifies result bytes/hashes and checks the shared ledger. It is not a
-test against an institutional cluster or evidence of scientific validity.
+This disposable native fixture reviews one CPU job, cancels unused work, checks
+export/resume/hashes and the shared ledger. It is not institutional acceptance.
+Planning guidance adapts [Diagnosing Bugs](https://github.com/mattpocock/skills/blob/main/skills/engineering/diagnosing-bugs/SKILL.md)
+and [Prototype](https://github.com/mattpocock/skills/blob/main/skills/engineering/prototype/SKILL.md),
+with shared-plan principles from [Anthropic](https://www.anthropic.com/research/multi-agent-research-system)
+and planned/exploratory analysis from [COS](https://www.cos.io/initiatives/prereg).

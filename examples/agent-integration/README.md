@@ -1,20 +1,28 @@
 # Fresh-agent acceptance kit
 
-These are reproducible tasks for a new agent session, not evidence that a client or cluster has already passed. The repository's automated tests run only tiny local variants. No script in this kit submits a job, opens SSH, starts a tunnel, or reads a project token. An operator supplies a project-scoped token file to the stdio facade.
+Supervised tasks for a fresh client session, not proof that any client/cluster
+passed. Automated tests execute tiny local variants only. Scripts never open SSH,
+submit jobs or read tokens; the operator supplies a scoped token path to MCP.
 
-| Case | Intended placement | Default required extensions | Success evidence |
+| Case | Placement | Required extension | Evidence |
 | --- | --- | --- | --- |
-| 00 | One reviewed, tiny native Slurm job | None | Rejection/comment, revised source, exact approval, native identity, output hash, settled accounting |
-| 01 | Local stdlib diffusion | None | Analytic discrete/continuum comparison; zero cluster submissions |
-| 02 | Local OU derivation/pilot, four cluster replicas, local analysis | None | Distinct seeds, exact transition, retrieved sufficient statistics and uncertainty |
-| 03 | Three artifact-dependent cluster stages | `workflows` | Native task identities and checked data → model → validation dependency hashes |
-| 04 | Local theory/pilot; genuinely dense quenched disorder on suitable cluster | None with an existing approved NumPy environment | Effective-RAM, work/storage/budget preflight; transient simulation/theory comparison |
+| 00 | One reviewed Slurm job | None | Rejection/revision, approval, native identity, output hash/accounting |
+| 01 | Local stdlib diffusion | None | Analytic comparisons; no cluster submissions |
+| 02 | Local OU pilot, four cluster replicas, local analysis | None | Distinct seeds, sufficient statistics and uncertainty |
+| 03 | Three dependent cluster stages | `workflows` | Native identities and checked dependency hashes |
+| 04 | Local theory/pilot, dense quenched cluster simulation | None with approved NumPy | RAM/work/storage/budget plan; transient theory comparison |
 
-Extensions are disabled by default. `case.json` declares required extensions, core tools, optional profiles and resource bounds. Discover actual tools/capabilities first. Missing extension or scope means **blocked**, not permission to enable server extensions or broaden a key. Environment building needs the human-enabled `environments` extension. The current alpha can build an empty stdlib venv or a small verified wheel closure; its 512 KiB core upload limit cannot stage the 16.6 MB NumPy wheel, so a managed NumPy build is blocked until large-wheel transport exists. Use a preinstalled approved NumPy environment for case 04. The workflow extension orchestrates ordinary native jobs through retained artifacts; native Slurm arrays and scheduler dependency directives are not implemented. Ordinary output retrieval is core. The manual artifact-relay fallback for case 03 does not pass workflow-extension acceptance.
+`case.json` defines profiles, scopes and bounds. Missing capability/permission
+means blocked, never permission to broaden it. Generated projects default to
+core-only MCP tools; `--extensions` explicitly narrows registration to available
+server modules. The normal launcher bundles storage/environments/workflows, but
+builds still need owner policy and `environments:build`. Reviewed wheel closures
+can use resumable uploads. Manual artifact relay does not pass case 03's workflow
+acceptance; arrays/native scheduler dependencies are unsupported.
 
-The API key identifies the broker project. Neither the generated MCP configuration nor job requests need a project UUID; the adapter resolves it from the authenticated broker at startup. The generator itself stays offline and never opens the referenced key file.
+## Create a run
 
-From the repository, create one fresh private project:
+Use a fresh operator-configured project and destination per client/case repetition:
 
 ```sh
 python tools/agent_integration.py create --case 00 \
@@ -24,25 +32,57 @@ python tools/agent_integration.py create --case 00 \
   --python /ABSOLUTE/BROKER_VENV/bin/python
 ```
 
-Use a new operator-configured project for each externally metered run. A consumed lifetime slot, a256MiB supervised profile, or an unverified timing profile is not permission to enlarge limits. High-RAM verification requires a separately configured suitable grant; otherwise record blocked.
+Python must already contain Compute Relay, including its core MCP dependency.
+The offline generator references but never opens/copies the token; authenticated
+MCP resolves project identity. It creates private `0700` directories/`0600` files,
+refuses overwrite, and permits only `/tmp/` or ignored checkout `local/` destinations.
+It writes project client settings, scripts/prompts, source hashes and a recording
+template; global client settings remain untouched. Add
+`--extensions environments,workflows` only for enabled and explicitly granted
+capabilities. Exhausted slots, small grants or uncertain timing never authorize
+larger limits; high-RAM work needs its own accepted grant/plan.
 
-The supplied Python must already have this broker and its `mcp` extra installed. The generator creates mode0700 directories and mode0600 files, refuses any existing destination, and references the token path without opening/copying it. Destinations must be below `/tmp/` or this checkout's ignored `local/`. It changes no global client settings. Optional client registration is explicit: add --extensions environments,workflows only when the human has enabled those server extensions and granted the required project/key scopes; the flag does not grant authority. Each project contains `.codex/config.toml`, `.mcp.json`, `PROMPT.md`, scripts, checklist, source hashes, and a recording template. Use a distinct project directory/session for every client/case repetition.
+Open/trust the generated project, verify `compute_relay` is connected, then send
+`PROMPT.md`. Codex uses `.codex/config.toml`; Claude Code uses `.mcp.json`.
+Direct browser/ChatGPT HTTP connectors are unsupported. Client setup references:
+[Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Claude Code](https://code.claude.com/docs/en/mcp).
 
-For Codex, open the generated project, review/trust its project configuration, verify the `compute_relay` server is connected, and send `PROMPT.md` as the first task. Codex documents project-scoped stdio configuration in `.codex/config.toml`. [Official Codex MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+## Record evidence
 
-For Claude Code, start in that project and review its project `.mcp.json`; check the MCP connection before sending the prompt. [Official Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
-
-The ordinary ChatGPT connector/UI is **not directly supported by this stdio-only alpha**. A Codex surface in a desktop app is a separate client test. ChatGPT's connector setup expects an accessible HTTP MCP endpoint; none is implemented or exposed by this kit. [Official ChatGPT MCP quickstart](https://developers.openai.com/plugins/build/app-quickstart). No tunnel is created automatically.
-
-Complete `record.template.json` into `run-report.json`, retaining every check ID. Record public job/attempt IDs, native backend identity, hashes, measured allocated compute, storage, versions/model and limitations; never paste keys or private service configuration. Save a validated, nonoverwriting result:
+Complete `record.template.json` as `run-report.json`, retaining every rubric ID.
+Record public identities, native accounting, hashes, versions/model, parameters
+and limitations, never keys or private service settings:
 
 ```sh
 python tools/agent_integration.py record --project /tmp/broker-case00-codex \
   --input run-report.json --name codex-run-01
 ```
 
-The recorder checks format/rubric completeness; it does not independently attest that an agent's claims are true. A human must compare the transcript, broker review, native backend labels and artifacts. Fake execution must remain labeled simulated and cannot pass real-Slurm cases. Failed/cancelled/uncertain jobs still need accounting reconciliation; never erase them or repeat an ambiguous submission. Use stable idempotency keys for retries of the same intended mutation.
+The non-overwriting recorder validates format, not truth. Compare transcript,
+reviewed package, native labels and artifacts independently. Fake execution cannot
+pass Slurm cases. Reconcile failures/cancellations/uncertainty without blindly
+resubmitting. Reserve effective CPUs × requested whole-minute walltime; settle
+actual allocated usage, including overages. All cases use zero GPUs. Include
+pilots/builds/failures/replicas in the allowance and data/logs in storage estimates.
 
-Requested scheduler time is whole minutes. Read maximum charged duration from the prepared manifest, including the site's verified margins; budget CPU cores × maximum duration, not measured utilization. GPU count is zero in every case. Include builds, pilots, failed attempts, copies, logs and all replicas in resource planning. The broker remains the admission authority.
+## Local verification
 
-NumPy is optional and only used in case04's bounded calibration/large implementation. Its wheel-specific lock contains an actual downloaded wheel hash for CPython3.12/3.13 Linux x86_64, not a fabricated universal hash. Another platform needs a reviewed wheel/hash lock. No raw dense coupling matrix is written to shared storage. See `REFERENCES.md` and case04's prompt for the model's limits and honest memory-efficient alternatives.
+```sh
+python -m pytest tests/unit/test_agent_integration_kit.py -q
+```
+
+Optional NumPy tiny checks require matching CPython 3.12/3.13 Linux x86_64 wheels:
+
+```sh
+python -m pip install --require-hashes \
+  -r examples/agent-integration/04-dense-ising/requirements-science.lock \
+  --target local/science-packages
+PYTHONPATH=local/science-packages python -m pytest tests/unit/test_agent_integration_kit.py -q
+```
+
+Ordinary tests install no science dependencies or large matrices. High-N tests
+check arithmetic only. Large execution requires explicit parameters, matching
+accepted plan, compute-node memory verification and `--execute-large`; broker
+policy/human decisions remain authoritative. Other platforms need reviewed wheel
+locks. [References](REFERENCES.md) states the model, RNG and dependency limits.

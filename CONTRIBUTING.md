@@ -1,22 +1,13 @@
 # Contributing
 
-Start with the [documentation guide](docs/README.md),
-[implemented runtime scope](docs/runtime.md), [decision records](docs/adr/README.md),
-and [the security model](docs/security.md). Accepted open work is listed in
-[the roadmap](docs/roadmap.md).
-Preserve the distinction between current behavior and target requirements.
+Use focused changes with concrete behavior, validation and limitations. Check the
+[roadmap](docs/roadmap.md) before expanding scope. Never commit broker state,
+credentials, cluster profiles or private acceptance evidence. Report security
+issues through [SECURITY.md](SECURITY.md).
 
-This is a development alpha. Changes should identify concrete behavior, its
-authorization boundary and the evidence used to validate it. Use a focused
-feature branch and commits that can be reviewed independently. Do not commit
-local broker databases, project keys, owner credentials, cluster profiles, SSH
-material or acceptance artifacts containing private host details.
+## Development
 
-## Development checks
-
-Use a Python version listed in `[tool.compute-relay.ci].python-versions` in
-`pyproject.toml` and [uv 0.13.6](https://docs.astral.sh/uv/getting-started/installation/).
-The project requires that uv version. Install and run the locked test environment:
+Use the Python matrix in `pyproject.toml` and the pinned uv version:
 
 ```sh
 uv sync --locked --extra test --python 3.13
@@ -25,63 +16,30 @@ uv run --locked --extra test python tools/check_contracts.py
 uv run --locked --extra test python tools/local_smoke.py
 ```
 
-`uv.lock` is shared by development, CI and disposable Docker fixtures. Change
-dependencies in `pyproject.toml`, run `uv lock`, and commit both files. Use
-`uv lock --upgrade-package NAME` for an intentional dependency update; `--locked`
-checks fail instead of silently changing the lock. Setuptools remains the build
-backend, and ordinary wheel/pip installation is supported.
+Change dependencies in `pyproject.toml`, run `uv lock`, and commit both files.
+Use `uv lock --upgrade-package NAME` for deliberate upgrades. The lock serves
+development, CI and disposable fixtures; ordinary wheel installation remains
+supported. See [testing](docs/testing.md) for package and native acceptance checks.
+Fixture credentials are synthetic; real-site work needs an explicitly reviewed
+grant and job package. Public CI must require no institutional secrets or MFA.
 
-The ordinary suite uses temporary databases and tiny synthetic workloads. It does not contact a real cluster.
-The NumPy science calibration is optional and separate from core dependencies.
+## Change requirements
 
-For environment, workflow or storage changes, run the corresponding disposable
-Slurm acceptance overlay described in [container testing](docs/container-testing.md).
-The CI matrix exercises each extension independently. Do not point fixture
-scripts at personal or institutional credentials. Real-site acceptance is an
-explicit operator workflow with a separately reviewed grant and job package.
+Preserve [security boundaries](docs/security.md), atomic admission/accounting,
+input validation and uncertain-job evidence. Project input must never choose
+imports, remote commands, credential paths or undeclared filesystem roots.
+Optional capabilities follow the [extension contract](docs/extensions.md),
+including core-only operation and retained state when disabled.
 
-## Module boundaries
-
-New optional capabilities belong in a separate app under
-`src/compute_relay/extensions/`, with its own models, migrations, validators,
-worker adapter, API, portal, tests and scope metadata. Defaults remain disabled.
-Follow [the lifecycle contract](docs/extensions.md) and
-[the boundary checklist](docs/module-boundaries.md). Make core changes only for
-generic primitives needed to preserve shared admission, review and accounting.
-Prove ordinary core operation with all extensions absent. Removing or disabling
-a feature must never erase durable attempts or release uncertain reservations.
-
-An agent-facing input is not an operator setting. Never accept arbitrary import
-paths, remote command templates, secret file paths or undeclared filesystem
-roots from project credentials. Installers run as scheduled workloads. Remote
-metadata helpers must remain bounded and fixed. Filesystem migration requires
-its own capability and policy; the current workflow extension rejects artifact
-edges across clusters.
-
-## Review and publication
-
-Include the problem, resulting behavior, validation and material limitations
-in a change description. Keep schema copies and examples consistent. The alpha
-requires no backward compatibility for stored state. Regenerate the
-current initial migrations when the schema changes and verify fresh setup with
-all bundled modules and with core only. Document any required state reset; do
-not add backfills or legacy configuration readers. Public CI must need no
-secrets, institutional hosts or manual MFA.
-Reference the relevant stable test IDs in [the testing plan](docs/testing.md),
-include a negative or regression case for security-relevant behavior, and
-document site assumptions. Attribute copied or adapted upstream code with its
-original license notices.
+Keep schemas/examples consistent. This alpha does not promise old stored-state
+compatibility: regenerate initial migrations after schema changes, verify fresh
+core-only and bundled setup, and document any required reset. Do not add legacy
+readers or backfills. Describe validation and site assumptions; security changes
+need negative/regression evidence. Preserve upstream attribution and licenses.
+Before publication, complete the release gates in the testing guide.
 
 ## Contribution licensing
 
-Compute Relay is licensed under the [Apache License, Version 2.0](LICENSE).
-Unless explicitly stated otherwise, contributions intentionally submitted for
-inclusion in this project are provided under that license, as described in
-Section 5. Contributors must have the right to submit their work and preserve
-any required third-party notices. No copyright assignment is required.
-
-Before a public package release, maintainers must complete the release,
-dependency, security and deployment checks documented in the project roadmap.
-
-For security issues, follow [SECURITY.md](SECURITY.md) and avoid publishing
-sensitive details in an ordinary issue.
+Contributions are provided under [Apache-2.0](LICENSE), Section 5, unless explicitly
+stated otherwise. Contributors must hold the necessary rights and preserve
+third-party notices. No copyright assignment is required.

@@ -1,94 +1,56 @@
-# Recovering agent work and choosing available compute
+# Recover work and inspect scheduler availability
 
-`get_project_context` includes `work_summary` for keys with `jobs:read`. After a
-restart or lost conversation context, call `list_project_jobs()` and follow
-`next_cursor` to recover durable project work before preparing more executions.
-The API key selects the project; current key cluster restrictions still apply.
+After restart/context loss, read `get_project_context.work_summary`, then
+`list_project_jobs()` and follow `next_cursor` before creating more work.
+The key selects its project and current cluster restrictions.
 
-The default `attention` filter includes drafts/prepared jobs that have never been
-submitted, pending human reviews, active execution, unresolved accounting/output
-collection and finished results not acknowledged by this key. Superseded
-unsubmitted revisions are omitted. The explicit filters are `unfinished`,
-`unread_results` and `all`; pages contain at most 100 jobs and bounded attempt
-summaries. `get_job` supplies details for an individual recovered job.
+Default `attention` includes unused drafts, pending reviews, active execution,
+unresolved accounting/collection and this key's unacknowledged results, excluding
+superseded unused revisions. Other filters are `unfinished`, `unread_results`,
+`all`; pages contain at most 100 bounded summaries. Inspect individual `get_job`.
 
-Result tracking is durable per credential and attempt. Listing artifacts records
-inventory access; requesting terminal logs or artifact content records a byte
-request. This is not proof of a complete verified download. After reviewing or
-recording results, `acknowledge_job_results(attempt_id)` clears the reminder for
-that key without asserting scientific validity or changing accounting. Historic
-reads before this migration are unknown and may appear unread. A newly issued
-key sees project work, but has its own result acknowledgements.
+Result access/acknowledgement is per key and attempt. Inventory/byte requests do
+not prove verified delivery. `acknowledge_job_results(attempt_id)` clears that
+key's reminder after assessment, without claiming science or changing accounting.
+A new key has its own acknowledgements.
 
-Listing and reconnecting never execute or resubmit a job. Reuse existing
-execution-request/attempt identities and idempotency keys when recovering an
-uncertain operation. `cancel_prepared_job(job_id)` dismisses an abandoned draft
-that has no execution requests and retains its package/history. Submitted work
-uses the existing execution-request/attempt cancellation tools.
+Listing/reconnecting never executes work. Reuse request/attempt identities and
+stable idempotency keys after uncertain replies. Default `request_execution(job_id)`
+reuses that job's first request; only a fresh explicit key deliberately repeats
+execution. `cancel_prepared_job` dismisses a never-requested draft while retaining
+evidence; admitted work needs normal cancellation/reconciliation.
 
-`request_execution(job_id)` derives its default idempotency key from the immutable
-job ID. Repeating it, including after an MCP restart, returns the original
-execution request without another reservation or submission. Use a new explicit
-`idempotency_key` only when you intend to execute that same package again.
-
-| API | Purpose |
+| Route | Purpose |
 | --- | --- |
-| `GET /api/v1/projects/{id}/jobs?state=attention&limit=20&cursor=...` | Key-scoped recovery inbox |
-| `POST /api/v1/attempts/{id}/acknowledge-results` with `{}` | Acknowledge a terminal result for this key |
-| `POST /api/v1/jobs/{id}/cancel-prepared` with `{}` | Cancel a never-submitted draft; requires `jobs:cancel` |
-| `GET /api/v1/projects/{id}/availability` | Cached scheduler observations across permitted clusters |
-| `POST /api/v1/projects/{id}/availability` with `{}` or `connection_ids` | Request bounded observation refreshes |
+| `GET /api/v1/projects/{id}/jobs?state=attention&limit=20&cursor=...` | Scoped recovery inbox |
+| `POST /api/v1/attempts/{id}/acknowledge-results` with `{}` | This key's result acknowledgement |
+| `POST /api/v1/jobs/{id}/cancel-prepared` with `{}` | Dismiss unused draft; `jobs:cancel` required |
+| `GET/POST /api/v1/projects/{id}/availability` | Read cached / request refreshed permitted cluster observations |
 
 ## Admission limits and scheduler availability
 
-`effective_limits` and the allowance describe what a project can request.
-`get_compute_availability(refresh=True)` requests fresh read-only observations
-through the existing authenticated connector. Poll with `refresh=False`; each
-cluster is rate limited to one refresh per 30 seconds. The updated worker
-advertises `availability_v1`. Old connectors return `connector_upgrade_required`
-instead of pretending a snapshot is available.
+`effective_limits`/allowance describe authorization, not idle hardware.
+`get_compute_availability(refresh=True)` requests read-only observations; poll
+with `refresh=False`. Refresh is limited to once per cluster per 30 seconds.
+Connectors advertise `availability_v1`; incompatible ones return
+`connector_upgrade_required`.
 
-Snapshots show scheduler-visible partition node/CPU counts, configured and
-allocated/idle GPUs by type, running/pending queue entries, GPU request types
-and pending reasons. Every observation has a timestamp, age, query status,
-truncation indicator and connection revision. Data older than 120 seconds, or
-from an old connection revision, is stale. Unknown allocations stay unknown;
-failed scheduler queries do not contribute capacity. Queries use fixed `sinfo`
-and `squeue` formats with five-second deadlines and bounded returned data; they
-do not allocate compute or modify cluster configuration.
+Snapshots include partition CPU/node/GPU counts, allocated/idle hardware,
+visible queue entries/reasons, timestamp/age/status/truncation and connection
+revision. Age over 120 seconds or an old revision is stale; failed queries and
+unknown allocation remain unknown. Fixed `sinfo`/`squeue` queries have five-second
+deadlines and bounded data; they neither allocate nor change configuration.
 
-`queue_pressure.pending_jobs_per_schedulable_node` normalizes pending entries by
-the partition's schedulable node count. For example, 10 pending jobs on 5 nodes
-is 2 per node; 100 on 200 is 0.5. The larger absolute queue can have less relative
-pressure. Ratios use decimal strings (for example, `"2"`, `"0.5"`) with
-`ratio_encoding: "decimal_string"`, or `null` when unknown. Compare them
-numerically, not lexicographically; counts and capacities remain integers.
-`pending_gpu_jobs_per_schedulable_device` uses the capacity of each GPU
-type on schedulable nodes, excluding down/draining nodes. The raw counts and
-denominators remain visible. Zero/missing capacity or failed/truncated queries
-produce unknown ratios. Compare relevant partitions across clusters; their
-totals may overlap. Typed GPU ratios exclude untyped GPU requests, which are
-reported separately. Ratios count visible queue entries, not requested resource
-amounts or durations; they cannot predict start times or rank clusters alone.
+`queue_pressure.pending_jobs_per_schedulable_node` divides pending entries by
+schedulable nodes; `pending_gpu_jobs_per_schedulable_device` does so per GPU type,
+excluding down/draining nodes and reporting untyped jobs separately. Values are
+decimal strings (`ratio_encoding: decimal_string`) or null: compare numerically,
+not lexicographically. Raw counts/denominators remain visible. Zero/missing
+capacity or failed/truncated observations gives unknown ratios.
 
-Partition totals can overlap. Idle totals may be fragmented across nodes or
-unavailable under account, QOS, reservation or priority rules. Queue visibility
-can be restricted by the site, and array jobs may be grouped. This provides
-placement evidence, not a reservation, exact wait estimate or guaranteed start.
-The workflow selects among permitted clusters; automatic placement and monetary
-cost comparison are not configured. A future pricing extension can add those
-without treating current job ceilings as available hardware.
-
-These observations use Slurm's documented [node fields](https://slurm.schedmd.com/sinfo.html)
-and [queue fields](https://slurm.schedmd.com/squeue.html).
-
-## Updating an installation
-
-Apply both core and enabled environment-extension migrations, restart control
-and connectors, and restart project MCP clients to load the new tools and server
-guidance. Review/update an existing locally installed compute workflow skill
-against the bundled version; initialization preserves differing local skills.
-Project administrators can enable automatic
-permission of verified environment builds once in environment-build policy.
-The code changes alone do not change the running service, deployed connectors,
-existing build policy or real cluster state.
+Overlapping partitions, fragmentation, reservations, account/QoS/priority rules,
+restricted queue visibility and grouped arrays limit these observations. Ratios
+count entries, not job sizes/durations. They do not predict start times, reserve
+capacity, rank clusters alone or estimate money. Automatic placement/pricing is
+not configured. Source semantics: [Slurm nodes](https://slurm.schedmd.com/sinfo.html)
+and [queues](https://slurm.schedmd.com/squeue.html).

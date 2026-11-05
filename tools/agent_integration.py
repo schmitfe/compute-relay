@@ -76,7 +76,7 @@ def create(case, destination, broker_url, project_token_file, python, extensions
             (destination / folder).mkdir(mode=0o700)
         sources = [path for path in (KIT / CASES[case]).iterdir() if path.is_file()]
         sources += [path for path in (KIT / "common").iterdir() if path.suffix == ".py"]
-        sources += [KIT / "README.md", KIT / "REFERENCES.md", KIT / "VALIDATION.md", KIT / "record.schema.json"]
+        sources += [KIT / "README.md", KIT / "REFERENCES.md", KIT / "record.schema.json"]
         hashes = {}
         for source in sources:
             relative = Path("common") / source.name if source.parent.name == "common" else Path("SETUP.md" if source.name == "README.md" else source.name)

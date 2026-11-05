@@ -1,126 +1,63 @@
-# Optional advisory storage planning
+# Advisory storage planning
 
-Enable the storage extension with `BROKER_EXTENSIONS=storage` in an installation
-that includes its package, then apply its Django migrations. It is disabled by
-default. The extension has its own application, models, migrations, URLs and
-templates; core job preparation, admission and accounting do not require it.
-
-This implementation saves project-owned locations, project byte/inode budgets,
-and a per-cluster choice of work, environment, data, results and scratch locations.
-Its agent API reads configuration and performs **dry-run estimates only**. It does
-not redirect existing jobs, reserve physical disk space, enforce OS quotas,
-scan retained data, build images, extract archives or delete data. Optional,
-human-enabled capacity checks read filesystem statistics through the protected
-worker; they do not measure a project's actual retained usage.
+The bundled storage module records project locations, byte/inode budgets and
+per-cluster defaults. Agents read configuration and make dry-run estimates.
+It does not redirect job/build writes, reserve physical space, enforce OS quotas,
+scan retained data or delete files. Enablement follows [extensions](extensions.md).
 
 ## Human configuration
 
-Open `/projects/<project-id>/storage/` to manage a project's locations, budgets
-and defaults. Select an assigned cluster and add its storage location at
-`/projects/<project-id>/storage/targets/new/`. Every new location belongs to that
-one project, even if another project uses the same remote directory. A project
-owner or administrator with access to their own cluster can configure it;
-belonging to the project does not grant another member's SSH identity or worker
-filesystem access. The storage location's connection owner can differ from the
-project owner.
+Open `/projects/<id>/storage/` and select an assigned cluster. Each location is
+project-owned, even when another project uses the same directory or filesystem.
+Its connection owner must authorize filesystem access; project membership does
+not grant someone else's SSH identity.
 
-For a personal connector, the cluster owner can enter a dedicated directory or
-use **Browse directories** to inspect directory names and access metadata through
-their running worker. Browsing is
-requested by human POSTs, and GET pages only display task status. Form selections
-are retained when returning from the browser.
+For personal connectors, enter a path or **Browse directories**, then:
 
-Select **Check/create directory** to queue one fixed connector operation. The
-worker creates missing folders along the selected path as private directories
-(0700), using your cluster account. Existing directories keep their contents
-and permissions; existing files and final symbolic links are rejected. Parent
-creation is bounded by the path limit and refuses symlink substitutions. The check
-expires after five minutes and does not register the location automatically.
-Review its result and select **Save storage location**. The review shows both the
-requested path and the worker's canonical directory when a parent alias resolves
-elsewhere. Saving explicitly confirms that displayed canonical path. Registration
-binds the project, owner, exact task and returned writable directory, worker
-profile fingerprint and connection revision. Repeating a completed form does not
-create another task or location. Replacing a worker or changing its execution
-configuration requires a current binding.
+1. **Check/create directory** queues a fixed worker operation under your cluster
+   account. Missing parents are created privately (`0700`); existing directories
+   retain contents/permissions. Files, final links and symlink substitutions fail.
+2. Review the requested and canonical writable directory and **Save storage
+   location** within five minutes. Checking alone never registers it.
 
-Personal directories support advisory project budgets and role selection while
-free capacity, filesystem identity and native quota remain unknown. Read-only
-capacity probes are unavailable for this provenance until the protected worker
-separately publishes a supported root. This configuration neither expands job
-staging authorization nor redirects existing jobs, and introduces no agent path,
-URL, browsing, creation or filesystem-write API.
+Browsing/creation require human POSTs; GETs show status. Selections survive the
+browser. Registration binds project/owner, task, canonical path and exact worker
+profile/connection revision. Retries do not create another location. Replacing
+that binding requires fresh registration. No agent browsing, creation or path-write
+API is added.
 
-Managed workers retain the existing path: a human selects one exact root already
-advertised by the protected worker profile. Existing `remote_root_prefixes` are
-supported as conservative compatibility choices with unknown visibility and
-quota capabilities.
+Personal directories support advisory budgets/roles; their capacity, filesystem
+identity and quota remain unknown. Capacity checks require a separately advertised
+protected root. Managed workers select an advertised exact root;
+`remote_root_prefixes` remain conservative choices with unknown quota/visibility.
+Core profiles do not yet advertise the optional `storage_roots` metadata contract.
+Do not broaden SSH roots merely to obtain a storage feature.
 
-The plugin also validates an optional `storage_roots` metadata contract for a
-future generic worker metadata extension: each entry has an `alias`, canonical
-absolute `path`, supported `roles`, optional `filesystem_id`, and restricted
-capabilities (`visibility`, `formats`, `quota_reporting`). Current core profile publication does not advertise that optional field. Do not
-broaden SSH roots to enable unrelated storage. Any worker metadata integration
-is tracked in the [roadmap](roadmap.md).
+Locations bind `work`, `environments`, `data`, `results` or `scratch` roles for one
+project/cluster. Enrollment fills only empty supported defaults. Stale, unassigned
+or key-restricted locations are unavailable to plans. An owner may assign an
+unassigned location only without conflicting project references; otherwise create
+a separate location. No assignment moves/scans files.
 
-Targets bind their project, exact worker profile fingerprint and connection revision.
-Changing those bindings makes old targets unavailable for new plans. Enroll the
-new binding; historical planning records remain. A capacity pool can group
-locations on the same cluster only when their protected filesystem identities
-agree, including explicitly unknown identities. Unknown grouping is not proof
-that locations share a physical filesystem.
-
-Budgets and manual retained-usage estimates apply across the whole project and
-all its API keys. Location choices are separate for each assigned cluster, with
-the roles `work`, `environments`, `data`, `results` and `scratch`. Enrollment fills
-empty defaults supported by the new location and preserves existing choices.
-A location is selectable only within its exact project and assigned cluster;
-matching owners, remote paths or physical filesystems do not make it selectable
-by another project. Key cluster restrictions narrow the API inventory and
-dry-run access further.
-
-Capacity pools describe physical storage and can be shared by compatible
-locations on the same cluster. Sharing a pool does not share project locations,
-budgets, role defaults or SSH authorization. A capacity observation describes
-the filesystem's available space; it does not attribute retained files to any
-project. Separately configured project budgets remain advisory estimates and
-do not divide or reserve that physical free space.
-
-An unassigned location is unavailable to project plans. Its owner can assign it
-from the intended project's settings only when no bindings reference another
-project. Ambiguous references require a separate location for that project.
-Assignment still requires a current worker binding and does not delete, move
-or scan remote files.
-
-Capacity checks are **off by default**. A preserved probe setting does not make
-unassigned or stale locations usable for capacity checks. For supported protected
-roots, an owner can explicitly enable them while enrolling a location or using
-its enable/pause button in the project's storage settings. Pausing invalidates
-in-flight leases. Saving project settings does not trigger checks. Probes do not scan,
-create or change remote files. The separate human directory-creation step above
-creates only its requested final directory. Manual usage values are labeled
-`human_estimate`, with their update time; they are not filesystem measurements.
+Pools may group compatible locations on one cluster with matching protected
+filesystem identities. Unknown identities do not prove a shared filesystem.
+Sharing a pool shares neither project targets nor permissions/budgets. Manual
+usage is timestamped `human_estimate`; free-space readings do not attribute
+retained bytes to a project.
 
 ## Agent API
 
-Both routes require a valid project bearer key with `jobs:read`:
+Both routes require `jobs:read` and enforce project/key cluster restrictions:
 
-- `GET /api/v1/projects/<project-id>/storage` returns allowed target IDs, roles,
-  capabilities, canonical remote `root` paths, selected locations, shared budgets,
-  retained usage estimates, and cached pool/quota observations. Only current
-  targets selected for this project and permitted by the key's cluster scope are
-  returned; other project locations and pool probe paths are omitted.
-- `POST /api/v1/projects/<project-id>/storage/plan` accepts up to five distinct
-  role estimates. It is read-only, needs no idempotency key, and creates no jobs,
-  approvals, reservations or files.
+| Route | Result |
+| --- | --- |
+| `GET /api/v1/projects/<id>/storage` | Current targets, canonical roots, roles/defaults, budgets/estimates and cached pool observations |
+| `POST /api/v1/projects/<id>/storage/plan` | At most five distinct role estimates; no jobs, writes or reservations |
 
-With MCP, use `get_project_storage`. Resolve the selected cluster's
-`bindings[].targets[role]` ID against `targets[].id`, then use that target's
-exact `root` in the workload. Do not reconstruct a path from its display name.
-These settings do not change a job's working directory: declared output paths
-are still relative to its attempt directory. Code writing into a shared project
-location must explicitly copy or package the desired results into its declared
-outputs for collection.
+MCP `get_project_storage` returns `bindings[].targets[role]`; resolve that ID in
+`targets[]` and use its exact `root`, never its display name. This does not change
+the job working directory. Copy/package wanted shared-location results into the
+job's declared relative outputs for collection.
 
 ```json
 {
@@ -137,54 +74,40 @@ outputs for collection.
 }
 ```
 
-The target must belong to this exact project and be its selected location for
-that role and cluster. A key cannot refer to a different project's target even
-when both projects use the same cluster or physical pool.
-Unknown fields, paths, endpoints, duplicate roles, negative/fractional counters,
-and integers above `2^53-1` are rejected. Peak estimates include simultaneous
-staging, extraction/build trees, caches and final images; roles should describe
-separate growth to avoid double counting. Retained estimates cannot exceed peak
-growth. Multiple roles on one pool are summed conservatively.
+A target must be this project's selected location for that role/cluster. Unknown
+fields, paths/endpoints, duplicate roles, negative/fractional counters and integers
+above `2^53-1` fail. Peak includes simultaneous staging, extraction, caches and
+final trees; retained cannot exceed peak. Describe distinct growth per role to
+avoid double counting; roles on the same pool sum conservatively.
 
-Responses identify `advisory_only: true`, `dry_run: true`,
-`creates_reservations: false`, and `enforced_at_dispatch: false`. `ready`,
-`warning`, `blocked` and `unknown` describe a planning assessment, not permission
-to execute or a guarantee of free disk space. Project budgets use retained plus
-proposed peak estimates. Pool headroom subtracts proposed peak growth
-and operational reserve from current free space; already-retained bytes are not
-subtracted a second time. Available native quota is considered separately.
+Plans report `advisory_only`, `dry_run`, `creates_reservations: false` and
+`enforced_at_dispatch: false`. `ready`, `warning`, `blocked` or `unknown` is a
+planning assessment, not execution permission. Project budgets use retained plus
+peak estimates. Pool headroom subtracts new peak and operational reserve from
+free space, without subtracting retained bytes twice; native quota is separate.
+Unrelated writes and other projects' pending growth remain unreserved.
 
 ## Opt-in capacity checks
 
-The control and worker installations must both enable the storage extension.
-The worker advertises that capability before it can receive maintenance leases.
-For each enabled capacity pool, the control service issues one fixed probe of
-the pool's approved root, normally once a minute. One outstanding probe is
-allowed per worker, a completed check yields the maintenance lane for at least
-15 seconds, and unavailable results back off for five minutes. This gives core
-job observations and accounting opportunities between maintenance calls.
+Checks default off and require storage enabled in both control and worker, a
+current supported protected root and explicit owner enablement. Pausing fences
+in-flight leases; saving unrelated project settings never probes. Fake backends
+report unavailable capacity.
 
-The extension implements the generic `services.lease_work(worker)` maintenance
-hook. Its context contains pool/target/connection IDs, a root alias and exact
-protected profile/connection revision digests. The worker resolves the actual
-path from its own protected profile. Neither an agent nor a lease can introduce
-an arbitrary path, endpoint, SSH option, program or script.
+One fixed probe per enabled pool is normally due each minute, with at most one
+outstanding per worker. Completion yields the maintenance lane for 15 seconds;
+unavailable readings back off five minutes. The worker resolves the leased alias
+from its protected profile, never an agent/lease-supplied path or command.
 
-Reports go to the worker-authenticated
-`POST /internal/v1/extensions/storage/pools/<pool-id>/report`. A report binds the
-lease ID, generation, target and both revision digests to its observation. Leases
-expire after 90 seconds; pause, configuration changes and newer generations fence
-old results. Identical report retries return a saved receipt; conflicting retries
-are rejected. Timestamps must advance and belong to the current lease, allowing
-30 seconds of clock skew. There is **no project bearer observation-write API**.
+`POST /internal/v1/extensions/storage/pools/<id>/report` authenticates the worker,
+lease ID/generation, target and profile/connection digests. Leases last 90 seconds;
+pause, changed bindings and newer generations reject stale reports. Identical
+replays reuse receipts; conflicts fail. Observations advance within the lease,
+allowing 30 seconds clock skew. Project keys cannot write observations.
 
-Inventories report `probe_wired: true` separately from each pool's
-`probe_enabled`, `probe_supported`, cached observation timestamp and next due
-time. Until an owner enables checks and a supported worker returns a result,
-capacity remains unknown. Fake backends return explicitly unavailable readings;
-they never fabricate capacity.
-
-The versioned observation contract is:
+Inventories distinguish `probe_wired`, `probe_enabled`, `probe_supported`, last
+observation and next due time. Until an enabled supported worker reports, capacity
+is unknown. The observation shape is:
 
 ```json
 {
@@ -197,78 +120,37 @@ The versioned observation contract is:
 }
 ```
 
-Source is `statvfs` or `site_probe`. Status is `available` or `unavailable`.
-Unknown counters are null. Quota status is `reported`, `unknown`, `unavailable`
-or `unsupported`; reported counters are `limit_bytes`, `used_bytes`,
-`available_bytes`, `limit_inodes`, `used_inodes`, `available_inodes`.
-`error_code` may contain a bounded uppercase code, never an exception message,
-credential, command or URL. Missing expected filesystem identity forces the
-observation to remain unverified. A mismatch becomes unavailable; this prevents
-mistaking an unmounted directory's backing local filesystem for the NAS.
+Sources are `statvfs`/`site_probe`; status is `available`/`unavailable`; unknown
+counters are null. Quota status is `reported`, `unknown`, `unavailable` or
+`unsupported`, with limit/used/available byte/inode counters when reported.
+Errors contain bounded codes, never raw messages or credentials. Missing expected
+filesystem identity stays unverified; mismatches become unavailable, protecting
+against an unmounted NAS being mistaken for its local backing directory.
 
-`remote.py` supplies the fixed, standalone probe source executed through the
-existing protected SSH transport. It opens one approved root through no-follow
-directory descriptors and reads `fstat`/`fstatvfs` metadata, without directory
-listing, file contents, writes, job submission or additional programs. Requests,
-depth and counters are bounded. A two-second cooperative deadline is paired with
-an external SSH timeout of at most 30 seconds because an NFS syscall can block
-beyond a Python deadline. `probe.py` also provides pure conversion helpers for
-local tests and future adapters.
+The fixed no-follow probe opens one approved root and reads `fstat`/`fstatvfs`:
+no listings, contents, writes, programs or jobs. It has bounded requests/depth,
+a two-second cooperative deadline and external SSH timeout up to 30 seconds for
+blocking NFS calls. Available bytes exclude administrator-reserved blocks;
+unsupported inode sentinels stay unknown and unrepresentable counters fail closed.
+Without a pinned expected identity, a reading cannot attest the intended mount.
+Native user quota is currently always unknown.
 
-Available bytes use the filesystem's user-available count, rather than reserved
-blocks available only to an administrator. Unsupported or out-of-range inode
-sentinels become unknown. Counters above `2^53-1` are not representable by this
-wire contract and otherwise fail closed to unavailable. The reported identity
-combines the device and filesystem IDs; without an operator-pinned expected
-identity it remains explicitly unverified. Current staging-prefix compatibility
-metadata has no identity pin, so a successful reading alone does not establish
-that the intended NAS is mounted. The fixed probe always reports native quota as unknown; global free space does
-not establish a user's remaining quota. Add a site-specific quota adapter only
-when a deployment requires one; see the [roadmap](roadmap.md).
-
-Default health policy warns below the greater of 10% or 1 TiB free, stops planned
-new growth below 5% or 500 GiB, and marks emergency pressure below 2% or 200 GiB.
-Inode percentage thresholds are separate. Observations expire after 120 seconds.
-Critical pressure enters immediately; recovery requires five minutes continuously
-above 7% / 700 GiB and the configured inode recovery threshold. These are
-operator-tunable starting values, not universal storage guarantees. No job
-dispatch gate is connected in this implementation.
-
-Storage plans do not maintain a reservation ledger. Shared remote Unix UIDs,
-other projects' pending growth and external writes remain outside these
-estimates. Any future reservation integration must bind the actual write path
-to its selected target; environment builds must not charge an unrelated
-location. See the [roadmap](roadmap.md) for storage integration work.
-
-## Current limits
-
-No storage target is a job destination until its write path is derived and
-authorized. Large-data transfer, enforced quota adapters, packed images,
-retention and garbage collection are not implemented; see the
-[roadmap](roadmap.md). Archives and file permissions do not make data immutable
-against the owning remote UID.
+Observations expire after 120 seconds. Defaults warn below max(10%, 1 TiB), block
+planned growth below max(5%, 500 GiB), and flag emergency below max(2%, 200 GiB).
+Inode thresholds are separate. Critical pressure is immediate; recovery needs
+five continuous minutes above 7%/700 GiB and the configured inode threshold.
+These tunable estimates are not a job-dispatch gate or physical reservation.
 
 ## Disposable acceptance test
 
-`tools/storage_probe_smoke.py` uses the existing bounded public HTTP client and
-requires `--confirm-disposable-fixture`. Run it against an already-started Docker
-Slurm fixture with storage enabled on control and worker. Supply the fixture's
-synthetic `demo.json` using `--demo-file`, its local control origin using
-`--base-url`, and a timeout of at most 120 seconds.
-`deploy/compose.storage-test.yml` is an overlay for `deploy/compose.test.yml` that
-enables storage on control and worker, mounts just this client read-only and
-selects the explicit fixture-confirmation arguments. The base smoke service's
-demo-metadata volume supplies the synthetic credentials; no new stack or secret
-mount is needed when using an already-running fixture project.
+`deploy/compose.storage-test.yml` overlays the ordinary Slurm fixture, enabling
+storage and mounting `tools/storage_probe_smoke.py` read-only. On an existing
+isolated fixture, supply `--confirm-disposable-fixture`, synthetic `--demo-file`,
+local `--base-url` and timeout at most 120 seconds. No institutional credentials.
 
-The client refuses nonfixture demo metadata and checks the actual selected
-cluster page for `brokerjob@slurm-fixture`. It requires the exact protected
-`/home/brokerjob/jobs` choice, creates a project, enrolls a target through that
-project's owner form, selects it for the project, issues a `jobs:read` key, and
-explicitly enables capacity checks through the session/CSRF route. It waits for a new real byte/inode reading,
-checks that native quota and unpinned filesystem identity remain unknown, runs
-advisory planning, and verifies zero admitted jobs and zero compute accounting.
-It pauses the pool afterward. The client never reads SSH credentials or requests
-a remote file write, job, directory listing or retained-usage scan. Small fixture
-filesystems may correctly produce a blocked planning assessment under the
-default operational free-space floors.
+The client verifies `brokerjob@slurm-fixture` and `/home/brokerjob/jobs`, enrolls
+and selects a project target, issues a read-only key, explicitly enables checks,
+waits for a new byte/inode reading and tests planning. Quota/unpinned identity stay
+unknown, admitted compute stays zero, and the pool is paused afterward. It reads
+no SSH credentials or remote file contents and requests no writes/scans/jobs.
+Small fixture filesystems may correctly report blocked plans under default floors.

@@ -1,58 +1,27 @@
 # Personal Slurm connectors
 
-A personal connector runs on your device and connects your broker account to
-your SSH account on a Slurm cluster. The normal setup flow enrolls its worker
-automatically. You do not need to register a worker, copy a worker token or edit
-its protected profile by hand.
-
-The broker user, project API key and HPC account remain separate identities.
-Opening the local portal grants no SSH access by itself. Jobs submitted
-with your project key can use only your permitted connection and worker;
-project limits do not replace the cluster account's permissions.
-
-## Normal local setup
-
-Start `compute-relay`, create the cluster in the portal, and select **Start
-connector**. The launcher performs the local setup, asks for SSH/key/MFA input
-in its terminal and keeps that connector running. On subsequent launches, saved
-connectors resume without prompts only with current owner permission for
-automatic SSH reconnection. Otherwise choose **Reconnect** for local login;
-no separate worker token or process is needed.
-A browser start action only queues the local operation and never collects SSH
-credentials. The advanced direct setup below remains useful for an explicitly
-selected standalone connector.
+A connector runs on your device, holding SSH access for one cluster account.
+The normal launcher enrolls its worker automatically; follow the portal's
+[add-cluster flow](management.md#add-a-cluster). Project keys and HPC identities
+remain separate. The advanced commands below are for standalone connectors.
 
 ## Advanced direct connector setup
 
-1. Sign in to the human portal and open **Clusters → Add a cluster**.
-2. Enter the Slurm login hostname, remote username and SSH port. The working
-   directory is optional: choose it interactively through the running connector
-   after discovery. If omitted, the connector identifies the remote account's
-   canonical home and proposes `.compute-relay/jobs` beneath it without creating
-   that directory. The username is needed before starting the connector.
-3. Leave the SSH key path empty to choose the file with your device's native
-   picker at interactive connector startup. You may instead enter SSH key and
-   known-hosts **paths on your device**, using an absolute path or one beginning
-   with `~/`. These are local hints, not uploads: the portal never reads those
-   files. Do not paste a key, password, passphrase or second factor into a field.
-4. Choose a requested SSH session lifetime between 1 and 1,440 minutes (24 hours)
-   in advanced settings.
-   The default is eight hours. This does not extend a shorter session permitted
-   by the cluster.
-5. Save, then select **Download personal connector setup**. Keep the downloaded
-   JSON private; it authorizes connector enrollment for your account. Do not
-   give it to an agent or commit it to a repository. Its pairing code expires
-   after ten minutes and can be exchanged only once. A new download invalidates
-   older unused setup files for that cluster.
+1. Add a cluster with login hostname, remote username and optional port/work root.
+   Without a root, discovery proposes `.compute-relay/jobs` under the canonical
+   remote home without creating it. The username is required before login.
+2. Leave the key path empty for a local file picker, or enter local key/known-hosts
+   paths, absolute or beginning `~/`. These are hints, not uploads. Never paste
+   authentication material into the portal.
+3. Set the SSH lifetime if needed: 1–1,440 minutes, default eight hours. This cannot
+   extend a shorter site-permitted session.
+4. **Download personal connector setup**. Keep it private: its owner-bound pairing
+   code expires after ten minutes, works once, and a new download invalidates old
+   unused codes. Changed cluster details require a new download.
 
-Saving or downloading setup does not contact SSH, create a remote directory or
-submit a compute job. The setup is tied to the current saved cluster revision.
-If those details change, reload the page and obtain a new setup.
+Saving/downloading does not contact SSH, create directories or submit jobs.
 
 ## Start on your device
-
-Use the installed Compute Relay package; runtime dependencies are included. In a
-terminal on the device that should hold the SSH connection, run:
 
 ```sh
 chmod 600 /absolute/private/personal-connector.json
@@ -61,44 +30,17 @@ compute-relay connector \
   --state-directory /absolute/private/connector-state
 ```
 
-Choose a short absolute path for a private state directory dedicated to this
-connector: the directory plus `/s` must fit within 100 bytes. Avoid whitespace
-or `%` in SSH paths. Treat the state directory as
-credential storage: its configuration, enrollment/worker state and SSH session
-capability are not agent inputs. Preserve it across restarts so the existing
-worker identity and submission journal can be reused.
+Use a dedicated private local state directory; its path plus `/s` must fit in
+100 bytes. Avoid whitespace or `%` in SSH paths. Preserve its worker identity,
+configuration and journals across restarts. Missing directories are created
+`0700`; existing permissions are not silently changed. `STATE_ANCESTOR_WRITABLE`
+means a parent permits group/other writes: fix that parent or choose a private
+location. Validation precedes key selection, login and enrollment.
 
-Missing state-directory levels are created with private permissions (0700),
-independently of a group-friendly default umask. Existing directories are never
-silently changed. A `STATE_ANCESTOR_WRITABLE` error means a parent directory
-allows writes by a group or other users: remove those write permissions from
-that directory, or choose a suitable private location. Validation happens
-before the file picker, SSH login or pairing request. Other fixed startup codes
-identify expired setup, unreadable or insufficiently private files, and a state
-directory already in use, without printing credentials or response bodies.
-
-When no identity path is saved, initial interactive startup opens a native file picker
-titled **Select your SSH private key**, initially in your local `~/.ssh` directory.
-It returns only the selected existing file's path. It never opens or reads the
-key contents and does not send the file to the portal. Cancelling stops selection;
-it does not choose a default key or start a second dialog.
-
-The picker uses Tk when available. Linux can fall back to a system-installed
-Zenity dialog when a graphical session is present. A headless or noninteractive
-session needs an explicit local `--identity-file` path; it never opens a GUI.
-Picker tests use mocks, not a real desktop or private key.
-
-OpenSSH performs the initial login interactively in that terminal. It can ask
-you to verify a new host key, unlock an encrypted key and complete the site's
-second factor, including Cisco MFA during SSH login. Verify the host-key
-fingerprint through the cluster's trusted channel. The broker never collects
-these answers in the web UI, and the background worker does not blindly repeat
-interactive MFA attempts.
-
-To select a different key locally even when a path was saved, add
-`--choose-identity` to the first pairing command. Keep the terminal available
-for the subsequent SSH prompts. For a session without a graphical picker,
-supply a local override:
+The picker returns a path without reading/uploading the key. Cancelling stops
+selection. It uses Tk, with Zenity fallback on graphical Linux; headless or
+noninteractive startup requires `--identity-file`. To override a saved selection,
+use `--choose-identity`, or supply the path:
 
 ```sh
 compute-relay connector \
@@ -107,156 +49,99 @@ compute-relay connector \
   --state-directory /absolute/private/connector-state
 ```
 
-Your private key must be owned by your account and inaccessible to other users.
-The picker does not alter file permissions. If needed, fix the selected key
-locally before retrying:
+The key and setup must be ordinary owned private files. The picker changes no
+permissions and bypasses no checks. If needed:
 
 ```sh
 chmod 600 /absolute/path/to/ssh-key
 ```
 
-The downloaded setup also needs private permissions, as in the first command.
-Selecting a file does not bypass the connector's existing ownership, path and
-permission checks; a directory or missing file is not a valid key selection.
+OpenSSH asks for host-key confirmation, passphrase and MFA in this terminal.
+Verify unfamiliar fingerprints independently with the cluster administrator.
+The browser never receives those answers; keep the terminal available.
 
-After local authentication, the connector enrolls its owner-scoped worker,
-publishes a narrow profile for the selected target, binds the cluster and runs
-read-only discovery. Reload the portal and open **Configure cluster**. Missing
-resource limits are populated from discovered single-node maxima, within the
-broker's supported job sizes. Existing owner edits survive rediscovery. The
-personal software inventory uses the site's module search paths and a
-provisional filename catalog; it does not evaluate modulefiles or load modules.
+After login, enrollment publishes a narrow profile, binds the cluster and runs
+discovery. Complete [cluster configuration](cluster-configuration.md) in the
+portal; worker acknowledgement is required before job access. Configuration
+receipts retain their canonical path across retries. If the five-minute request
+expires before acknowledgement, explicitly save again; do not delete state or
+roll back an uncertain configuration.
 
-Select **Browse directories on this cluster** to navigate folders through the
-running worker. Only bounded directory metadata returns to your human session;
-there is no general remote command or file-content browser for agents. Select
-a writable parent and use **New folder → Create and open folder** if the desired
-directory does not exist. This creates one private directory (0700), with a
-single name made of letters, digits, dots, underscores or hyphens. Existing
-directories are opened without changing their contents or permissions; files
-and symbolic links are refused. Creating a folder does not change the selected
-baseline: select **Use this working directory**, then save the configuration.
-
-Select a baseline directory or edit its path, then confirm resource limits and the
-execution review policy. The worker validates access without creating files, saves its
-new protected scope locally and acknowledges it before job access is enabled.
-Changes are refused while execution or accounting is unsettled. Project/key
-permissions, environment recipes and execution review still apply afterward.
-The cluster configuration also offers an explicit **module avail** discovery
-option. Its fixed listing runs as your HPC user and may evaluate site module
-configuration. It is disabled by default, persists through restart and does not
-expose a general command interface. Save the option, then run discovery again.
-See [cluster configuration](cluster-configuration.md) and
-[module discovery](module-discovery.md).
+A failed initial enrollment reply can consume the one-use code: obtain a new
+setup and fresh state directory for that initial pairing. Existing paired
+connectors always resume their saved state. Re-pairing retains the connection ID
+and known site bounds but waits for all existing execution/recovery work to finish.
 
 ## Resume and reconnect
 
-For named local shortcuts and labeled startup/activity messages, see
-[local client setup](local-client-setup.md). Register a paired state directory
-once with `compute-relay connectors add NAME --state-directory PATH`, then use
-`compute-relay connectors start NAME`. The original command below continues
-to work and accepts `--verbose` for sanitized activity messages.
-
-Resume with the same private directory, omitting the downloaded setup:
+Omit setup on restart:
 
 ```sh
 compute-relay connector --state-directory /absolute/private/connector-state
 ```
 
-Keep the connector available while jobs need dispatch, observation or collection.
-The cluster's **Connect to this cluster** section shows session expiry and
-offers **Reconnect**. That action drains only this cluster's existing connector
-before restarting it in the application's terminal; other clusters keep working.
-Leave that terminal available for SSH, key-passphrase or MFA prompts.
+Named shortcuts and sanitized activity are described below.
 
-**Allow automatic SSH reconnection** is a saved owner-controlled option, off by
-default and editable for an already paired cluster. When enabled, an eligible
-explicit key can renew an expired session or recover after an outage without a
-prompt. Permission is checked before each automatic authentication; revoking it
-prevents further automatic logins. Failed authentication requires human action.
-Successful renewals start a new session lifetime and can continue while the
-application stays open. Background operations never use an ambient agent,
-default private keys, saved passwords or unattended MFA retries.
+The portal shows expiry under **Connect to this cluster**. **Reconnect** drains
+that connector and releases its lock before restarting it in the application
+terminal; other clusters continue. `STATE_LOCKED` means an existing process owns
+the identity: inspect it, never delete its lock/journal to force another start.
 
-Stopping the local connector or losing its network connection does not cancel a
-Slurm allocation. Already accepted jobs can continue remotely. Resume the same
-state directory to reconcile their native identities and accounting; creating a
-new job or deleting local state is not a recovery procedure. Uncertain
-submissions retain their reservations until reconciled. Use the broker's normal
-cancel operation if you want a submitted job cancelled.
+**Allow automatic SSH reconnection** is saved per cluster and defaults off.
+With permission, an eligible explicit key can renew expiry or recover an outage.
+Permission is checked before authentication; failed authentication requires human
+reconnect. Renewals start a fresh session lifetime. Background operations never
+use ambient agents/default keys, saved passwords, passphrase replay or MFA retries.
+
+Keep the connector running while dispatch, observation or collection is needed.
+Stopping it, expiry or a network outage does not cancel accepted Slurm jobs.
+Resume the same state to reconcile them; never create replacement jobs or erase
+submission intent. Use normal cancellation if you intend to stop compute.
+
+Ctrl-C, SIGTERM, revocation and normal expiry close the owned master after draining
+operations. SIGKILL/power loss cannot clean up. Unknown/replaced/live sockets are
+protected; inspect stale state through a trusted local operator channel before
+removing anything. Detailed retry and lease rules are in [worker recovery](async-workers.md).
 
 ## Remove a worker
 
-In **Clusters → Protected workers**, select **Remove worker**, or open a worker's
-status page and use its removal button. The confirmation lists the affected
-cluster configurations. Removing a worker withdraws its broker credential and
-hides it from the active worker list. Its linked clusters cannot receive new jobs,
-and pending setup operations and unused pairing files are invalidated.
+Use **Clusters → Protected workers → Remove worker**. The verified owner must
+wait until linked submission, monitoring, reconciliation and final accounting
+finish, even if Slurm already reports completion. Removal revokes the worker,
+blocks linked new jobs and invalidates setup tasks/unused pairing files.
 
-Removal requires the worker's owner to have current account verification. It is
-blocked while any linked execution still needs submission, monitoring,
-reconciliation or final accounting, including jobs that already finished on the
-scheduler. Keep that worker running until those records settle.
-
-Saved cluster configurations, jobs, outputs and accounting records remain. To
-connect a replacement, download a fresh personal connector setup from the saved
-cluster and start it with a new private state directory. Re-pairing reuses the
-cluster configuration, then requires discovery and configuration confirmation
-before execution becomes available again. Removing a worker in the portal does
-not remove its local state directory or its named CLI shortcut; manage those
-locally after accounting has finished.
+Cluster configurations, jobs, outputs and accounting remain. To replace the
+worker, download fresh setup and pair a new private state directory, then repeat
+discovery/configuration confirmation. Portal removal does not delete local state
+or CLI shortcuts; remove those locally only after accounting/recovery is complete.
 
 ## Remove a cluster configuration
 
-The setup page and cluster overview offer **Remove cluster configuration**.
-Its confirmation page is available only to the owner. Removal hides the cluster
-from active configuration, blocks new submissions and discovery, invalidates
-unused pairing files and clears saved local-path hints. A dedicated personal
-connector loses its broker credential, causing its loop to exit and close its
-owned SSH session. Other independent cluster connectors are retained.
+Use the owner's confirmation page. This archives configuration, never remote files
+or accounting. Normal removal waits for accounting and collection; the explicit
+**Remove anyway** override retains unresolved jobs and budget holds. See the
+[removal consequences](management.md#remove-a-cluster-configuration) before using it.
 
-Removal is refused while any execution has unsettled accounting. Recorded jobs,
-results and accounting are retained; no remote files or software environments
-are deleted. A stale confirmation must be reloaded before it can be submitted.
 
-## Boundaries and remaining deployment work
+## Save connector shortcuts
 
-The setup record stores only `identity_file`, `known_hosts` and
-`session_seconds` hints. The key and interactive authentication remain local;
-the control service never receives an SSH private key. Enrollment and worker
-credentials are different from the project API token given to an AI client.
+Register an already paired private state directory once:
 
-This convenience flow does not establish protected installation isolation. An
-agent running as your Unix user may read that user's files or use its active
-session capabilities. Use a separately protected identity or device when that
-boundary is required. Root/administrator compromise is outside this protection.
-Automatic worker enrollment does not change the local account boundary or
-institutional SSH/MFA requirements.
+```sh
+compute-relay connectors add lab --state-directory /absolute/private/lab-state
+compute-relay connectors add university --state-directory /absolute/private/university-state
+compute-relay connectors list
+compute-relay connectors start lab
+compute-relay connectors start
+compute-relay connectors start --all
+compute-relay connectors start lab --verbose
+compute-relay connector --state-directory /absolute/private/lab-state --verbose
+compute-relay connectors remove lab
+```
 
-The connector starts conservatively with human review required. Discovery alone
-does not verify a worst-case cleanup bound or justify unattended execution.
-Institutional MFA/session policy still needs explicit acceptance on each site;
-routine automated tests use synthetic credentials and no institutional cluster.
-See [runtime limitations](runtime.md), [SSH/security boundaries](security.md),
-[local architecture](architecture.md) and [async connector behavior](async-workers.md).
-
-The personal connector uses the async Slurm worker and advertises the modules
-selected by its local installation. Storage probes, environment finalization and
-workflow hooks use the bundled async implementations and normal scoped leases. Re-pairing an existing connection preserves its ID and known site
-bounds but requires it to have no unsettled executions; do not move an active
-connection to a new state directory. A failed enrollment response can leave its
-one-use code consumed. Obtain a fresh download and use a fresh state directory
-for that initial-pairing recovery. Ordinary restarts reuse the saved directory.
-
-Ctrl-C, SIGTERM, broker revocation and the configured session deadline close the
-connector-owned SSH master. SIGKILL, host crashes and power loss cannot run that
-cleanup. Inspect any stale socket or master through a trusted local operator
-channel before removing files; the connector refuses an unknown pre-existing
-socket. A local journal with a submission intent must be preserved for recovery.
-
-Configuration acknowledgements are replayable. A locally saved configuration
-receipt freezes its canonical path across retries and restarts. If confirmation
-does not reach the broker before the five-minute request expires, new execution
-stays blocked: open **Configure cluster** and explicitly save it again. Do not
-delete local state or roll back an uncertain configuration. Revoked worker credentials close the session; existing job records remain
-retained for recovery and accounting.
+The registry stores names/paths in the local configuration directory, never
+credentials or copied state. Without a name, `start` prompts for a selection;
+`--all` serializes logins, then runs labeled workers until Ctrl-C. Successful
+startup confirms SSH and broker handshake, not job completion. Idle polling is
+quiet; verbose output omits credentials, commands, source and workload output.
+Removing a shortcut only removes that entry, not its process, worker, files or jobs.

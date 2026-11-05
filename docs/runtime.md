@@ -1,519 +1,215 @@
-# Implemented local runtime
+# Runtime and limits
 
-Compute Relay is a single-user Python package. The normal command is
-`compute-relay` (equivalently `compute-relay start`). It runs a Django portal
-through Waitress on loopback, maintains a durable SQLite ledger and local object
-store, and supervises saved SSH connectors in the foreground. Use a
-[tested Python version](testing.md#ci) and system OpenSSH for real cluster access.
+Compute Relay runs a loopback Django/Waitress portal, durable SQLite ledger,
+local object store and personal SSH connectors. Use [installation](deployment.md)
+for startup/update instructions, [portal management](management.md) for settings,
+and [architecture](architecture.md) for the execution/authority model.
 
 ## Startup and persistent state
 
-The default URL is `http://127.0.0.1:8768`. State defaults to
-`$XDG_DATA_HOME/compute-relay`, or `~/.local/share/compute-relay`. Override the
-location with `--data-directory PATH`. The local account is `local`; first setup
-supports either a password or explicitly chosen passwordless access. Later
-starts preserve that choice, budgets, job records, artifacts and connector
-configuration. See [installation](deployment.md) for the complete flags.
-
-The launcher supervises only connectors saved for its installation. Saved
-connectors start unattended only with the owner's current permission and an
-eligible explicit key. Otherwise choose **Reconnect** in the portal. OpenSSH
-asks for key passphrases and MFA in the terminal, one cluster at a time. A
-browser start request queues that local operation; it cannot provide an SSH
-password or key.
-Ctrl-C shuts down the portal and connectors without cancelling cluster jobs.
-Restarting resumes the same durable state after any necessary SSH login.
-
-The ordinary package includes Django, JSON Schema validation, RFC 8785 manifest
-canonicalization, HTTPX, the official MCP SDK, and Waitress. The `test` extra adds
-development checks. `uv.lock` pins development, CI and disposable fixture
-installs; uv 0.13.6 checks the lock before syncing or running those checks.
-Setuptools remains the package build backend. Normal tool or wheel installation
-needs no extras, and the installed application does not require uv. See
-[installation](deployment.md) and [development checks](testing.md).
+`compute-relay` supervises the portal and its installation's saved connectors.
+Ctrl-C stops them without cancelling Slurm jobs; restart resumes saved work after
+any required SSH login. Budgets, jobs, artifacts and connector journals persist.
+Incompatible updates use [fresh setup](deployment.md#alpha-updates-and-fresh-setup),
+not historical state conversion. Reconcile work and preserve evidence first.
 
 ### SSH expiry and reconnecting a stopped connector
 
-Saved personal connectors default to an eight-hour (480-minute) SSH session.
-Expiry drains the connector's current operations and closes its managed SSH
-master; it does not cancel native jobs. **Allow automatic SSH reconnection** is
-a saved, per-cluster owner option, off by default. When enabled, a successful
-noninteractive key-only login starts a fresh session lifetime. Revocation is
-checked before further automatic logins; a failed authentication requires human
-action. Passwords, key passphrases and MFA answers are never retained or replayed.
-The portal shows expiry and when reconnection needs authentication. It can
-remain healthy while a connector has stopped. `auth_state: ready` describes
-saved setup, not current connectivity.
+Sessions default to eight hours. Expiry closes the SSH master after draining
+current operations, without cancelling native jobs. Owner-enabled automatic
+reconnection uses eligible noninteractive keys only; failed authentication needs
+human action. Passwords, passphrases and MFA are never retained or replayed.
+Use **Reconnect** on the cluster page and complete prompts in the application
+terminal. [Connector guidance](personal-connectors.md) covers setup and recovery;
+never delete a lock or journal to bypass `STATE_LOCKED`.
 
-Job status APIs expose `tracking.status` and `tracking.last_contact_at` for current
-clusters while execution, accounting or collection remains unresolved. Contact is `recent`
-within five minutes, `stale` after that, `not_seen` before the first report, or
-`revoked` after access withdrawal. Recent contact does not prove every scheduler
-observation is fresh. Settled, collected attempts have `tracking: null` and do
-not require an active connector. Compact MCP status returns
-`next_action: {"action":"reconnect_connector","requires_human":true}` when
-tracking needs attention. Waiting scripts should return for human attention,
-not submit another execution.
+For unresolved work, `tracking.status` is `recent` within five minutes of contact,
+then `stale`, or `not_seen`/`revoked`. Recent contact is not proof of fresh native
+observations; saved `auth_state: ready` is not current connectivity. Settled,
+collected attempts have `tracking: null`. A `reconnect_connector` next action
+requires human attention, not another execution request.
 
-Open the cluster's **Connect to this cluster** section and choose **Reconnect**
-(or **Start connector locally** before its first start), then complete SSH/MFA
-in the existing application terminal. Reconnect waits for this connector to
-drain and release its state lock before starting its replacement. Other
-clusters keep working.
-Alternatively, in a new terminal run `compute-relay connector --state-directory
-/absolute/path/to/that/saved/connector-state` and leave it open. Reuse the same
-state and journal; omit `--setup`. A `STATE_LOCKED` error means another connector
-owns that identity: inspect the existing launcher before retrying. Never delete
-its lock or journal to bypass it.
-
-Terminal scheduler observations and available final accounting are reported
-before final logs, module finalization or output transfer. The portal and APIs
-can show completed computation with collection pending. Collection has its own
-recoverable lease and can proceed while usage accounting is delayed; unknown
-usage retains its allowance reservation. An attempt has one active lease, so
-its next accounting poll can wait for the current collection operation. A
-successful Slurm exit is not proof that results have been delivered.
-
-On 5 November 2026, twelve real-site jobs outlived the connector session and
-remained displayed as running. Direct Slurm accounting confirmed all twelve
-completed with exit status `0:0`. After the owner reconnected, all 36 declared
-outputs (2.44 GB) were collected and every original attempt settled its exact native
-CPU usage once, without resubmission or direct database repair. This verifies
-that manual expiry recovery worked for that run. It predates the renewal and
-early-report changes above; it is not acceptance evidence for those changes.
-
-A separate 5 November branch acceptance used its own portal, connector identity,
-SSH session and remote root on agmn2. Two stdlib jobs (native IDs 197941 and
-197942) requested one CPU and 1 GiB each, and actually received two CPUs each.
-The real stdio MCP client verified all four outputs (36 MiB of payloads), observed
-completed computation before collection finished, and confirmed exactly 10
-CPU-core-seconds spent with zero reserved. All 132 concurrent health/project
-probes succeeded; the maximum latency was 130 ms. Local result cleanup and both
-remote attempt cleanups completed through the normal portal. After the shortened
-ten-minute session expired, the owner used **Reconnect** and confirmed successful
-MFA login with the same connector identity. The existing installation was untouched.
-
-Disposable native Slurm acceptance also exercises 60-second session renewal,
-eight parallel submissions, abrupt master death, an accepted terminal report
-followed by a connector crash, and interrupted 6.4 MB output collection.
-It requires one recovery-job submission, unchanged native identities, verified
-bytes, exact positive usage settlement and no residual reservation while
-ordinary portal requests and bounded status waits continue. Fault injection
-exposed a retained owned socket after reconnection was revoked; shutdown now
-uses the existing identity-checked socket retirement, including on cancellation.
-Unknown, replaced or still-listening sockets remain protected.
+Terminal computation and available accounting are reported before logs,
+finalization and output transfer. Collection has an independently recoverable
+lease and can proceed with pending accounting; unknown usage keeps its
+reservation. One lease per attempt means its next accounting poll can wait for
+collection. Slurm success does not establish delivered results.
 
 ### Diagnosing an unresponsive portal
 
-The portal subprocess accepts `SIGUSR1` to append every Python thread's current
-stack to the installation's private `web.log` without stopping the server. This
-is available to web processes started with this version; it exposes no HTTP
-diagnostic endpoint and prints no frame-local values.
+The launcher checks identity-bound health every 15 seconds. After three failed
+checks it asks its own web child for one all-thread stack dump in private
+`web.log`, without restarting or interrupting jobs. Another dump requires health
+recovery followed by a new outage. Dumps contain no frame-local values or HTTP
+access path.
 
-The launcher also checks the identity-bound health endpoint every 15 seconds.
-After three consecutive failed checks it requests one stack dump from its own
-web child, leaving the service and jobs running. It captures another dump only
-after health has recovered and a new sustained outage starts. Dumps stay in
-private `web.log`; the launcher does not signal a PID read from a request or a
-stale runtime file. This preserves evidence for the unresolved stall rather
-than treating a restart as a fix.
+For manual capture on Linux, read the launcher's PID from private `runtime.json`.
+Identify its `-m compute_relay.local_web` child with
+`ps -o pid=,args= --ppid LAUNCHER_PID`, then `kill -USR1 WEB_PID`. Use verified
+process IDs and inspect `web.log` before restarting. Signal only that web child:
+launchers, connectors and older web processes can terminate on `SIGUSR1`. Keep
+logs private.
 
-Read the launcher's PID from the installation's private `runtime.json`. On Linux,
-`ps -o pid=,args= --ppid LAUNCHER_PID` identifies its web subprocess running
-`-m compute_relay.local_web`. Replace the PID placeholders with those verified
-process IDs, then run `kill -USR1 WEB_PID`. Inspect the newly appended stacks in
-that installation's `web.log` before restarting. Send the signal only to that web
-subprocess: the launcher, connectors and older web processes do not install this
-handler and can terminate if signalled. Keep logs private when sharing diagnostics.
-
-The 2026-10-28 cluster run encountered a portal stall lasting at least four
-minutes: all four request threads stopped responding, health checks timed out,
-and the queued-request count grew to 24. Restarting restored service. No stacks
-were captured during the stall, so its cause remains unconfirmed.
-
-Subsequent disposable local HTTP probes used synthetic data, the real Django and
-SQLite application, and four Waitress request threads without contacting a cluster:
-
-| Probe | Observed result |
-| --- | --- |
-| 180 sequential create/prepare operations with concurrent context/job reads | 848 health checks; maximum latency 21 ms |
-| Eight writers preparing 280 jobs | 517 temporary publication conflicts recovered by client retries; maximum health latency 223 ms |
-| Eight writers preparing 640 jobs, with a 64 MiB fixture metadata allowance | 1,123 temporary publication conflicts recovered; maximum health latency 217 ms |
-| 641 retained jobs and 1,001 seeded terminal upload receipts, followed by 128 unique-name preparations | Receipt pruning retained exactly 1,000 rows; 293 temporary publication conflicts recovered; maximum health latency 263 ms |
-| Four clients stopped reading 4 MiB/24 MiB artifact replies; 16 clients disconnected before receiving preparation replies | Stable-key retries recovered 16 distinct jobs; maximum health latency 3 ms |
-| Actual stdio MCP server, eight client lanes, 100 jobs and 100 stable-key preparation replays through four-thread Waitress | 100 distinct executions and verified outputs; exactly 100 synthetic CPU-core-seconds settled, zero reserved; all 948 portal/health probes succeeded, maximum latency 191 ms |
-
-Cold request-handler imports completed concurrently in the receipt-pruning probe.
-The MCP fixture completed in 63.5 seconds while both full Python test suites
-were running. It covers the actual MCP protocol process rather than invoking
-its facade directly; it still uses a synthetic backend and proves no native
-Slurm or SSH behavior. Reproduce it with `tools/local_smoke.py --mode budgeted --mcp-jobs 100`.
-These probes did not reproduce the original stall; they do not establish a fix.
-The [responsiveness roadmap item](roadmap.md) remains open pending a captured
-recurrence and a regression test for its actual cause. Server thread counts and
-database timeouts remain unchanged.
+The 28 October 2026 stall lasted at least four minutes with all four request
+threads unresponsive and 24 requests queued. No stacks were captured. Later
+concurrent HTTP/MCP tests did not reproduce it; its cause remains open in the
+[roadmap](roadmap.md).
 
 ## Portal and agent interface
 
-The human portal configures clusters, discovery, execution recipes, projects,
-budget/review policy and project keys. Keys are shown once and stored as hashes.
-Each key belongs to one project and has explicit scopes; tighter key policy may
-require approval even where the project permits automatic work. Multiple keys
-share the same project allowance and lifetime submission count.
+The portal owns configuration, grants, approval and one-time project-key
+issuance. Agents use project-local [MCP setup](local-client-setup.md) or the
+[Python SDK](python-sdk.md); neither receives connector SSH credentials or MFA.
+Remote HTTP MCP/OAuth is unsupported.
 
-`compute-relay init-mcp` creates project-local stdio MCP configuration for Codex
-or Claude Code. It defaults to the local broker URL and prompts privately for the
-project API key. The local facade holds that project key; cluster keys and MFA
-remain in the connector. Source staging and artifact downloads use bounded APIs
-and verify checksums. See [client setup](local-client-setup.md).
-
-The package exposes project-local stdio MCP clients. Remote HTTP MCP and OAuth
-are not provided; see the [roadmap](roadmap.md).
-
-An initialized workspace can also use the public [Python SDK](python-sdk.md) to
-prepare, request, monitor and export jobs in a bounded local script. It reuses
-the MCP adapter's client and operations with the same project credential and
-broker authorization. Intermediate responses can stay outside model context;
-HTTP requests, human review and scheduler waits still apply.
-
-The portal groups project policy, allowance, resource ceilings and access;
-cluster and environment grants can be changed together. New connections use
-Slurm without a backend selector, and SSH overrides are under advanced settings.
-Editable cluster walltime and SSH lifetime use minutes; saved worker profiles
-and API accounting retain integer seconds. Key confirmation follows project
-policy or always requires review.
-
-Dashboard and project jobs share 50-row pages with All, Unresolved and Awaiting
-review filters. Live updates keep the selected page/filter and unsent edits;
-failed review submissions retain the matching comment. Separate pending-review
-notifications show the oldest 20 requests and their total count. Job pages offer
-safe cancellation, collection retry and verified attachment downloads for declared
-results, plus workspace-export guidance. Cancellation and collection keep the
-original attempt and accounting; neither admits compute again. Cancellation
-needs no additional retry-receipt capacity. Disabling new access does not block
-recovery of existing results through a current owned connector.
-
-Allowance uses CPU core-hours/GPU device-hours with exact seconds available.
-Project capacity separately shows stored/reserved bytes, pending transfers,
-objects, outstanding work, burst capacity, active retry receipts, module definitions/runs and
-archived identities, with installation limits where applicable. These read-only
-logical counters neither scan the disk nor promise physical free space. Optional
-environment-build pages show whether a ready environment is actually permitted;
-storage settings remain advisory planning estimates. See the
-[portal guide](management.md) and remaining
-[human/site acceptance work](roadmap.md).
-
-The alpha supports fresh setup after incompatible stored-state changes, rather
-than historical schema upgrades. See [alpha updates](deployment.md#alpha-updates-and-fresh-setup).
-
-Source review flags invalid UTF-8 bytes with `\xNN` escapes and renders invisible,
-directional and non-printable characters as explicit Unicode codes. These are
-preview representations; stored bytes and package hashes remain unchanged.
-Python, shell and JSON files up to 128 KiB of displayed text use local server-side
-syntax highlighting. Other sources and larger previews remain plain text; the
-existing 1 MiB file preview ceiling still applies. Review warnings before approval.
+Source previews preserve stored bytes/hashes: invalid UTF-8 appears as `\xNN`
+and invisible/directional/non-printable symbols as Unicode codes. Python,
+shell and JSON highlighting covers at most 128 KiB of displayed text; the file
+preview ceiling is 1 MiB. Review warnings before approval.
 
 ## Preparation, approval, and accounting
 
-A job revision binds the exact source files, generated batch script, environment
-wrapper, connection revision and maximum resource allocation into a canonical
-manifest. Preparation does not execute the uploaded code. Approval binds one
-execution request to that exact manifest. Rejection can carry a comment to the
-agent; a changed script or resource request requires a new revision and decision.
+Preparation seals exact sources, script, environment, connection revision and
+maximum allocation; it executes no workload. Approval permits one request for
+that manifest. Changed bytes/resources need a new revision and decision.
 
-Automatic execution still checks project policy, current key authority, active
-job limits and the lifetime total-job limit. CPU-core-seconds and GPU-device-
-seconds are separate balances. Pending approval can hold its declared maximum
-charge; admission converts that hold instead of counting it twice. A durable
-attempt consumes one lifetime slot even when it later fails or is cancelled.
+Reserve effective CPU/GPU allocation × requested walltime. Pending review holds
+convert to attempt reservations once. Final charges use actual allocated
+elapsed seconds, including overruns, with at least one second for an allocation
+that received resources. No timing/cleanup margin is added. Each admitted
+attempt consumes a lifetime slot even if failed/cancelled. This accounts managed
+jobs, not every action under the remote UID.
 
-Dispatch rechecks authorization and obtains online confirmation. The worker
-journals intent before remote submission, and the remote helper journals the
-attempt before `sbatch`. Lost replies remain uncertain and reconcile the same
-attempt. Missing queue rows do not prove non-submission. Definitive scheduler
-accounting settles a completed allocation; cancellation acknowledgement alone
-is not a refund. Ledger transitions use SQLite immediate transactions and
-uniqueness/generation fences rather than an in-memory quota counter.
+Uncertain submission reconciles the original attempt; absent queue rows and
+cancellation acknowledgements cannot release unknown usage. Native identity
+mismatch reports `CANCEL_IDENTITY_MISMATCH` and withholds repeated cancellation
+until an explicit new request; observation can still resolve it. Existing-work
+management precedes new submissions. [Worker recovery](async-workers.md)
+describes journals, leases and finite retries.
 
-Slurm elapsed time is metered in scheduler whole seconds, with at least one
-second for an allocation that received CPUs or GPUs. Reservation uses the
-reviewed effective allocation multiplied by requested walltime. No separate
-charge duration or scheduler/cleanup interval is added.
-This is broker accounting, not a physical nanosecond ceiling or a restriction on
-all activity under the remote account.
+Configuration edits/re-pairing wait for accounting, collection, cleanup and
+leases. **Remove anyway** archives configuration without inventing cancellation,
+settlement or released reservations. Unresolved job pages retain stale-status
+warnings; remote leftovers can need manual cleanup. See
+[cluster removal](management.md#remove-a-cluster-configuration).
 
-Cancellation has an explicit result. Only an acknowledged native cancellation
-or an identity-verified terminal observation resolves its pending intent. A
-timeout, malformed result or empty queue response retains the intent and
-reservation, with bounded retries and observation. A live identity mismatch
-surfaces `CANCEL_IDENTITY_MISMATCH`; repeated cancellation is withheld until an
-explicit new request, while observation can still establish completion. Even an
-acknowledged cancellation waits for definitive accounting before settlement.
-
-Eligible work is filtered before the controller's bounded candidate batch.
-Cancellation, uncertain-submission reconciliation and existing-job observation
-precede new submissions. Paused projects, disabled connections and unsupported
-extensions therefore cannot fill the first batch with undispatched work and
-hide later management of running jobs.
-
-Cluster removal normally waits for final accounting and output collection. The
-local owner can explicitly **Remove anyway** after acknowledging the displayed
-unfinished counts and budget holds. This archives only the configuration: it
-does not synthesize cancellation, settle unknown usage, release reservations or
-reset job limits. Exclusive personal connectors are revoked; shared connectors
-can continue accounting for existing jobs. Retained unresolved job pages show
-that their cluster configuration was removed and their status may be stale.
-
-Cluster configuration edits, binding-changing discovery and personal connector
-re-pairing wait until accounting, output recovery, requested cleanup and active
-leases finish. Failed output collection with a native job identity remains
-recoverable work. A snapshot-only discovery refresh can keep the same binding.
-This protects the current installation; it does not migrate old alpha bindings.
-After an explicit removal or incompatible update, remote leftovers may require
-manual cleanup.
-
-Remote cleanup protects registered environments and storage roots across
-connections using the same normalized host, SSH account and port. Profile names
-and connector identities do not separate the same destination. A registered
-parent work root permits cleanup of ordinary child attempt directories, while a
-registered root inside an attempt protects that attempt. Pending personal path
-registrations and queued/running cleanup exclude one another until canonical
-paths are known; environment publication uses the same owner fence. Different
-DNS aliases for one server are not inferred to be the same destination.
-
-Worker failures record the operation, phase, validated job/cluster identifiers,
-lease generation, safe error category and elapsed time. They omit exception
-messages, remote output, tokens, private paths and frame-local values. Durable
-journals and accounting remain authoritative after an error.
+Cleanup protects environments/storage roots on the same normalized host, SSH
+account and port across connector profiles. Different DNS aliases are not
+inferred equivalent. A parent work root permits child-attempt cleanup; a root
+inside an attempt protects it. Pending path registration and cleanup fence one
+another until canonical paths are known. [Manual cleanup](deployment.md#manual-file-cleanup)
+preserves job/accounting identities.
 
 ## Local storage and metadata bounds
 
-Object storage and durable metadata have separate admission accounting. Current
-object defaults are 64 GiB per project, 256 GiB per installation and 10,000 objects
-per project, including pending capacity in quota checks. Ordinary byte uploads
-are bounded to 512 KiB each; the resumable data path supports 8 GiB per file and
-64 GiB per job in either direction. Slurm and simulated jobs publish outputs
-through this same resumable path; final reports carry status and accounting,
-not file bytes. Eight pending upload reservations per project are allowed.
-See [files and live output](data-transfer.md) for limits, recovery and
-incremental log semantics.
+| Bound | Default |
+| --- | --- |
+| Object bytes, project / installation | 64 GiB / 256 GiB, including pending reservations |
+| Objects / pending upload reservations per project | 10,000 / 8 |
+| Inline upload / resumable file / job bundle | 512 KiB / 8 GiB / 64 GiB |
+| Source files / exact output paths per job | 100 / 100 |
+| Logical metadata, project / installation | 32 MiB / 256 MiB |
 
-Each worker serializes its output-write requests through one FIFO asynchronous
-lock, preventing its own collectors from starving one another at the object
-store's writer lock. Remote chunk reads, status checks and lease renewals remain
-concurrent. Publication retries only an explicit `409 UPLOAD_BUSY`, reusing the
-unchanged request and already fetched remote chunk. Each request has at most
-eight attempts, with jittered delays capped at two seconds and at most 7.1
-seconds of added sleep. Cancellation or lost authority stops collection. Quota,
-integrity and other errors retain the separate bounded collection-recovery
-path without resubmitting compute or charging it again. Sustained contention
-can still exhaust automatic recovery and require an explicit output retry.
-If a retry can reuse verified bytes already published by another transfer, it
-releases its own redundant partial reservation immediately. Other transfers'
-reservations and independent input-upload authority remain unchanged.
+Final reports carry status/accounting, not file bytes. Inputs and outputs use
+the same verified resumable path; see [transfers](data-transfer.md) for commands
+and recovery. Each worker serializes output writes and retries only explicit
+`409 UPLOAD_BUSY` with the same request/chunk, at most eight attempts with delays
+capped at two seconds. Exhaustion can require explicit collection retry; it
+never reruns compute. Cancellation/lost authority stops collection. Reused
+verified bytes release only that transfer's redundant reservation.
 
 ### Burst, outstanding-work and retained-data limits
 
-Job creation and execution requests each have a durable token bucket at project
-and installation scope. A new project can create 500 jobs in a burst; its bucket
-refills at 60 requests per minute. Installation buckets allow 1,000 initially
-and refill at 300 per minute. Preparation does not spend execution tokens.
-Multiple keys share both bounds, and exact idempotent retries spend neither a
-second token nor another outstanding slot. Rejected transactions roll back
-their rate charges, reservations and identities together.
+| Admission bound | Project | Installation |
+| --- | ---: | ---: |
+| Initial burst, each of creation/execution | 500 | 1,000 |
+| Refill, requests/minute | 60 | 300 |
+| Outstanding work | 1,000 | 5,000 |
 
-Outstanding work defaults to 1,000 slots per project and 5,000 per installation.
-Unexecuted draft/prepared packages, pending reviews and unresolved attempts
-consume slots. A first execution replaces its draft slot; another execution
-needs another slot. Completion frees its slot after accounting and collection
-close out; cancellation or rejection of unused work frees its slot without
-deleting durable history. Explicit output recovery and worker reports remain
-available at capacity. Reopening output recovery can temporarily exceed the
-ceiling, while further new work stays blocked. Workflows wait for capacity and
-resume the same node instead of treating throttling as a policy rejection.
+Keys share these durable limits. Preparation spends no execution token; exact
+idempotent retries spend no second token/slot. Rejected transactions roll back
+rate charges, reservations and identities together.
 
-`allowance.admission` and the portal show project and installation headroom.
-`429 RATE_LIMITED` includes retry seconds and a `Retry-After` header;
-`409 BACKLOG_LIMIT` identifies the full scope but cannot predict when a job will
-finish. Spending allowance, lifetime submission policy, concurrent execution,
-traffic rates, outstanding work and retained storage are separate bounds.
-Operators can adjust `BROKER_PROJECT_ADMISSION_BURST`,
-`BROKER_INSTALLATION_ADMISSION_BURST`, `BROKER_PROJECT_ADMISSION_PER_MINUTE`,
-`BROKER_INSTALLATION_ADMISSION_PER_MINUTE`,
-`BROKER_MAX_PROJECT_OUTSTANDING_JOBS` and
-`BROKER_MAX_INSTALLATION_OUTSTANDING_JOBS`; all must be positive.
+Outstanding slots cover drafts/prepared packages, pending reviews and unresolved
+attempts. A first execution replaces its draft slot; another needs a new slot.
+Accounting/collection closeout or unused-work cancellation/rejection frees the
+slot without deleting history. Reports and explicit output recovery remain
+available at capacity; reopening collection may exceed the ceiling while new
+work stays blocked. Workflows wait and resume the same node after throttling.
 
-Logical metadata charges default to 32 MiB per project and 256 MiB across the
-installation. Job request/manifests, idempotency responses and extension
-definition/run documents consume these charges even when their source blobs
-deduplicate. Additional record limits apply:
+`allowance.admission` reports headroom. `429 RATE_LIMITED` supplies retry seconds
+and `Retry-After`; `409 BACKLOG_LIMIT` cannot predict job completion. Spending,
+lifetime submissions, active execution, rate, outstanding work and retained
+storage remain separate. Positive operator overrides are:
 
-| Metadata family | Per project | Per installation |
+- `BROKER_PROJECT_ADMISSION_BURST`, `BROKER_INSTALLATION_ADMISSION_BURST`
+- `BROKER_PROJECT_ADMISSION_PER_MINUTE`, `BROKER_INSTALLATION_ADMISSION_PER_MINUTE`
+- `BROKER_MAX_PROJECT_OUTSTANDING_JOBS`, `BROKER_MAX_INSTALLATION_OUTSTANDING_JOBS`
+
+| Retained metadata family | Per project | Per installation |
 | --- | ---: | ---: |
 | Active idempotency responses | 10,000 | 100,000 |
-| Combined extension definitions/runs | 1000 | 10,000 |
+| Extension definitions/runs | 1,000 | 10,000 |
 | Archived job identities | 10,000 | 100,000 |
-| Rolling audit events | 2000 | 20,000 |
+| Rolling audit events | 2,000 | 20,000 |
 
-Audit details are bounded and oversized details are replaced with a digest.
-The controller retains at most 16 report receipts per attempt; pruned older
-generations fail the ordinary stale-lease fence. Attempts, accounting entries
-and execution identities remain durable. Metadata exhaustion rejects new
-metadata admissions with `METADATA_QUOTA`; it does not block valid worker
-accounting reports. Errors identify the exhausted scope, resource, usage, limit
-and remaining headroom. Retained jobs have a logical byte charge rather than a
-second lifetime job-count cap. See [maintenance](deployment.md#inspect-and-compact-local-metadata).
-Compacting old idempotency responses frees active key slots. Their small
-identity tombstones still consume logical byte quota and prevent an old key
-from executing again.
+Request/manifests, responses and module documents consume logical metadata even
+when blobs deduplicate. Audit details are bounded; oversized details become a
+digest. At most 16 worker receipts remain per attempt; pruned generations fail
+the stale-lease fence. Attempts, accounting and execution identities stay durable.
+`METADATA_QUOTA` blocks new metadata admissions, not valid accounting reports;
+quota errors report scope, usage, limit and headroom. Retained jobs have byte
+charges rather than another lifetime count cap. [Compaction](deployment.md#inspect-and-compact-local-metadata)
+frees active idempotency slots; identity tombstones still consume bytes and
+prevent old keys executing again.
 
-These are logical JSON/record charges and bounded retention rules, not a byte
-ceiling on SQLite, its indexes/WAL, journals, backups or filesystem allocation.
-Keep physical free space and inodes available. Advisory remote storage targets
-also cannot prevent unrelated users or jobs from filling a shared filesystem.
-
-Content hashes identify bytes, not permission to reuse them. A job input is
-sealed to an independently uploaded object or an exact artifact the current
-credential can read, including access to its producer connection. Reading a
-package, preparing/revising/executing it, and reusing workflow/environment
-definitions recheck that source authority. Deduplication never creates an upload
-grant for generated or reported output bytes; an explicit byte upload does.
-See [security](security.md#input-provenance-and-object-publication).
+Logical charges do not cap SQLite indexes/WAL, journals, backups or filesystem
+allocation. Keep physical bytes/inodes available. Advisory remote targets cannot
+prevent unrelated writes filling a shared filesystem. Deduplicated hashes grant
+no input authority; see [provenance rules](security.md#input-provenance-and-object-publication).
 
 ## Cluster and software support
 
-The native backend supports Slurm over SSH, independent accounts and keys per
-cluster, and human MFA at SSH login. A one-shot bounded Python helper invokes
-fixed scheduler operations; it exposes no arbitrary shell RPC. The worker
-reuses its authenticated SSH master and does not fall back to a new unattended
-login when that master disappears.
+Single-node Slurm uses one bounded SSH transport over the authenticated master,
+with fixed reviewed helpers and no arbitrary shell RPC. One status interface
+accepts 1–32 due jobs on one connection within an additional 8 MiB payload bound;
+older submission/cancellation/recovery work is not skipped to fill a group.
+Each job retains its own verification, journal, lease and finalization.
 
-Status reads use one interface for one through 32 jobs. The controller groups
-consecutive due observations on the same connection, within an 8 MiB additional
-payload bound; it never skips older submission, cancellation or recovery work
-to fill a group. A single query reads the live jobs, followed by accounting for
-jobs absent from the queue. Every item retains its own verified journal binding,
-generation-fenced lease, heartbeat, accounting and output-recovery state.
+Accounting requires `sacct --json`; supported allocation formats include Slurm
+22.05 and 23.11. There is no unquoted-text fallback. Structured errors, missing
+identity/accounting or unsafe text remain unresolved with the reservation held;
+warnings alone do not invalidate complete records. The 2 MiB scheduler-response
+cap can leave large histories uncertain and require operator review. The
+recovery window includes long-running allocations.
 
-Accounting reads require Slurm's `sacct --json` support. The normalizer accepts
-the relevant Slurm 22.05 and 23.11 allocation schemas, including finite-number
-wrappers, singleton state/exit-status lists and the explicit no-signal encoding.
-It preserves every historical allocation record and rejects
-structured errors, missing accounting/identity fields and delimiter or line
-separators in free-text fields before emitting the fixed compact worker protocol.
-There is no fallback to parsing unquoted `sacct` text; unsupported JSON remains
-unresolved and retains the compute reservation. Scheduler warnings alone do not
-invalidate otherwise complete structured records. The existing 2 MiB scheduler
-response cap also applies to JSON: a large recovery history for a reused job name
-can exceed it and remain uncertain, requiring operator review. The recovery time
-window stays unchanged so long-running allocations remain discoverable.
-Invalid or uncertain status data never establishes completion or releases funds.
-
-Single-job and grouped work share the same package verification, durable report
-replay and per-job finalization. Completed items stop renewing and release their
-local in-progress slot independently. At most four remote operations run by
-default; `COMPUTE_RELAY_MAX_REMOTE_OPERATIONS` permits one through eight. Status
-grouping is always enabled and needs no experimental switches or persistent
-remote Python process. Discovery and optional modules use the same SSH transport.
-
-The fixed remote source is assembled from reviewed standard-library components
-into separate execution/management and discovery bundles. New prepared jobs bind
-`helper_protocol=slurm-jobs/v1` and the exact execution-bundle SHA-256. Management
-uses current compatible code plus the original package digest and exact remote
-journal/native identity. It never runs helper source obtained from an old
-manifest. New submissions still reject a changed execution hash. Incompatible
-alpha updates require [fresh setup](deployment.md#alpha-updates-and-fresh-setup)
-after outstanding work is reconciled.
-
-Discovery separates configured capabilities, authorization and observed idle
-resources. Software/module catalogs are login-node observations, with provenance
-and partial/truncated flags. A selected module or interpreter is not thereby
-verified on compute nodes. See [module discovery](module-discovery.md) and
-[cluster checks](cluster-checks.md).
-
-Single-node jobs with bounded resources are supported. Arrays, automatic requeue,
-arbitrary scheduler directives, other schedulers and persistent interactive
-runtimes remain unsupported. Explicit retries create separate attempts and
-reservations. The fake backend simulates outcomes without executing uploaded
-code in the connector.
+New submissions bind the exact installed execution-bundle SHA-256 and
+`helper_protocol=slurm-jobs/v1`. Management uses current compatible code with the
+original digest/journal/native identity, never source from an old manifest.
+[Connector internals](async-workers.md) cover operation bounds and code assembly.
+[Job shapes](architecture.md#execution-backends-and-remote-components),
+[module discovery](module-discovery.md) and [compute-node checks](cluster-checks.md)
+define remaining support limits; login-node visibility is not authorization or
+compute-node verification.
 
 ## Acceptance evidence and remaining reliability work
 
-The 28 October 2026 acceptance on a shared four-node Slurm cluster verified
-1,144 unique native jobs, including four deliberate cancellations, with matching
-native/controller CPU accounting and no duplicates. Requests used one CPU,
-1 GiB and a one-minute limit; the site allocated two logical CPUs. The run used
-no GPUs or interactive partition and took approximately 82 minutes. Lost submit
-responses and SSH interruptions preserved durable job identity. A separate
-200-job test through the installed MCP stdio server passed 2,441 tool calls,
-200 idempotent preparation replays and result-artifact verification.
+On 29 October 2026 the consolidated worker's real-site MCP run completed 101
+CPU jobs with verified outputs, stable replays, exact native/controller usage,
+zero reserved and normal cleanup. On 5 November, separate-session agmn2
+acceptance verified early completion, four outputs (36 MiB), exact accounting,
+portal responsiveness, cleanup and owner-confirmed MFA reconnect. Earlier manual
+expiry recovery collected 2.44 GB without resubmission; it predates renewal.
 
-The equal-sized comparison used 156 jobs per mode. Bounded status grouping
-reduced scheduler-status queries by 77.7%; keeping Python helpers alive reduced
-source transfers without establishing a clear throughput advantage. The chosen
-architecture keeps one SSH transport and bounded status grouping. Detailed
-experiment material is retained in Git history rather than maintained as a
-second implementation or benchmark framework.
-
-On 29 October, an isolated, non-editable Python 3.13 uv installation of the
-consolidated worker (merged `c512cf1` plus environment-path protection
-`df2313e`) ran one pilot and a 100-job batch through the actual stdio MCP
-server on the shared site. Requests used one CPU, 1 GiB and a 60-second limit;
-Slurm allocated two CPUs per job across two nodes. All 101 distinct native
-jobs completed, all output checksums matched, 101 preparation replays retained
-their identities, and no manual collection recovery was needed. Slurm and the
-broker agreed on 464 CPU-core-seconds, with zero remaining reservation. The
-batch made 1,136 MCP calls; all 192 concurrent portal/health probes succeeded,
-with maximum latency 86.6 ms. Pilot and batch finished in approximately 71
-seconds including checks between them.
-
-The same installation exercised the owner portal's cleanup forms on the
-disposable pilot after saving its result. Cleanup reclaimed 105 local bytes
-and 1,086 remote bytes across seven entries. A separate native check confirmed
-the attempt directory was absent and its submission journal remained;
-accounting and job identity were unchanged. This run covered ordinary
-completion and explicit cleanup, without injected SSH failures or large-file
-load; those recovery/load cases remain acceptance work.
-
-After consolidation, a disposable local Slurm acceptance submitted two jobs
-under a different reviewed execution-bundle hash, deliberately lost one submit
-reply, and verified reconciliation, cancellation, status reads, collection and
-final native accounting through the current helper. Recovery retained the same
-identities and made exactly two native submission calls. This checks helper
-upgrade/recovery behavior; it does not replace real-site load acceptance.
-
-A separate local contention probe used the real four-thread HTTP server,
-on-disk SQLite and eight worker lanes to collect 100 unique 64 KiB outputs from
-already-settled synthetic attempts. Short contention retries alone completed
-83 on the first pass and left four partial reservations. With the worker's
-FIFO publication lock, the production execution path collected all 100 in
-14.839 seconds with exactly 200 output requests, no publication conflicts or
-pending reservations, and unchanged 100 settlements / 200 CPU-core-seconds.
-All 447 health requests succeeded; maximum latency was 86 ms. This measures
-local publication recovery, not SSH, Slurm or large-file throughput.
-
-During the older comparison, four successful jobs required explicit output recovery after automatic retries
-were exhausted by publication contention. One portal stall during preparation
-remains unexplained. Object capacity was raised from 1,000 to 10,000 after the
-former limit was reached at only 506 KiB. The test also reached the normal
-32 MiB logical-metadata ceiling after 788 admissions; its temporary 64 MiB test
-override was removed afterward. Those retained-data bounds remain independent
-of the burst and outstanding-work controls described above. The [roadmap](roadmap.md)
-tracks remaining real-site acceptance, portal-stall diagnosis and retention work.
+[Automated checks](testing.md) add native transport/recovery faults and synthetic
+MCP load. Historical experiments stay in Git history. GPU/Mac acceptance,
+sustained independent-writer/multi-GiB load, real-site outage classes and the
+original portal stall remain [open work](roadmap.md).
 
 ## Bundled modules
 
-The normal launcher enables storage, environments, and workflows. Their code,
-tables, scopes and lifecycle hooks remain separate from core admission:
-
-- Storage provides advisory byte/inode planning and configured storage targets.
-  It does not enforce operating-system quotas or automatically move files.
-- Environment builds run through ordinary charged jobs and publish only after
-  successful finalization. Supported build recipes are narrower than every
-  possible Conda, Poetry or module setup; inspect [environment builds](environment-builds.md).
-- Workflows materialize finite artifact-dependent jobs through the same approval,
-  budget and submission limits; see [workflows](workflows.md).
-
-Direct cluster-to-client artifact transfer, packed environment migration, native
-arrays and alternate schedulers are unsupported; see the [roadmap](roadmap.md).
-The local process/account boundary and same-UID cluster limits are described in [security](security.md).
+The launcher enables [storage](extensions-storage.md),
+[environment builds](environment-builds.md) and [workflows](workflows.md).
+[Investigations](investigations.md) is opt-in. Each uses the core ledger and
+scopes; storage remains advisory. Developer enablement and disabled-module
+behavior are defined in [extensions](extensions.md).

@@ -11,7 +11,7 @@ package and links to its operational and development documentation.
 | Connect a science project | [Local project and client setup](local-client-setup.md) |
 | Orchestrate jobs in a local agent script | [Python SDK](python-sdk.md) |
 | Understand authority and trust boundaries | [Architecture](architecture.md), [security](security.md) |
-| Review API and planning contracts | [API target contract](api.md), [schemas](../contracts/README.md) |
+| Review planning contracts and client operations | [Schemas and examples](../contracts/README.md), [Python SDK](python-sdk.md) |
 | Run checks | [Testing](testing.md), [disposable Slurm testing](container-testing.md) |
 | Understand modules | [Extensions](extensions.md), [environments](environment-builds.md), [workflows](workflows.md), [investigations](investigations.md) |
 | See remaining work | [Prioritized roadmap](roadmap.md) |

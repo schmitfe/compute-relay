@@ -65,7 +65,6 @@ the core checks:
 ```sh
 uv sync --locked --extra test --python 3.13
 uv run --locked --extra test python -m pytest -q
-uv run --locked --extra test python tools/check_contracts.py
 uv run --locked --extra test python tools/local_smoke.py
 ```
 
