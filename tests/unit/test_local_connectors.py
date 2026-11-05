@@ -26,8 +26,8 @@ ORIGIN = "http://127.0.0.1:8768"
 @pytest.fixture
 def data_directory():
     # Real OpenSSH control-socket path validation also applies to fake state.
-    with tempfile.TemporaryDirectory(prefix="cb-local-") as value:
-        yield Path(value)
+    with tempfile.TemporaryDirectory(prefix="cb-local-", dir="/tmp") as value:
+        yield Path(value).resolve()
 
 
 def saved(data, name, *, origin=ORIGIN, registration_id=None):

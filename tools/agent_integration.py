@@ -32,7 +32,7 @@ def _destination(value):
     resolved = destination.resolve()
     if resolved.is_relative_to(ROOT) and not resolved.is_relative_to(ROOT / "local"):
         raise ValueError("Generated projects inside the checkout must use ignored local/")
-    roots = [Path(tempfile.gettempdir()).resolve(), (ROOT / "local").resolve()]
+    roots = [Path("/tmp").resolve(), Path(tempfile.gettempdir()).resolve(), (ROOT / "local").resolve()]
     if not any(resolved != root and resolved.is_relative_to(root) for root in roots):
         raise ValueError("Choose a fresh destination below this repository's local/ or the system temporary directory")
     if destination.exists() or destination.is_symlink():
@@ -107,7 +107,8 @@ def create(case, destination, broker_url, project_token_file, python, extensions
 
 def record(project, input_name, name):
     project = Path(project).resolve()
-    if not any(project != root and project.is_relative_to(root) for root in (Path(tempfile.gettempdir()).resolve(), (ROOT / "local").resolve())):
+    if not any(project != root and project.is_relative_to(root)
+            for root in (Path("/tmp").resolve(), Path(tempfile.gettempdir()).resolve(), (ROOT / "local").resolve())):
         raise ValueError("Recording is restricted to a generated private project")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or Path(input_name).name != input_name:
         raise ValueError("Use a simple report filename and result name")

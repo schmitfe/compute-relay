@@ -20,8 +20,8 @@ ORIGIN = "http://127.0.0.1:8768"
 
 @pytest.fixture
 def local_cluster(db, settings):
-    with tempfile.TemporaryDirectory(prefix="cb-portal-") as value:
-        settings.DATA_DIR = Path(value)
+    with tempfile.TemporaryDirectory(prefix="cb-portal-", dir="/tmp") as value:
+        settings.DATA_DIR = Path(value).resolve()
         settings.BROKER_LOCAL_RUNTIME = "1"
         settings.BROKER_LOCAL_ORIGIN = ORIGIN
         settings.BROKER_LOCAL_AUTH_MODE = "password"
