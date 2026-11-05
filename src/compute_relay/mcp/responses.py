@@ -136,6 +136,8 @@ def compact_job(payload, *, broker_url=None):
                 ("job_id", "cluster"), text_limit=80)
         if isinstance(latest_attempt.get("accounting"), dict):
             result["latest_attempt"]["accounting"] = _accounting(latest_attempt["accounting"])
+        if isinstance(latest_attempt.get("tracking"), dict):
+            result["latest_attempt"]["tracking"] = _fields(latest_attempt["tracking"], ("status", "last_contact_at"), text_limit=80)
     job_id = result.get("id")
     if job_id:
         result["review_url"] = (broker_url.rstrip("/") if broker_url else "") + f"/review/{job_id}/"
@@ -154,6 +156,8 @@ def compact_job(payload, *, broker_url=None):
         result["next_action"] = {"action": "revise_request", "tool": "revise_job", "job_id": job_id}
     elif latest_execution.get("state") in {"cancelled", "expired"}:
         result["next_action"] = {"action": "none"}
+    elif _object(latest_attempt.get("tracking")).get("status") in {"stale", "not_seen", "revoked"}:
+        result["next_action"] = {"action": "reconnect_connector", "requires_human": True}
     elif latest_attempt and latest_attempt.get("state") in _TERMINAL and latest_attempt.get("collection_state") == "retry_pending":
         result["next_action"] = {"action": "await_output_collection", "tool": "get_job", "job_id": job_id}
     elif latest_attempt and latest_attempt.get("state") in _TERMINAL and latest_attempt.get("collection_state") == "failed":

@@ -118,7 +118,7 @@ def usage_guide(project, interpreter):
         '    if job["completion"]["operationally_reconciled"]:\n'
         '        print(finish(workspace, job_id=job["id"], output="results/" + job["id"], resume=True))\n'
         "        break\n"
-        '    if job["next_action"]["action"] in {"await_human_review", "revise_request", "recover_outputs"}:\n'
+        '    if job["next_action"]["action"] in {"await_human_review", "revise_request", "recover_outputs", "reconnect_connector"}:\n'
         '        print({"job_id": job["id"], "next_action": job["next_action"], "review_url": job["review_url"]})\n'
         "        break\n"
         "else:\n"

@@ -3,6 +3,7 @@
 <h2 id="attempt-diagnostic-{{ diagnostics.attempt_id }}">{{ diagnostics.title }}</h2>
 <p>{{ diagnostics.message }}</p>
 <p><strong>Next step:</strong> {{ diagnostics.suggestion }}</p>
+{% if diagnostics.tracking and diagnostics.tracking.status != "recent" %}<p class="notice" role="status"><strong>Connector is not reporting.</strong> Last contact: {{ diagnostics.tracking.last_contact_at|default:"Not yet reported" }}. This is saved status; jobs may have finished or continued on Slurm. <a href="/clusters/{{ diagnostics.connection_id }}/#connector">Reconnect the connector</a> to recover observations and outputs without resubmitting jobs.</p>{% endif %}
 <details data-attempt-facts><summary>Scheduler and accounting details</summary><dl>
 <dt>Slurm job ID</dt><dd>{{ diagnostics.native_job_id|default:"Not recorded" }}</dd>
 <dt>Cluster</dt><dd>{% if diagnostics.connection_removed %}{{ diagnostics.cluster_name }} (configuration removed){% elif diagnostics.connection_id %}<a href="/clusters/{{ diagnostics.connection_id }}/">{{ diagnostics.cluster_name }}</a>{% else %}{{ diagnostics.cluster_name }}{% endif %}</dd>

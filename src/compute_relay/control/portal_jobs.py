@@ -6,8 +6,9 @@ from django.core.paginator import Paginator
 from django.db.models import Count, Exists, OuterRef, Q
 from django.db.models.functions import Coalesce
 
-from .models import Attempt, ExecutionRequest, Job
+from .models import Attempt, Connection, ExecutionRequest, Job
 from .services import TERMINAL
+from .worker_status import worker_contact
 
 FILTERS = [("all", "All jobs"), ("unresolved", "Unresolved executions"),
            ("awaiting_review", "Awaiting review")]
@@ -34,8 +35,14 @@ def job_list_context(request, projects, *, page_path=None):
             query = query.annotate(_unresolved=Exists(unresolved)).filter(
                 Q(_pending_review=True) | Q(_unresolved=True))
     page = Paginator(query.order_by("-created_at", "-id"), 50).get_page(request.GET.get("page"))
+    jobs = list(page.object_list)
+    contacts = {row.id: worker_contact(row.worker.last_seen_at, row.worker.revoked)
+        for row in Connection.objects.filter(id__in=[job.execution_cluster_id for job in jobs], archived=False).select_related("worker")}
+    for job in jobs:
+        contact = contacts.get(job.execution_cluster_id)
+        job.tracking_stale = bool(contact and contact["status"] != "recent" and job.display_state not in TERMINAL)
     parameters = {"job_state": selected, "page": page.number}
-    return {"jobs": page.object_list, "job_page": page, "job_state": selected, "job_counts": counts,
+    return {"jobs": jobs, "job_page": page, "job_state": selected, "job_counts": counts,
         "job_filters": FILTERS, "job_live_query": urlencode(parameters), "job_list_path": page_path,
         "job_previous_url": page_path + "?" + urlencode({**parameters, "page": page.previous_page_number()}) + "#jobs" if page.has_previous() else None,
         "job_next_url": page_path + "?" + urlencode({**parameters, "page": page.next_page_number()}) + "#jobs" if page.has_next() else None}

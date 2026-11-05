@@ -8,6 +8,8 @@ identity, observation details, request/configuration and exception strings.
 import re
 from uuid import UUID
 
+from .worker_status import worker_contact
+
 
 MAX_LOG_BYTES = 16384
 _SAFE_INT = 2**53 - 1
@@ -22,6 +24,9 @@ _MODULE_INITIALIZER = re.compile(
     r"usr/share/lmod/(?:lmod|[0-9][A-Za-z0-9_.-]*)/init/bash): No such file or directory\r?$"
 )
 _MESSAGES = {
+    "tracking_stale": ("warning", "Connector is not reporting",
+        "This is the last recorded execution status. Jobs may have finished or continued on Slurm while the connector was disconnected.",
+        "Reconnect this cluster's connector and complete SSH/MFA login in its local terminal if requested. Keep the existing jobs; do not resubmit them to recover results."),
     "cluster_removed_unresolved": ("warning", "Cluster removed with unresolved work",
         "This cluster configuration was removed while execution, accounting or output collection was unresolved. The status shown below is the last recorded status, not a current scheduler observation.",
         "Check the retained Slurm job identity and accounting independently. Remote jobs may continue, and budget holds remain until final accounting is established."),
@@ -183,6 +188,14 @@ def build_attempt_diagnostics(attempt):
     category = _category(attempt, state, native_state, error, stderr)
     connection = getattr(attempt, "connection", None)
     connection_removed = getattr(connection, "archived", False) is True
+    worker = getattr(connection, "worker", None)
+    needs_tracking = (state not in {"succeeded", "failed", "cancelled", "expired"}
+        or getattr(attempt, "accounting_state", None) not in {"settled", "released"}
+        or getattr(attempt, "collection_pending", False))
+    tracking = worker_contact(worker.last_seen_at, worker.revoked) if worker and needs_tracking and not connection_removed else None
+    tracking_stale = tracking is not None and tracking["status"] != "recent"
+    if tracking_stale and category in {"in_progress", "unknown"}:
+        category = "tracking_stale"
     if connection_removed and (state not in {"succeeded", "failed", "cancelled", "expired"}
             or getattr(attempt, "accounting_state", None) not in {"settled", "released"}
             or getattr(attempt, "collection_pending", False)):
@@ -218,7 +231,7 @@ def build_attempt_diagnostics(attempt):
     source = {"sacct": "Slurm accounting", "squeue": "Slurm queue", "none": "No scheduler observation"}.get(observation.get("source")) if isinstance(observation.get("source"), str) else None
     return {"attempt_id": _uuid(getattr(attempt, "id", None)), "job_id": _uuid(getattr(attempt, "job_id", None)),
         "connection_id": _uuid(getattr(attempt, "connection_id", None)), "cluster_name": cluster_name,
-        "connection_removed": connection_removed,
+        "connection_removed": connection_removed, "tracking": tracking,
         "state": state, "native_job_id": native_job_id, "native_state": native_state, "exit_code": exit_code,
         "error_code": error, "accounting_state": accounting_state, "source": source,
         "elapsed_seconds": _integer(observation.get("elapsed_seconds")),

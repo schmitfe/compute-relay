@@ -29,6 +29,46 @@ Setuptools remains the package build backend. Normal tool or wheel installation
 needs no extras, and the installed application does not require uv. See
 [installation](deployment.md) and [development checks](testing.md).
 
+### SSH expiry and reconnecting a stopped connector
+
+Saved personal connectors default to an eight-hour (480-minute) SSH session.
+The configured lifetime ends tracking and closes the managed SSH master; it
+does not cancel native jobs. The portal can remain healthy while a connector
+has stopped. `auth_state: ready` describes saved setup, not current connectivity.
+
+Job status APIs expose `tracking.status` and `tracking.last_contact_at` for current
+clusters while execution, accounting or collection remains unresolved. Contact is `recent`
+within five minutes, `stale` after that, `not_seen` before the first report, or
+`revoked` after access withdrawal. Recent contact does not prove every scheduler
+observation is fresh. Settled, collected attempts have `tracking: null` and do
+not require an active connector. Compact MCP status returns
+`next_action: {"action":"reconnect_connector","requires_human":true}` when
+tracking needs attention. Waiting scripts should return for human attention,
+not submit another execution.
+
+Open the cluster's **Connect to this cluster** section and choose **Start
+connector locally**, then complete SSH/MFA in the existing application terminal.
+Alternatively, in a new terminal run `compute-relay connector --state-directory
+/absolute/path/to/that/saved/connector-state` and leave it open. Reuse the same
+state and journal; omit `--setup`. A `STATE_LOCKED` error means another connector
+owns that identity: inspect the existing launcher before retrying. Never delete
+its lock or journal to bypass it.
+
+Owner-permitted automatic renewal for unattended SSH and a simpler interactive
+reconnect flow remain accepted [roadmap work](roadmap.md). Currently an expired
+session requires an explicit start. Terminal observations are also still
+reported after output collection, so large transfers can leave a job displaying
+its last running state during recovery. The roadmap includes separating those
+reports. A successful Slurm exit is not proof that results have been delivered.
+
+On 5 November 2026, twelve real-site jobs outlived the connector session and
+remained displayed as running. Direct Slurm accounting confirmed all twelve
+completed with exit status `0:0`. After the owner reconnected, all 36 declared
+outputs (2.44 GB) were collected and every original attempt settled its exact native
+CPU usage once, without resubmission or direct database repair. This verifies
+that expiry recovery worked for this run; automatic renewal, injected VPN
+outages and early terminal-state publication remain roadmap work.
+
 ### Diagnosing an unresponsive portal
 
 The portal subprocess accepts `SIGUSR1` to append every Python thread's current

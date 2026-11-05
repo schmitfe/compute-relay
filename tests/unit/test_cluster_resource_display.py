@@ -20,7 +20,7 @@ def groups(snapshot):
 
 def render_resources(snapshot):
     cluster = SimpleNamespace(id="synthetic-cluster", name="Synthetic cluster", owner_id=2, worker_id="worker",
-        worker=SimpleNamespace(name="Worker"), discovery_state="ready", configuration_confirmed=True, setup_complete=True,
+        worker=SimpleNamespace(name="Worker", last_seen_at=None, revoked=False), discovery_state="ready", configuration_confirmed=True, setup_complete=True,
         backend="slurm", discovery_snapshot=snapshot, configuration={"ssh": {"user": "fixture", "host": "fixture.invalid"}})
     rendered = render_to_string("broker/cluster_detail.html", {"cluster": cluster, "scheduler_partitions": partition_resources(snapshot),
         "snapshot_text": "saved JSON", "software": {}, "profile": {}, "csrf_token": "synthetic-token",

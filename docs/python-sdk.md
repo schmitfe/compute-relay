@@ -97,6 +97,10 @@ until they have been assessed: `finish` defaults to `acknowledge=False`, and byt
 integrity alone does not prove scientific validity. Keep credential contents,
 source bytes and large intermediate responses out of chat.
 
+If compact status returns `next_action.action == "reconnect_connector"`, stop
+local waiting and return for human attention. The saved job/native identities
+remain authoritative; reconnecting is not a reason to request another execution.
+
 This pattern follows the separation between tool protocol and agent orchestration
 in the [MCP tools specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 Anthropic describes the context-saving benefits of loops and filtering in a local

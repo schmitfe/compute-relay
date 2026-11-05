@@ -15,6 +15,7 @@ from .database import read_snapshot
 from .errors import BrokerError
 from .models import Artifact, LedgerEntry, ResultAccess, WorkerReport
 from .services import serialize_attempt
+from .worker_status import worker_contact
 
 TERMINAL = {"succeeded", "failed", "cancelled", "expired"}
 FINAL = {"settled", "released"}
@@ -96,8 +97,12 @@ def job_snapshot(credential, job, *, attempt_cursor=0, execution_cursor=0, limit
         receipt=Subquery(receipt.values("payload_sha256")[:1])).order_by("created_at", "id").values(
         "id", "execution_request_id", "state", "accounting_state", "native_identity", "error_code",
         "collection_pending", "collection_state", "dispatch_started", "reservation_cpu", "reservation_gpu",
-        "output_count", "receipt")
+        "output_count", "receipt", "connection__worker__last_seen_at", "connection__worker__revoked")
     for attempt in compact.iterator(chunk_size=200):
+        last_seen_at = attempt.pop("connection__worker__last_seen_at")
+        revoked = attempt.pop("connection__worker__revoked")
+        if attempt["state"] not in TERMINAL or attempt["accounting_state"] not in FINAL or attempt["collection_pending"]:
+            remember(worker_contact(last_seen_at, revoked))
         remember(attempt)
         if attempt["state"] not in TERMINAL:
             block("EXECUTION_UNFINISHED", "attempt_id", attempt["id"])
@@ -143,7 +148,7 @@ def job_snapshot(credential, job, *, attempt_cursor=0, execution_cursor=0, limit
             "size_bytes": entry.blob.size_bytes, "executable": entry.executable,
             "source_artifact_id": str(entry.source_artifact_id) if entry.source_artifact_id else None}
             for entry in job.files.select_related("blob").order_by("path")]}
-    page = list(attempts.select_related("connection").order_by("created_at", "id")[attempt_cursor:attempt_cursor + limit])
+    page = list(attempts.select_related("connection__worker").order_by("created_at", "id")[attempt_cursor:attempt_cursor + limit])
     page_access = {row.attempt_id: row for row in ResultAccess.objects.filter(credential=credential, attempt__in=page)}
     inventory = defaultdict(list)
     if can_read:

@@ -439,7 +439,7 @@ def serialize_attempt(attempt):
     return {"id": str(attempt.id), "execution_request_id": str(attempt.execution_request_id),
         "state": attempt.state, "accounting_state": attempt.accounting_state,
         "native_identity": attempt.native_identity, "error_code": attempt.error_code,
-        "collection_state": attempt.collection_state,
+        "collection_state": attempt.collection_state, "tracking": diagnostics["tracking"],
         "native_state": diagnostics["native_state"], "exit_code": diagnostics["exit_code"],
         "accounting": {"final": final, "cpu_core_seconds": cpu, "gpu_device_seconds": gpu,
             "elapsed_seconds": diagnostics["elapsed_seconds"],
@@ -482,7 +482,7 @@ def serialize_job(job, *, package=False, attempt_cursor=None, execution_cursor=N
             "budget_reservation": execution_reservation(execution)})
     if attempt_cursor is None:
         attempt_cursor = max(0, job.attempts.count() - limit) if limit is not None else 0
-    attempt_query = job.attempts.select_related("connection").order_by("created_at", "id")
+    attempt_query = job.attempts.select_related("connection__worker").order_by("created_at", "id")
     attempt_page = [] if attempt_records is not None else list(attempt_query[attempt_cursor:attempt_cursor + limit + 1] if limit is not None else attempt_query)
     result = {"id": str(job.id), "name": job.name, "project_id": str(job.project_id),
               "project_name": job.project.name, "owner": {"id": str(job.project.owner_id), "username": job.project.owner.username},
