@@ -33,6 +33,7 @@ class ConnectorStartupError(ValueError):
         "ALREADY_PAIRED": "This connector is already paired. Resume without --setup, or use a new state directory.",
         "PAIRING_UNCERTAIN": "A previous pairing outcome is uncertain. Download a new setup and choose a new state directory.",
         "RECONNECT_REQUIRED": "Choose Reconnect on the cluster page to sign in. Automatic SSH startup is not currently permitted by the owner.",
+        "SSH_SOCKET_BLOCKED": "The SSH control path is still live or cannot be safely cleared. Stop any previous connector and retry Reconnect; if it persists, have a trusted local operator inspect the connector state directory.",
     }
 
     def __init__(self, code):
@@ -349,6 +350,8 @@ def connected(args):
                 raise ConnectorStartupError("RECONNECT_REQUIRED")
         session = SSHSession(state["connection"], directory, lifetime_seconds=state["session_seconds"])
         try:
+            if not session.recover_stale_socket():
+                raise ConnectorStartupError("SSH_SOCKET_BLOCKED")
             ssh = state["connection"]["ssh"]
             target = display_label(f"{ssh['user']}@{ssh['host']}:{ssh.get('port', 22)}")
             status.notice(f"Connecting to {target}. " + ("Using owner-permitted key authentication without prompts." if automatic_start

@@ -158,6 +158,40 @@ class SSHSession:
             return None
         return metadata
 
+    def _remove_refused_socket(self, identity):
+        if not self._directory_matches():
+            return False
+        try:
+            os.stat("s", dir_fd=self._directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        metadata = self._socket_metadata()
+        if metadata is None or self._identity(metadata) != identity:
+            return False
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.setblocking(False)
+            refused = probe.connect_ex(self.socket_path) == errno.ECONNREFUSED
+        current = self._socket_metadata()
+        if (not refused or current is None or self._identity(current) != identity
+                or current.st_ctime_ns != metadata.st_ctime_ns):
+            return False
+        os.unlink("s", dir_fd=self._directory_fd)
+        return True
+
+    def recover_stale_socket(self):
+        """Before login, under the connector lock, remove only a refused private socket."""
+        if self._directory_fd is not None:
+            return False
+        try:
+            self._directory_fd = self._open_directory()
+            self._directory_identity = self._identity(os.fstat(self._directory_fd))
+            metadata = self._socket_metadata()
+            return self._remove_refused_socket(self._identity(metadata) if metadata is not None else None)
+        except OSError:
+            return False
+        finally:
+            self._release_directory()
+
     def _base_argv(self, *, interactive=False):
         ssh = self.connection["ssh"]
         options = ["BatchMode=" + ("no" if interactive else "yes"),
@@ -267,24 +301,7 @@ class SSHSession:
                     await self._control_async("exit")
                 except TransportError:
                     pass
-            if not self._directory_matches():
-                return False
-            try:
-                metadata = os.stat("s", dir_fd=self._directory_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                return True
-            if self._identity(metadata) != self._socket_identity or self._socket_metadata() is None:
-                return False
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-                probe.setblocking(False)
-                refused = probe.connect_ex(self.socket_path) == errno.ECONNREFUSED
-            if not refused or not self._directory_matches():
-                return False
-            metadata = os.stat("s", dir_fd=self._directory_fd, follow_symlinks=False)
-            if self._identity(metadata) != self._socket_identity:
-                return False
-            os.unlink("s", dir_fd=self._directory_fd)
-            return True
+            return self._remove_refused_socket(self._socket_identity)
         finally:
             self._release_directory()
 

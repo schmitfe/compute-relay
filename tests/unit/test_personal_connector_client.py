@@ -140,6 +140,8 @@ def sessions(monkeypatch):
             self.connection, self.directory, self.lifetime = deepcopy(connection), directory, lifetime_seconds
             self.started, self.closed, self.checks = [], 0, 0
             created.append(self)
+        def recover_stale_socket(self):
+            return True
         def start(self, interactive):
             self.started.append(interactive)
             return self

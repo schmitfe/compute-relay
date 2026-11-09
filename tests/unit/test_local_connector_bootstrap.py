@@ -1,7 +1,9 @@
 """Scope fences and durable shortcut registration around actual connector bootstrap."""
 
 from copy import deepcopy
+import fcntl
 from pathlib import Path
+import socket
 import tempfile
 from types import SimpleNamespace
 from uuid import uuid4
@@ -10,6 +12,8 @@ import pytest
 
 from compute_relay.connector_profiles import ConnectorProfileError, ConnectorProfiles
 from compute_relay.worker import personal_connector as connector, ssh_session
+from compute_relay.worker.ssh_session import SSHSession
+from compute_relay.transports.openssh import OpenSSHTransport, TransportError
 
 
 @pytest.fixture
@@ -32,6 +36,8 @@ def bootstrap(monkeypatch):
                 sessions.append(self)
             def start(self, **kwargs):
                 pass
+            def recover_stale_socket(self):
+                return True
             async def reconnect_async(self):
                 self.automatic = True
             def close(self):
@@ -119,3 +125,55 @@ def test_application_autostart_checks_current_owner_permission_before_noninterac
                 pytest.fail("Revoked owner permission started SSH")
         assert not sessions
     assert calls and calls[0]["status_only"] is True
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_restart_recovers_dead_socket_under_lock_without_resetting_state(bootstrap, monkeypatch, automatic):
+    data, state, sessions, args = bootstrap
+    directory = Path(args.state_directory)
+    state.update(worker_token="synthetic-saved-worker", connection_id=str(uuid4()))
+    connector.write_private(directory / "state.json", state)
+    (directory / "journal").mkdir(mode=0o700)
+    (directory / "journal/intent.json").write_text("preserve submission intent")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(str(directory / "s"))
+    (directory / "s").chmod(0o600)
+    args.automatic_start = automatic
+    def policy(*args, **kwargs):
+        assert (directory / "s").exists()
+        return {"automatic_reconnect_enabled": True}
+    monkeypatch.setattr(connector, "JsonClient", lambda *a, **kw: SimpleNamespace(request=policy))
+    monkeypatch.setattr(ssh_session, "SSHSession", SSHSession)
+    def reached_login(*args, **kwargs):
+        assert not (directory / "s").exists()
+        with (directory / "lock").open("r+") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        raise TransportError("reached login without authenticating")
+    async def reached_async_login(*args, **kwargs):
+        reached_login()
+    monkeypatch.setattr(SSHSession, "_run", reached_login)
+    monkeypatch.setattr(OpenSSHTransport, "_run", reached_async_login)
+    with pytest.raises(TransportError, match="reached login"):
+        with connector.connected(args):
+            pytest.fail("The login sentinel should stop startup")
+    assert connector.read_private(directory / "state.json") == state
+    assert (directory / "journal/intent.json").read_text() == "preserve submission intent"
+    with (directory / "lock").open("r+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_blocked_socket_reports_safe_actionable_diagnostic(bootstrap, monkeypatch, capsys):
+    data, state, sessions, args = bootstrap
+    directory = Path(args.state_directory)
+    connector.write_private(directory / "state.json", state)
+    path = directory / "s"
+    path.write_text("synthetic-private-path-content")
+    monkeypatch.setattr(ssh_session, "SSHSession", SSHSession)
+    monkeypatch.setattr(SSHSession, "_run", lambda *a, **kw: pytest.fail("Unsafe path reached SSH"))
+    with pytest.raises(SystemExit):
+        connector.main(args)
+    output = capsys.readouterr()
+    assert "SSH_SOCKET_BLOCKED" in output.err and "retry Reconnect" in output.err
+    assert path.read_text() == "synthetic-private-path-content"
+    assert "synthetic-private" not in output.err + output.out

@@ -99,9 +99,11 @@ Resume the same state to reconcile them; never create replacement jobs or erase
 submission intent. Use normal cancellation if you intend to stop compute.
 
 Ctrl-C, SIGTERM, revocation and normal expiry close the owned master after draining
-operations. SIGKILL/power loss cannot clean up. Unknown/replaced/live sockets are
-protected; inspect stale state through a trusted local operator channel before
-removing anything. Detailed retry and lease rules are in [worker recovery](async-workers.md).
+operations. After SIGKILL or power loss, the next permitted start removes only a
+private, owned, unchanged socket that refuses connections, under the connector
+lock. Live sockets and unsafe paths stay protected; `SSH_SOCKET_BLOCKED` explains
+when a trusted local operator must inspect the state directory. Detailed retry
+and lease rules are in [worker recovery](async-workers.md).
 
 ## Remove a worker
 
