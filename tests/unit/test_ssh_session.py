@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import asyncio
+import errno
 import os
 from pathlib import Path
 import shutil
@@ -194,6 +195,78 @@ def test_recovery_removes_only_our_refused_stale_socket(connection, state, runne
     monkeypatch.setattr(session, "_control_async", dead_master)
     assert asyncio.run(session.retire_async()) is True
     assert not (state / "s").exists() and session._directory_fd is None
+
+
+@pytest.mark.parametrize("kind", ["live", "file", "symlink", "directory", "permissions", "hardlink", "owner"])
+def test_startup_recovery_preserves_live_and_unsafe_paths(connection, state, runner, monkeypatch, kind):
+    state.mkdir(mode=0o700)
+    path = state / "s"
+    if kind == "file":
+        path.write_text("untouched")
+    elif kind == "symlink":
+        path.symlink_to("/nonexistent")
+    elif kind == "directory":
+        path.mkdir()
+    else:
+        master = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        master.bind(str(path));path.chmod(0o600)
+        runner.sockets.append(master)
+        if kind == "live":
+            master.listen()
+        else:
+            master.close()
+        if kind == "permissions":
+            path.chmod(0o660)
+        elif kind == "hardlink":
+            os.link(path, state / "alias")
+        elif kind == "owner":
+            original_stat = os.stat
+            def foreign_owner(filename, *args, **kwargs):
+                metadata = original_stat(filename, *args, **kwargs)
+                if filename == "s":
+                    fields = list(metadata);fields[4] += 1
+                    return os.stat_result(fields)
+                return metadata
+            monkeypatch.setattr(ssh_session.os, "stat", foreign_owner)
+    before = path.lstat()
+    session = SSHSession(connection, state)
+    assert session.recover_stale_socket() is False
+    assert path.lstat() == before and not runner.calls and session._directory_fd is None
+
+
+@pytest.mark.parametrize("change", ["socket", "permissions", "directory"])
+def test_startup_recovery_preserves_changes_during_refusal_probe(connection, state, runner, monkeypatch, change):
+    state.mkdir(mode=0o700)
+    path = state / "s"
+    factory = socket.socket
+    with factory(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(str(path))
+    path.chmod(0o600)
+    class Probe:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def setblocking(self, value):
+            pass
+        def connect_ex(self, value):
+            with factory(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                assert probe.connect_ex(value) == errno.ECONNREFUSED
+            if change == "socket":
+                path.unlink()
+                replacement = factory(socket.AF_UNIX, socket.SOCK_STREAM)
+                replacement.bind(str(path));path.chmod(0o600)
+                runner.sockets.append(replacement)
+            elif change == "permissions":
+                path.chmod(0o660)
+            else:
+                state.rename(state.with_name("previous"));state.mkdir(mode=0o700)
+                path.write_text("replacement directory")
+            return errno.ECONNREFUSED
+    monkeypatch.setattr(ssh_session.socket, "socket", lambda *args: Probe())
+    session = SSHSession(connection, state)
+    assert session.recover_stale_socket() is False
+    assert path.exists() and not runner.calls and session._directory_fd is None
 
 
 @pytest.mark.parametrize("initial_permission", [False, True])
